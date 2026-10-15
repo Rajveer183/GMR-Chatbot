@@ -1,0 +1,27 @@
+# Secrets and env templates -- no .env* file is committed
+.env
+.env.*
+!.env.example
+
+# Python
+__pycache__/
+*.py[cod]
+.venv/
+.pytest_cache/
+
+# Runtime output: logs, chat sessions, answer/knowledge caches, downloaded
+# embedding models. All of it is regenerated and some holds live data.
+outputs/
+gmr_agents/cache/
+*.log
+
+# Eval run results (answers computed from live data)
+eval/question_bank/results/
+
+# Local live-DB dumps
+mdm_wfm_live.json
+
+# Editor / OS
+.vscode/
+.idea/
+.DS_Store

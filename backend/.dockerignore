@@ -1,0 +1,28 @@
+# Secrets -- the container gets them at runtime via docker-compose env_file
+.env
+.env.*
+
+# Python
+__pycache__/
+*.py[cod]
+.Python
+env/
+venv/
+.venv/
+.pytest_cache/
+
+# Runtime output and live-data files (mounted or regenerated, never baked in)
+outputs/
+gmr_agents/cache/
+eval/question_bank/results/
+mdm_wfm_live.json
+*.log
+*.db
+*.sqlite3
+
+# Editor / OS / VCS
+.git/
+.vscode/
+.idea/
+*.swp
+.DS_Store

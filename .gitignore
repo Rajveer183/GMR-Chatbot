@@ -1,0 +1,63 @@
+# ==============================================================================
+# Root .gitignore for GMR-Chatbot
+# ==============================================================================
+
+# --- Secrets and Environment files ---
+.env
+.env.*
+.env.local
+*.local
+!.env.example
+*.pem
+*.key
+*.pfx
+*.cert
+*.crt
+
+# --- Python ---
+__pycache__/
+*.py[cod]
+*$py.class
+.venv/
+venv/
+env/
+.pytest_cache/
+.coverage
+htmlcov/
+
+# --- Node / Frontend ---
+node_modules/
+dist/
+build/
+.vite/
+*.tsbuildinfo
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+pnpm-debug.log*
+
+# --- Runtime Data, Caches & Live Dumps ---
+outputs/
+backend/outputs/
+gmr_agents/cache/
+backend/gmr_agents/cache/
+eval/question_bank/results/
+backend/eval/question_bank/results/
+mdm_wfm_live.json
+backend/mdm_wfm_live.json
+*.sqlite
+*.sqlite3
+*.db
+
+# --- Logs ---
+*.log
+
+# --- IDE, Editor, and OS files ---
+.claude/
+.vscode/
+.idea/
+.DS_Store
+Thumbs.db
+~$*
+*.swp
+*~

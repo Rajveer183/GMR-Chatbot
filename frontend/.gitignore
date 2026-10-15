@@ -1,0 +1,26 @@
+node_modules/
+dist/
+build/
+.env
+.env.*
+!.env.example
+/.idea/
+.vscode/
+/.DS_Store
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+pnpm-debug.log*
+coverage/
+*.local
+*.log
+
+# TypeScript
+*.tsbuildinfo
+
+# Vite cache
+.vite/
+
+# Editor
+*.swp
+*~

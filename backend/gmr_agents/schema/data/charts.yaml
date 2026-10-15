@@ -1,0 +1,71 @@
+# Chart catalogue: few-shot guide the SQL planner uses to pick the chart that
+# best matches each question (gmr_agents/llm_pipeline.py -> display.chart).
+# Patterns follow the WFM dashboard (Documents/WFM/HES-FRONTEND-GMR):
+# ranked horizontal bars, stacked/grouped columns, donut for status shares,
+# 100% stack bars for band shares, gauge for one %, funnel for the workflow,
+# pareto / dual-axis (bars + % line) and area/line for trends.
+# Re-read automatically when the file changes.
+#
+# PROMPT COST MAP (measured 2026-10-04): this file goes into EVERY SQL planner call.
+#   rules                     every call                            ~120 tok
+#   charts[].when + example   only the CHART_GUIDE_FULL best-ranked types (~80 tok each);
+#                             the rest are listed by type name only
+#   charts[].when             also the chart retrieval index (what ranks the types)
+# All 15 types in full = ~1,340 tok; tiered (5 in full) = ~590 tok, same chart accuracy
+# (eval_planner.py --charts: 15/16 both).
+#
+# Spec the planner returns:
+#   {"type": "<type>", "x": "<category alias>", "y": ["<value alias>", ...],
+#    "y2": ["<line alias on 2nd axis>"]      (combo only),
+#    "group": "<alias>"                       (long rows -> one series per value: stacked/grouped/heatmap/multi-line),
+#    "unit": "%|Rs crore|days|meters|...", "unit2": "..."}
+rules:
+  - "If the user names a chart type ('pie chart', 'as a line', 'bar graph', 'funnel'), use exactly that type."
+  - "x, y, y2 and group must be EXACT aliases from your SELECT list."
+  - "A single result row whose columns are parts of a whole (confirmed / reassign / review / no data; supplied / installed / SAT) is still chartable: y = those columns (donut for parts, funnel for steps, radial for percentages); x may be any label."
+charts:
+  - type: horizontal_bar
+    when: "Ranking / top-N / which X is highest or lowest, or long category names (divisions, substations, technicians), or more than 15 categories."
+    example: 'Q: Which divisions have the oldest non-SAT meters? -> {"type": "horizontal_bar", "x": "division", "y": ["non_sat_120_plus"], "unit": "meters"}'
+  - type: bar
+    when: "One measure over short categories (projects, categories, SAT-1..SAT-13 stages, weekdays, a few months)."
+    example: 'Q: SAT meters by stage -> {"type": "bar", "x": "sat_stage", "y": ["meters"]}'
+  - type: grouped_bar
+    when: "Two or more measures compared side by side per category, NOT parts of a whole (MI vs SAT per project, supplied vs installed per month, this month vs last month)."
+    example: 'Q: MI vs SAT by project -> {"type": "grouped_bar", "x": "project", "y": ["total_mi", "total_sat"], "unit": "meters"}'
+  - type: stacked_bar
+    when: "Parts that add up to a total per category (consumer/DTR/feeder per project, faulty/burnt/others per OEM, age bands per project)."
+    example: 'Q: Zone-wise installs split by category -> {"type": "stacked_bar", "x": "zone", "y": ["consumer", "dtr", "feeder"], "unit": "meters"}'
+  - type: stacked_horizontal_bar
+    when: "Same as stacked_bar but with more than 8 categories or long names."
+    example: 'Q: Defect types per division -> {"type": "stacked_horizontal_bar", "x": "division", "y": ["meter_faulty", "meter_burnt", "others"]}'
+  - type: percent_stacked_bar
+    when: "Share/mix of parts per category where the PERCENT matters more than the size (age-band mix per project, status mix per zone)."
+    example: 'Q: What share of each project''s non-SAT meters is 120+ days old? -> {"type": "percent_stacked_bar", "x": "project", "y": ["days_91_120", "days_120_plus"]}'
+  - type: line
+    when: "A trend over time (days, weeks, months) with 3+ points; several series over time = multi-line via several y or group."
+    example: 'Q: Monthly burnt meters this year -> {"type": "line", "x": "month", "y": ["meter_burnt"]}'
+  - type: area
+    when: "Volume over time where the accumulated amount matters (installation trend over 12 months, cumulative supply, stock balance) or 25+ time points."
+    example: 'Q: Installation trend over the last 12 months -> {"type": "area", "x": "month", "y": ["meters_installed"], "unit": "meters"}'
+  - type: combo
+    when: "A count AND a rate on different scales per category or period (installs + productivity, MI + SAT %, defects + defect rate, pareto: count + cumulative %). Bars = counts (y), line = rate (y2)."
+    example: 'Q: SAT progress by project -> {"type": "combo", "x": "project", "y": ["total_mi", "total_sat"], "y2": ["sat_pct_vs_mi"], "unit": "meters", "unit2": "%"}'
+  - type: donut
+    when: "Share of a whole across 2-6 parts, one measure, no negatives (status distribution, category mix, confirmed/reassign/review/no data)."
+    example: 'Q: Explain the auto-indexing status split -> {"type": "donut", "x": "status", "y": ["consumers"]}'
+  - type: pie
+    when: "Like donut, only when the user asks for a pie."
+    example: 'Q: Pie of defects by type -> {"type": "pie", "x": "defective_type", "y": ["meters"]}'
+  - type: funnel
+    when: "Sequential steps where each is a subset of the previous (supply -> installed -> SAT -> invoiced -> collected; meter journey stages)."
+    example: 'Q: Supply-to-collection funnel -> {"type": "funnel", "x": "step", "y": ["meters"], "unit": "meters"}'
+  - type: radial
+    when: "One to four percentages (0-100) that are the whole answer (utilization %, auto-indexing complete %, SAT % of eligible, collection efficiency)."
+    example: 'Q: What share of auto-indexing is complete? -> {"type": "radial", "x": "measure", "y": ["auto_indexing_concluded_pct"], "unit": "%"}  (single-row result: x may be a literal label column)'
+  - type: heatmap
+    when: "One measure across TWO dimensions (weekday x project, zone x age band, OEM x category) with 2+ rows and 2+ columns. Use group = the row dimension."
+    example: 'Q: Average installs by weekday for each project -> {"type": "heatmap", "x": "weekday", "y": ["avg_installs"], "group": "project"}'
+  - type: none
+    when: "A single number, a list of records (meter serials, consumers, tickets), a draft/message, or text-only answers."
+    example: 'Q: How many meters were installed yesterday? -> {"type": "none"}'

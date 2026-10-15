@@ -1,0 +1,33 @@
+# --- API -----------------------------------------------------------------------
+fastapi
+uvicorn[standard]
+requests
+python-dotenv
+pyyaml==6.0.3
+redis            # backend/shared/redis_client.py: session cache, response cache, per-session rate limiting
+
+# --- Data ----------------------------------------------------------------------
+pandas
+# Pinned below 2.x: the 2.x numpy.random compiled extension was blocked by this
+# machine's Windows Device Guard / Application Control policy. 1.26.4 is pandas'
+# own declared minimum for Python < 3.14.
+numpy==1.26.4
+sqlglot
+
+# --- Agent orchestration (gmr_agents/graph/) ------------------------------------
+# langchain-core 1.x depends on the compiled uuid_utils extension, which Device
+# Guard once blocked; if that recurs, langgraph==0.6.11 / langchain-core==0.3.79
+# is the known-safe fallback.
+langgraph==1.2.11
+langchain-core==1.6.3
+langsmith==0.4.52
+
+# --- Data lake connection (db_connection/) --------------------------------------
+# boto3 / botocore pinned as a matched pair.
+boto3==1.43.36
+botocore==1.43.36
+psycopg2-binary
+
+# --- Retrieval (gmr_agents/schema/retrieval.py) ---------------------------------
+fastembed==0.8.1      # local embedding model
+rapidfuzz==3.14.6     # typo fix + near-exact question match

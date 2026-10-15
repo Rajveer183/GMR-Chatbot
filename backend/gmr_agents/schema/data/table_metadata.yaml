@@ -1,0 +1,924 @@
+# Hand-curated table metadata for the Schema agent (loaded by schema/table_metadata.py).
+#
+#   mdm_tables / wfm_tables / wfm_postgres_tables   the curated table shortlists
+#   column_hints             "table.column" -> business meaning, shown to the SQL planner
+#   header_label_overrides   "table.column" -> display header for result tables
+#   table_descriptions       table -> one-line purpose (planner context + retrieval)
+#   place_name_aliases       alternate place names -> stored names
+#
+# The live structure (columns, types, row counts, sample values) is read from
+# information_schema by schema/catalog.py; this file is what cannot be read from
+# the database. After editing a table shortlist, refresh the catalog.
+#
+# PROMPT COST MAP (measured 2026-10-04):
+#   table_descriptions     triage table cards (TABLE_HINTS=5 best-ranked) + SQL schema
+#                          header of each table sent (SCHEMA_SCOPE=lean: tables triage named)
+#   column_hints           SQL planner: schema lines of sent tables (cut short, within
+#                          SCHEMA_TOKEN_BUDGET) + "RELEVANT COLUMNS" (~390 tok avg, top
+#                          SCHEMA_HINT_COLUMNS) -- a long hint costs on every question that
+#                          uses its table
+#   header_label_overrides result table headers only -- free in prompts
+#   place_name_aliases     code-side matching only -- free in prompts
+#   *_tables shortlists    triage TABLES menu, EVERY call: names only (~350 tok)
+
+# --------------------------------------------------------------------------- #
+# Curated table shortlist (see schema/catalog.py module docstring)
+# --------------------------------------------------------------------------- #
+# hes_gold by default, by the original explicit instruction: hes_silver/
+# hes_bronze are earlier (raw/staging) layers of this data lake's own
+# bronze/silver/gold maturity model, not meant to be queried directly --
+# only the curated "gold" layer is exposed to real query execution by
+# default. hes_silver's billing/usage/outage/installation-dimension tables
+# are a DELIBERATE, SCOPED exception to that rule (explicitly requested --
+# see the "hes_silver" key below): they're real, meaningful business
+# concepts (billing, block/daily usage, power outage, the installation
+# dimension) with no hes_gold equivalent at all, not a blanket "hes_silver
+# is now in scope" -- hes_silver's own "_unmapped" staging variants and
+# one-off dated rebuild snapshots (verified present: billing_unmapped,
+# block_usage_unmapped, daily_usage_unmapped, power_outage_unmapped,
+# rebuild_billing_<date>) stay excluded, same reasoning as hes_gold's own
+# "_stage_*"/"mapping_audit*" exclusion below. This means MDM currently
+# CANNOT answer a device-status question (hes_silver.device_status exists
+# but wasn't part of the requested exception) even though the router's own
+# domain description still mentions it -- that description is about
+# ROUTING scope (recognizing the
+# question as MDM's), not a promise every concept in it is queryable yet.
+# Add a hes_gold equivalent here (or lift this restriction) if that gap
+# needs closing.
+mdm_tables:
+  # SCOPED DOWN on request: the chatbot answers ONLY WFM data plus these 3
+  # meter-to-feeder auto-indexing ("mapping") tables. Every other hes_gold
+  # table and the hes_silver exception (billing/block_usage/daily_usage/
+  # power_outage/dim_installation) is deliberately not loaded and not
+  # queryable -- sql_guard rejects any table outside this catalog, so
+  # questions about them are refused. The previous full list is in this
+  # file's history; add tables back here to re-enable them.
+  hes_gold:
+    # Meter-to-feeder auto-indexing (KPI 50) -- source of truth for this
+    # concept (supersedes the retired mapping_audit* family).
+    - hierarchy_summary_autoindexing
+    - consumer_detail_autoindexing
+    - feeder_ranking_autoindexing
+
+wfm_tables:
+  gmr_wfm_silver:
+    # complaints/tickets
+    - unified_complaints
+    - unified_active_complaints
+    # service installations
+    - unified_installations
+    # meter asset records
+    - unified_smart_meter_asset
+    - unified_smart_meter_inventory
+    # meter lifecycle/discom-owned assets
+    - unified_decommissioned_meter
+    - unified_discom_meter_asset
+    # meter reading/index records
+    - unified_indexing
+    # complaints that haven't passed QC
+    - unified_non_qc_complaints
+    # SAT (site acceptance test) tracking
+    - sat_meter_mappings
+    - sat_milestones
+
+# Postgres database (DB_NAME), public schema -- same gold-tier-only
+# principle as MDM above, by the same explicit instruction: only
+# "gold_"-prefixed tables are real curated data; every other table there
+# (alembic_version/etl_alembic_version, geography_nodes, kpi_*,
+# milestone_*, rbac_* (access control, NOT data), revenue_receivables,
+# sat_eligibility_*, sku_catalog) is pipeline/config/access-control
+# plumbing, never queried for an answer. `gold_refresh_state` is EXCLUDED
+# despite the prefix -- verified directly (1 row, 27 columns all named
+# "*_rows"/"refreshed_at") to be ETL bookkeeping (when each OTHER gold
+# table was last refreshed and how many rows it got), not business data.
+# Curated to the tables matching this domain's own description (complaints/
+# tickets, field technician activity, installations) out of 21 real gold_
+# tables total -- same "starting shortlist, not everything" call as
+# MDM_TABLES/WFM_TABLES above; add more from `gold_inventory_*`,
+# `gold_revenue_*`, `gold_mi_sat_invoice_*`, `gold_meter_journey_stage_agg`,
+# etc. the same way.
+# Every real WFM Postgres table prefixed "gold_" EXCEPT
+# "gold_refresh_state" -- ETL pipeline metadata (when the pipeline last
+# ran), not curated business data, same reasoning as MDM_TABLES' own
+# "_stage_*"/"mapping_audit*" exclusions above. Every other real table in
+# the "public" schema (rbac_*, kpi_*, milestone_*, sat_eligibility_*,
+# sat_workbook_uploads, sku_catalog, revenue_receivables, geography_*,
+# alembic_version, etl_alembic_version) is deliberately out of scope by
+# the original instruction: only "gold_"-prefixed tables are curated,
+# query-execution-ready business data here; everything else is RBAC,
+# config, or pipeline internals. Originally a curated 7-table shortlist --
+# expanded to the full 21 after confirming (same pattern as the MDM
+# expansion) the other 14 weren't out of scope either, just not yet added.
+wfm_postgres_tables:
+  - gold_meter_installation_pending_stage_snapshot
+  - gold_mi_installation_day_agg
+  - gold_mi_installation_month_agg
+  - gold_om_technician_productivity_day_agg
+  - gold_om_technician_productivity_month_agg
+  - gold_mi_technician_productivity_day_agg
+  - gold_mi_technician_productivity_month_agg
+  - gold_mi_productivity_trend_month_agg
+  - gold_om_open_ageing_snapshot
+  - gold_non_sat_ageing_snapshot
+  - gold_meter_defect_event_day_agg
+  - gold_meter_inventory_event_day_agg
+  - gold_meter_inventory_event_month_agg
+  - gold_inventory_monthly_balance
+  - gold_inventory_unutilized_stock_snapshot
+  - gold_meter_journey_stage_agg
+  - gold_meter_revenue_pending_stage_snapshot
+  - gold_revenue_ageing_snapshot
+  - gold_mi_sat_invoice_day_agg
+  - gold_mi_sat_invoice_snapshot
+  - gold_dashboard_stats_snapshot
+  # Non-gold tables the WFM dashboard's KPI SQL itself reads (WFM/gmr-backend
+  # src/app/application/kpi_catalog): revenue_receivables.py (with
+  # geography_nodes for project/DISCOM names), and mi_vs_sat.py /
+  # non_sat_ageing.py (sat_eligibility_config's per-project SAT cutoff).
+  # Everything else non-gold (rbac_*, kpi_*, milestone_*, sku_catalog,
+  # *_history, *_uploads, alembic) is still excluded -- not KPI inputs.
+  - revenue_receivables
+  - geography_nodes
+  - sat_eligibility_config
+  # Newer O&M gold tables (added 2026-10-03 on request; not yet read by the
+  # dashboard KPI code in the local WFM repo as of 2026-09-24).
+  - gold_om_closed_tickets_day_agg
+  - gold_om_meter_complaints_agg
+
+# A column name + real values (or a role) doesn't always self-evidently
+# connect to how a real question would phrase the same concept -- verified
+# live: "SAT pending" never got recognized as `is_non_sat_pending` (a
+# double-negative name -- "pending" because it's NOT-yet-SAT'd) despite
+# that column's real True/False values already being shown via
+# sample_values, and "Inventory"/"Installation" status never got connected
+# to `inventory_category`/`progress_category` (which track the SAME
+# Feeder/DT/Consumer breakdown at two different STAGES, not two different
+# category sets). Sample values fix "which literal do I use," not "which
+# COLUMN does this business term even mean" -- this fixes the latter for
+# specific columns confirmed to cause a real refusal, without trying to
+# solve column-name clarity in general. Keyed (table_name, column_name);
+# rendered in prompt_context() right next to that column.
+column_hints:
+  "gold_mi_installation_day_agg.is_non_sat_pending": &hint1 >-
+    True means this meter is still PENDING its SAT (Site Acceptance Test) -- this IS what "SAT pending"/"pending
+    SAT" in a question refers to.
+  "gold_mi_installation_month_agg.is_non_sat_pending": *hint1
+  "gold_mi_installation_day_agg.inventory_category": &hint2 >-
+    Which entity type (Feeder/DT/Consumer) this row's INVENTORY intake is categorized under -- a meter that has been
+    received into inventory but not necessarily installed yet. "DT" means DTR here.
+  "gold_mi_installation_month_agg.inventory_category": *hint2
+  "gold_mi_installation_day_agg.progress_category": &hint3 >-
+    Which entity type (Feeder/DT/Consumer) this row's INSTALLATION PROGRESS is categorized under -- a meter that has
+    actually been installed, not just received. "DT" means DTR here.
+  "gold_mi_installation_month_agg.progress_category": *hint3
+  # "mf" verified live against real data before adding, not assumed: real
+  # distinct values on feeder_loss.mf run 0, 1, 30, 40...32000 (classic
+  # CT/PT multiplying-factor magnitudes for feeder/DT-level meters, which
+  # carry large CT ratios) -- not a flag, percentage, or small bounded
+  # code. "Multiplying Factor" is standard DISCOM/utility metering
+  # terminology: the number the base metered reading is multiplied by to
+  # get true consumption (a consumer-level meter with no CT/PT is MF=1;
+  # a feeder/DT meter behind a current transformer is not).
+  "dt_loss.mf": &hint4 >-
+    MF = Multiplying Factor -- the meter's CT/PT ratio; multiply the raw metered reading by this to get true
+    consumption. NOT a flag or a percentage.
+  "dt_loss_consumers.mf": *hint4
+  "feeder_loss.mf": *hint4
+  "feeder_loss_ai.mf": *hint4
+  "feeder_loss_ai_consumers.mf": *hint4
+  "feeder_loss_consumers.mf": *hint4
+  "dim_meter.mf": *hint4
+  "dim_meter_energy.mf": *hint4
+  # "mi_date" verified live: real dates (e.g. 2026-09-21), consistent with
+  # this table's own name and the "gold_mi_*" table-name prefix elsewhere
+  # in this schema (MI = Meter Installation, as opposed to "gold_om_*" =
+  # Operations & Maintenance/complaints). This IS the date a question
+  # asking "installed on/during <date>" should filter on for this table.
+  "unified_installations.mi_date": &hint5 >-
+    MI = Meter Installation. This is the date this meter's installation was recorded/completed -- filter on this for
+    "installed on/during <date>" questions.
+  "unified_installations.new_meter_serial_number": &hint6 >-
+    VERIFIED LIVE (2,000-row sample): this column is ALWAYS alphabetic-prefixed (e.g. 'CA6028422', 'HP9000387',
+    'AL3479094'), NEVER purely numeric -- see consumer_number's own hint for the contrasting format. A question
+    about "this consumer"/"this meter" asking for BOTH installation date and SAT date is answerable with ONE query,
+    not two: SELECT this table's mi_date (installation date) alongside sat_milestones.sat_date, chained through TWO
+    declared joins -- this table's new_meter_serial_number = sat_meter_mappings.meter_serial_number, then
+    sat_meter_mappings to sat_milestones on BOTH project AND sat_number (see sat_milestones' own hint). Never
+    answer_kind="unanswerable"/"clarify" just because reaching the SAT date needs this table as a bridge to
+    sat_meter_mappings -- every join in that chain is declared and verified live (millions of overlapping meters
+    between this table and sat_meter_mappings).
+  "unified_installations.consumer_number": &hint7 >-
+    VERIFIED LIVE (2,000-row sample): this column is ALWAYS purely numeric (e.g. '5108523000'), NEVER
+    alphabetic-prefixed -- new_meter_serial_number (see its own hint), by contrast, always starts with letters (e.g.
+    'CA6028422'). If the question calls a value "this consumer"/"consumer number" but the actual value given starts
+    with letters, that word choice is NOT reliable evidence it belongs in THIS column -- match the filter column to
+    the VALUE'S OWN format, not the question's incidental wording (verified live to go wrong: 'CA6028422' filtered
+    against consumer_number returned zero rows even though that exact value is a real row's
+    new_meter_serial_number). If you cannot tell which identifier column a value belongs to, filter with OR across
+    every plausible candidate column instead of guessing a single one from wording alone.
+  # Verified live (SELECT status, COUNT(*) ... GROUP BY status): the four real
+  # stored values, spelled exactly this way -- "NO DATA" has a literal space,
+  # not an underscore, and there is no "PENDING VERIFICATION" value stored (that
+  # term only exists as a derived CONFIRMED+REASSIGN/REVIEW+NO DATA rollup in
+  # hierarchy_summary_autoindexing, never as a literal status here).
+  "consumer_detail_autoindexing.status": &hint8 >-
+    Exactly one of: 'CONFIRMED', 'REASSIGN', 'REVIEW', 'NO DATA' (verified live -- use one of these literal strings
+    for an equality filter, not a value you construct).
+  "consumer_detail_autoindexing.outage_match": &hint9 >-
+    "matched/total" dark-window ratio for the consumer's DECLARED feeder (e.g. '5/10'). A string, not a number --
+    don't try to filter/aggregate on it numerically without parsing it first.
+  "consumer_detail_autoindexing.evidence": &hint10 >-
+    "matched/total" dark-window ratio for the WINNING candidate feeder (same format as outage_match, but for the
+    best-scoring feeder, not necessarily the declared one). Literally '-' when status != REASSIGN.
+  "consumer_detail_autoindexing.re_tag_to": &hint11 >-
+    The feeder name this consumer should be RE-TAGGED to. Literally '-' (verified live, not NULL) on every row where
+    status != 'REASSIGN' -- only meaningful/non-placeholder on REASSIGN rows.
+  # Verified live: feeder NAMES are NOT unique -- 'TOWN' alone is the
+  # declared system_feeder for 47,287 consumers across 26 DIFFERENT
+  # feeder_code values (SELECT system_feeder, COUNT(DISTINCT feeder_code)
+  # ... GROUP BY system_feeder). A plan that filters WHERE system_feeder =
+  # '<name>' expecting one feeder can silently span many unrelated real
+  # feeders (different substations, even different projects) -- this is
+  # the root cause of a live-observed failure where a generic feeder name
+  # (e.g. "SUBSTATION") made the planner give up on the name filter
+  # entirely and return an unrelated whole-table aggregate instead of
+  # refusing or listing the matches.
+  "consumer_detail_autoindexing.system_feeder": &hint12 >-
+    When the question names a feeder ONLY by this column (no feeder_code given), ALWAYS write: filter system_feeder
+    = '<name>', GROUP BY feeder_code (and system_feeder), SELECT feeder_code + the requested metric. NEVER
+    answer_kind="clarify"/"unanswerable" for this -- this exact query shape is ALWAYS a complete, correct answer by
+    itself, with no extra scoping needed: it returns exactly one row for an unambiguous name (verified live: most
+    names, e.g. 'METHAPAR', map to exactly one feeder_code -- treat that single row as the normal, expected
+    single_value case), or several rows for a colliding one (verified live: e.g. 'TOWN' maps to 26 different
+    feeder_code values, 'WORLD BANK' to 17 -- show these as separate rows, a list_records/ranking answer, not a
+    request for clarification). Never SUM across multiple feeder_code rows as if they were one feeder, and never
+    fall back to an unrelated whole-table aggregate.
+  # Verified live against the source ETL job (kpi_50_mapping_autoindexing.py):
+  # reassign_out and reassign_in are the SAME reassign population counted by
+  # origin vs destination feeder, not two separate pools -- see this table's
+  # own TABLE_DESCRIPTIONS entry for the full explanation. Repeated here
+  # because a column-level hint renders right next to the column itself in
+  # the prompt, where it's most likely to be seen before a SUM/filter is written.
+  # Verified live: same feeder-name collision problem as consumer_detail_
+  # autoindexing.system_feeder above (they're the same name space) --
+  # 'SUBSTATION' alone is the feeder name on 91 different rows here,
+  # spanning 91 different substations and 3 different projects (SELECT
+  # feeder, COUNT(DISTINCT substation), COUNT(DISTINCT project) ... WHERE
+  # feeder='SUBSTATION'). Live-observed failure: asking "how many
+  # consumers connected to the SUBSTATION feeder" made the planner drop
+  # the name filter entirely and return SUM(mi) over the WHOLE table
+  # (4,047,001 -- every consumer in the dataset) instead of filtering to
+  # that name or refusing/listing the matches -- feeder_code is the fix.
+  "feeder_ranking_autoindexing.feeder": &hint13 >-
+    When the question names a feeder ONLY by this column (no feeder_code given), ALWAYS write: filter feeder =
+    '<name>', GROUP BY feeder_code (and feeder), SELECT feeder_code + the requested metric (e.g. mi). NEVER
+    answer_kind="clarify"/"unanswerable" for this -- this exact query shape is ALWAYS a complete, correct answer by
+    itself, with no extra scoping needed: it returns exactly one row for an unambiguous name (verified live: most
+    names, e.g. 'METHAPAR', map to exactly one row here -- treat that single row as the normal, expected
+    single_value case, same as if feeder_code had been given directly), or several rows for a colliding one
+    (verified live: e.g. 'SUBSTATION' is the name on 91 different rows here, spanning 91 different substations and 3
+    different projects; 'TOWN'/'WORLD BANK' are similarly repeated -- show these as separate rows, a
+    list_records/ranking answer, not a request for clarification). Never SUM across multiple feeder_code rows as if
+    they were one feeder, and never fall back to an unrelated whole-table aggregate. VERIFIED LIVE: a small share of rows
+    have this column NULL -- a real feeder_code with real mi/confidence data whose human-readable name just hasn't
+    been resolved yet, NOT a rollup/total row. A plain listing of feeder (and/or substation) names -- e.g. "list
+    feeders and substations" with no aggregation -- MUST add `feeder IS NOT NULL` (and `substation IS NOT NULL`,
+    same 99 rows) so these show as real feeder_code rows with no name instead of a nonsense-looking 'Feeder: 0' in
+    the answer; only drop that filter if the question is specifically about unmapped/unresolved feeders.
+  "feeder_ranking_autoindexing.feeder_code": &hint14 >-
+    The one column that reliably identifies a SINGLE feeder (verified live: unlike the `feeder` name column,
+    feeder_code has no observed collisions). Prefer filtering on this over `feeder` (name) whenever the question
+    gives a feeder_code-looking value.
+  "feeder_ranking_autoindexing.substation": &hint15 >-
+    Substation name -- unlike `feeder` (see its own hint), this is well-behaved: verified live, a given substation
+    name never spans more than one project, and one substation legitimately having several feeder rows here (13-16
+    is common) reflects a real one-substation-to-many-feeders relationship, not a naming collision. Summing/grouping
+    mi (or other measures) by substation is safe. Same 99-row NULL caveat as `feeder` above (always the same 99
+    rows, both columns NULL together) -- see its hint.
+  "feeder_ranking_autoindexing.mi": &hint16 >-
+    TOTAL consumers DECLARED to this feeder regardless of verdict (mi = correct_tagging + reassign_out + review +
+    no_data, verified live) -- this IS the answer to "how many consumers/meters are connected to this feeder" for
+    one feeder_code. "MI" means "meters indexed" here, not "Meter Installation" the way the WFM gold_mi_* tables use
+    the same two letters.
+  "feeder_ranking_autoindexing.correct_tagging": &hint17 >-
+    Consumers declared to this feeder whose evidence CONFIRMS that declaration is correct (the feeder-level rollup
+    of consumer_detail_autoindexing.status='CONFIRMED' for this feeder_code).
+  "feeder_ranking_autoindexing.review": &hint18 >-
+    Consumers declared to this feeder whose evidence was inconclusive and needs manual review (the feeder-level
+    rollup of consumer_detail_autoindexing.status='REVIEW' for this feeder_code) -- not the same thing as no_data
+    (no evidence at all).
+  "feeder_ranking_autoindexing.no_data": &hint19 >-
+    Consumers declared to this feeder with no outage-coincidence evidence available at all to make ANY determination
+    (the feeder-level rollup of consumer_detail_autoindexing.status='NO DATA' for this feeder_code) -- not the same
+    thing as review (evidence exists but was inconclusive).
+  "feeder_ranking_autoindexing.reassign_out": &hint20 >-
+    Consumers DECLARED to this feeder whose evidence says they should move elsewhere. SUM(reassign_out) over the
+    WHOLE, UNFILTERED table equals the true total REASSIGN count -- but once you filter/group by project (or
+    anything else), it can drift slightly from the true count for that scope (verified live: a project-level SUM here was off by one meter from
+    hierarchy_summary_autoindexing/consumer_detail_autoindexing, because a feeder's OWN project here is a separate
+    join, not always identical to each consumer's own project attribute). For anything scoped to
+    project/discom/zone/circle/division, use hierarchy_summary_autoindexing.reassign_number instead -- it's exact.
+    Do NOT add this to reassign_in expecting "total reassigns" either way -- that double-counts.
+  "feeder_ranking_autoindexing.reassign_in": &hint21 >-
+    Consumers declared to OTHER feeders whose evidence recommends THIS feeder. Same caveat as reassign_out: only
+    equals the true total REASSIGN count over the whole, unfiltered table -- once scoped by project (or anything
+    else) prefer hierarchy_summary_autoindexing.reassign_number instead. Do NOT add this to reassign_out expecting
+    "total reassigns" -- that double-counts.
+  "feeder_ranking_autoindexing.confidence": &hint22 >-
+    NOT an accuracy/correctness score. It's coverage: % of this feeder's declared consumers that got ANY decisive
+    verdict (CONFIRMED+REASSIGN) rather than REVIEW/NO DATA. NULL (not 0) when mi=0.
+  "feeder_ranking_autoindexing.project": &hint23 >-
+    Titlecase as of the last live check (e.g. 'Kashi', matching the other two autoindexing tables) -- but this
+    specific column has drifted casing before (was lowercase 'kashi' in an earlier data refresh), so don't assume
+    either casing is permanent; if an equality filter here returns 0 rows unexpectedly, check the real stored casing
+    rather than assuming the filter logic is wrong.
+  # --------------------------------------------------------------------- #
+  # WFM full audit (gmr_wfm_silver Athena tables + WFM Postgres gold_*
+  # tables) -- unlike the Postgres gold_* tables below (auto-sampled by
+  # _sample_dimension_values at refresh() time), Athena tables get NO
+  # automatic sample-value profiling at all (see module docstring point 1
+  # -- scanning a 90M-row Athena table per column on every catalog build
+  # isn't practical), so every enum/status-like column on the Athena
+  # (gmr_wfm_silver) side needed a manually-verified hint the same way
+  # consumer_detail_autoindexing.status got one above -- each verified live
+  # via SELECT <col>, COUNT(*) FROM <table> GROUP BY <col> ORDER BY COUNT(*)
+  # DESC LIMIT 31 against the real table. Columns NOT covered here are
+  # either self-evident geo/name dimensions (zone/circle/technician_name/
+  # agency/...), free_text remarks, or internal ETL/QC lineage plumbing
+  # (business_key_hash, source_record_hash, qc*_source_file_fingerprint,
+  # qc*_logical_record_number, content_hash_version, normalization_version,
+  # geo_entity_key, processing_run_id, ...) that a real business question
+  # essentially never references directly -- role="identifier" plus HARD
+  # RULE 1 (only reference listed columns) already keeps those out of a
+  # sensible plan without needing a dedicated hint each.
+  "unified_complaints.qc_tier": &hint24 >-
+    Exactly 1, 2, or 3 (verified live) -- WHICH QC review tier this row's data most recently passed/reached (matches
+    the qc1_status/qc2_status/qc3_status pipeline and the 'report' column's QC1/QC2/QC3 suffix). A discrete tier
+    number, NOT a summable quantity -- never SUM(qc_tier).
+  "unified_installations.qc_tier": &hint25 >-
+    Exactly 1, 2, or 3 (verified live) -- WHICH QC review tier this row's data most recently passed/reached (matches
+    the qc1_status/qc2_status/qc3_status pipeline and the 'report' column's QC-tier suffix). A discrete tier number,
+    NOT a summable quantity -- never SUM(qc_tier).
+  "unified_indexing.qc_tier": &hint26 >-
+    Exactly 1, 2, or 3 (verified live) -- WHICH QC review tier this row's data most recently passed/reached (matches
+    the qc1_status/qc2_status/qc3_status pipeline). A discrete tier number, NOT a summable quantity -- never
+    SUM(qc_tier).
+  "unified_complaints.qc1_status": &hint27 >-
+    Exactly 'Approved' or 'Rejected' (verified live with SELECT qc1_status, COUNT(*) ... GROUP BY; Rejected is rare). NULL/blank means this QC stage hasn't happened YET for this row, not a third status value --
+    qc1/qc2/qc3 are three SEQUENTIAL review gates, not three independent opinions.
+  "unified_complaints.qc2_status": &hint28 >-
+    Exactly 'Approved' or 'Rejected' (verified live). NULL/blank means this QC stage hasn't happened yet for this
+    row -- qc1/qc2/qc3 are three SEQUENTIAL review gates, not three independent opinions.
+  "unified_complaints.qc3_status": *hint28
+  "unified_complaints.complaint_entity_type": &hint29 >-
+    Exactly one of: 'CONSUMER', 'DTR', 'FEEDER' (verified live). NOTE: spelled 'DTR' here (and on every other
+    gmr_wfm_silver/Athena table with this concept) -- the Postgres gold_* tables spell the SAME concept 'DT' instead
+    (e.g. gold_mi_installation_day_agg.category). Match the spelling to whichever table/engine you're actually
+    querying.
+  "unified_active_complaints.complaint_status": &hint30 >-
+    Exactly one of (verified live, ordered by frequency): 'Unassigned', 'Can not attend', 'Assigned', 'Escalated To
+    Discom', 'Work in progress', 'Resolved', 'Accepted', 'On Hold'. There is no literal 'Open'/'Closed' value --
+    'Resolved' is the only closed-shaped status, and it still appears in this table (despite the table itself being
+    described as 'active/open complaints only'), so filter by the exact status string rather than assuming every row
+    here is open.
+  "unified_active_complaints.complaint_type": &hint31 >-
+    31 distinct values verified live, heavily skewed: 'Meter Not in Communication' alone is most of the rows. Use the exact stored spelling for an equality filter -- e.g. 'Never Comm' and 'Meter Not
+    in Communication' are two DIFFERENT values, not the same concept spelled two ways.
+  "unified_active_complaints.complaint_by": &hint32 >-
+    WHO logged the complaint, not a status or category -- either 'Auto Ticketing'/a channel name (1912 Helpdesk, GMR
+    Tickets) or a real person's name. High-cardinality; don't treat it as a small enum.
+  "unified_active_complaints.hhu_reading_status": &hint33 >-
+    NULL for almost all rows (verified live). When populated it's a raw generated message ('Upload
+    meter data for <serial> OK/failed'), not a small fixed enum -- don't expect a clean equality filter value like
+    'OK'/'Failed' to match it.
+  "unified_active_complaints.escalation_status": &hint34 >-
+    Numeric escalation level, verified live: 0 (~92% of rows, no escalation), 1, 2, or 3 (rare, 22 rows) -- no text
+    label beyond the number itself. NULL for ~5% of rows.
+  "unified_active_complaints.complaint_entity_type": &hint35 >-
+    Exactly one of: 'CONSUMER', 'DTR', 'FEEDER' (verified live). Spelled 'DTR' on this and every other
+    gmr_wfm_silver/Athena table -- the Postgres gold_* tables spell the same concept 'DT' instead.
+  "unified_installations.old_meter_status": &hint36 >-
+    Exactly one of: 'Replaced', 'Left as check meter' (verified live), or NULL (~17% of rows -- no old meter
+    recorded for this installation, e.g. a fresh/new connection rather than a smart-meter swap).
+  "unified_installations.communication_type": &hint37 'Exactly one of: ''GPRS'', ''RF'' (verified live, GPRS is ~95% of populated rows), or NULL (~12% of rows).'
+  "unified_installations.supply_type": &hint38 >-
+    An opaque numeric-looking tariff/connection-category CODE (e.g. '17', '10', '20', '10B', '80B' -- verified live,
+    30+ distinct codes), NOT a descriptive label and NOT summable. This schema has no decode table for what each
+    code means -- don't guess a label (e.g. 'domestic'/'commercial') for a specific code.
+  "unified_installations.jhatpat_result": &hint39 >-
+    Exactly one of: 'SUCCESS', 'FAIL', 'ERROR' (verified live), or NULL (~98% of rows -- most installations aren't a
+    Jhatpat-scheme case at all). 'Jhatpat' is UP DISCOM's instant/fast-track new-connection scheme -- this column is
+    that scheme's own outcome flag, not a general installation-result column.
+  "unified_installations.report_category": &hint40 >-
+    Exactly one of: 'CONSUMER', 'DTR', 'FEEDER' (verified live). Spelled 'DTR' here (and on every other
+    gmr_wfm_silver/Athena table) -- the Postgres gold_* tables spell the same concept 'DT' instead.
+  "unified_installations.new_service_cable_size": &hint41 >-
+    Free-form cable-spec text (e.g. 'Single core 70 sqmm'), NOT a small clean enum -- verified live, includes
+    truncated duplicates of the same real value (e.g. 'Single core 70 sqmm' vs 'Single core 70 s' both exist as
+    separate stored strings), so an exact-match filter can silently miss some matching rows.
+  "unified_smart_meter_asset.rms_status": &hint42 >-
+    NOT a clean status enum -- verified live: 'Success' (~78% of populated rows) is the only "good" value;
+    everything else is raw, highly-variable HTTP/API error text from the remote-monitoring gateway (timeouts, '502
+    Bad Gateway' HTML, 'Invalid Account Id', etc). For a "communicating"/"RMS-connected" question, filter rms_status
+    = 'Success' -- don't try to enumerate or pattern-match the failure text.
+  "unified_smart_meter_asset.report_category": *hint40
+  "unified_smart_meter_inventory.activation_status": &hint43 >-
+    Mostly a small enum -- verified live, dominant values: 'PENDING' (~59%), 'ACTIVE' (~12%), 'No Data found' (~7%)
+    -- but the long tail (~20% of rows) is raw SIM-activation-vendor API error/response text ('429: unknown ERROR',
+    'Invalid mobileNo', etc), not additional real statuses. For "is this SIM active" filter on 'ACTIVE'
+    specifically; don't treat the error-text tail as meaningful categories.
+  "unified_smart_meter_inventory.meter_condition": 'Exactly one of: ''Good'', ''Replace'', ''Faulty'' (verified live).'
+  "unified_smart_meter_inventory.meter_status": &hint44 >-
+    Meter's current custody/lifecycle location, verified live -- dominant value 'Installed' (~96%); others are
+    pre-installation custody stages: 'At GMR', 'At agency', 'Issued to agency'/'Issued to Technician'/'Issued to
+    Supervisor', 'With Supervisor'/'With Technician', 'Returned to GMR'/'Returned to agency'/'Returned to
+    Supervisor'/'Returned to Manufacturer', 'With Manufacturer', 'Data received', 'Refurbish requested'. Use the
+    exact stored string -- these are NOT the same vocabulary as meter_condition.
+  "unified_decommissioned_meter.status": &hint45 >-
+    Exactly one of (verified live): 'Returned to Supervisor', 'With Agency', 'Decommissioned', 'Returned to GMR',
+    'With GMR'. NOTE: only 'Decommissioned' means the meter is actually fully decommissioned -- the
+    other 4 values are intermediate custody states in the decommissioning workflow, not synonyms for
+    "decommissioned".
+  "unified_decommissioned_meter.meter_condition": &hint46 >-
+    Free-form, NOT a clean enum -- verified live: casing is inconsistent ('Faulty' vs 'faulty', 'Working' vs
+    'working', 'Burnt' vs 'burnt' are each counted as different stored values), plus a long tail of one-off
+    free-text entries ('Denger zone', 'meter disconncet', 'Power outage'). Use LOWER() for a case-insensitive
+    equality filter on the common values (ok/faulty/damage/burnt/working).
+  "unified_discom_meter_asset.connection_status": &hint47 >-
+    NOT a small clean enum -- verified live, 16+ distinct values including inconsistent casing ('In Service' vs 'In
+    service' are two different stored strings). Dominant values: 'In Service' (~76%), 'TD' (temporarily
+    disconnected, ~14%), 'TD >6 MONTHS', 'TD Migrated', 'POSTPAID'/'PREPAID' (payment mode, not connection status),
+    'SB' (standby?), 'COT' (change of tariff?), 'NC Pending'/'NC Reject' (new connection pending/rejected). For
+    "active connections" use LOWER(connection_status) = 'in service'.
+  "unified_discom_meter_asset.supply_type": &hint48 >-
+    An opaque numeric-looking tariff/connection-category CODE (e.g. '17', '10', '51' -- verified live, 30+ distinct
+    codes, same code space as unified_installations.supply_type/unified_indexing.supply_type), NOT a descriptive
+    label and NOT summable. No decode table in this schema -- don't guess a label.
+  "unified_discom_meter_asset.monitored_by_amr": &hint49 >-
+    Verified live: only 2 real values when populated -- 'AMI' (meaning YES, monitored) or 'No'/'NO' -- and NULL for
+    ~99.9% of rows (this network-monitoring detail is only captured for a small subset of assets).
+  "unified_discom_meter_asset.monitored_by_rtdas": &hint50 >-
+    Verified live: when populated it is ALWAYS 'No'/'NO' (no true/positive value observed at all) and NULL for
+    ~99.9% of rows -- effectively unusable for a "how many are RTDAS-monitored" question as-is.
+  "unified_discom_meter_asset.report_category": *hint40
+  "unified_indexing.report_category": *hint40
+  "unified_indexing.supply_type": &hint51 >-
+    An opaque numeric-looking tariff/connection-category CODE (same code space as
+    unified_installations.supply_type/unified_discom_meter_asset.supply_type -- verified live), NOT a descriptive
+    label. NULL for ~40% of rows. No decode table in this schema -- don't guess a label for a specific code.
+  "unified_non_qc_complaints.complaint_entity_type": &hint52 >-
+    Exactly one of: 'CONSUMER', 'DTR', 'FEEDER' (verified live, overwhelmingly 'CONSUMER' -- nearly every
+    row). Spelled 'DTR' here (and on every other gmr_wfm_silver/Athena table) -- the Postgres gold_* tables spell
+    the same concept 'DT' instead.
+  "unified_non_qc_complaints.old_cable_replacement": &hint53 Lowercase 'yes'/'no' (verified live -- NOT 'Yes'/'No' titlecase), or NULL for ~73% of rows.
+  "unified_non_qc_complaints.module_replacement": &hint54 Lowercase 'yes'/'no' (verified live, overwhelmingly 'no'), or NULL for ~27% of rows.
+  # Postgres gold_* tables: dimension/identifier columns already get real
+  # sample_values automatically (_sample_dimension_values at refresh() time,
+  # capped at _MAX_SAMPLE_DISTINCT=30) -- these hints exist ONLY where the
+  # column name/values are still ambiguous even with the real values shown,
+  # verified live the same way as the Athena hints above.
+  "gold_om_technician_productivity_day_agg.category": &hint55 >-
+    'ALL' (verified live) is a pre-computed ROLLUP row across every category for that technician/day/group -- it
+    does NOT necessarily equal SUM of the 'CONSUMER'+'DT'+'FEEDER' rows for the same group (a technician/day can
+    span multiple categories, so the relationship isn't a simple additive total). For an all-categories figure,
+    filter category='ALL' directly; for one category's figure, filter to that one value -- never SUM across category
+    values expecting them to reconcile to the 'ALL' row.
+  "gold_om_technician_productivity_month_agg.category": &hint56 >-
+    'ALL' (verified live) is a pre-computed ROLLUP across every category for that group, NOT necessarily equal to
+    SUM of the 'CONSUMER'+'DT'+'FEEDER' rows. Filter category='ALL' directly for an all-categories figure; never SUM
+    across category values expecting them to reconcile to the 'ALL' row.
+  "gold_mi_technician_productivity_day_agg.category": *hint56
+  "gold_mi_technician_productivity_month_agg.category": *hint56
+  "gold_mi_productivity_trend_month_agg.category": *hint56
+  "gold_mi_technician_productivity_day_agg.active_days": &hint_active_days >-
+    Per-row flag, verified live: always 1 on the day tables (one row = one technician on one day, per category /
+    place) -- SUM(active_days) only counts rows (~technician-days), it is NEVER the 'active days'. Active days of a
+    division / zone / project / technician = COUNT(DISTINCT period_start) (calendar days with an install).
+    Technician-days = SUM(technician_day_count). On the month tables it is days worked by that technician that
+    month: never SUM it across technicians for 'active days' either.
+  "gold_om_technician_productivity_day_agg.active_days": *hint_active_days
+  "gold_mi_technician_productivity_month_agg.active_days": *hint_active_days
+  "gold_om_technician_productivity_month_agg.active_days": *hint_active_days
+  "gold_mi_productivity_trend_month_agg.active_days": *hint_active_days
+  "gold_mi_productivity_trend_month_agg.filter_level": &hint57 >-
+    Which geo granularity this row's WHERE-scope was applied at ('all'/'zone'/'circle'/'division'/'sub_division') --
+    filter_label (a separate column) holds the actual value at that level (e.g. filter_level='zone',
+    filter_label='Agra'). This is a "long"/melted cube design, unlike hierarchy_summary_autoindexing's wide
+    one-column-per-level design -- don't expect a zone/circle/division column here to filter on directly.
+  "gold_mi_productivity_trend_month_agg.aggregate_level": &hint58 >-
+    Which geo granularity this row is GROUPED/aggregated at
+    ('all'/'project'/'discom'/'zone'/'circle'/'division'/'sub_division') -- label (a separate column) holds the
+    actual value at that level. Paired with filter_level/filter_label (the WHERE-scope, a different axis) -- see
+    that column's own hint.
+  "gold_om_open_ageing_snapshot.age_key": &hint59 >-
+    Ageing bucket, verified live: 'age_0_7', 'age_8_15', 'age_16_30', 'age_31_60', 'age_60_plus' (days open). These
+    do NOT sort into chronological order alphabetically (e.g. 'age_16_30' < 'age_31_60' < 'age_8_15' as plain
+    strings) -- use an explicit CASE-WHEN ordering, not ORDER BY age_key, if the question needs the buckets in
+    day-range order.
+  "gold_non_sat_ageing_snapshot.age_key": &hint60 >-
+    Ageing bucket (days since installation, not yet SAT'd), verified live: only 'age_91_120' and 'age_120_plus'
+    actually occur in this table (a narrower set than gold_om_open_ageing_snapshot's age_key, which covers 0-7
+    through 60+) -- don't assume the two tables share the same bucket set.
+  "gold_meter_defect_event_day_agg.defective_type": &hint61 >-
+    Coarse defect category -- verified live, exactly 3 values: 'Meter Burnt', 'Meter Faulty', 'Others'.
+    detailed_defective_type (a separate column) is a finer-grained SUB-category of this same concept, not an
+    independent classification -- e.g. 'METER BURNT'/'METER TERMINAL BURNT' both roll up under defective_type='Meter
+    Burnt'. Use defective_type for a coarse breakdown, detailed_defective_type only when the question specifically
+    asks for the granular reason.
+  "gold_meter_defect_event_day_agg.detailed_defective_type": &hint62 >-
+    Fine-grained defect reason (verified live, 12 distinct values, e.g. 'METER TAMPERING DETECTED OR METER OR BOX
+    BROKEN', 'DISPLAY BACK LED OFF OR PARTIAL DISPLAY') -- a SUB-category of the coarser defective_type column, not
+    an independent concept. Prefer defective_type for a general defect-type breakdown unless the question
+    specifically asks for the detailed reason.
+  "gold_mi_installation_day_agg.has_sat_number": &hint63 >-
+    Verified live to be the EXACT logical inverse of is_non_sat_pending (and identical information to sat_is_null)
+    on every row of this table -- has_sat_number=True everywhere is_non_sat_pending=False, and vice versa. These
+    three columns are redundant restatements of the same fact; prefer is_non_sat_pending (see its own hint) since
+    "SAT pending" is the phrasing a real question is most likely to use.
+  "gold_mi_installation_day_agg.sat_is_null": &hint64 >-
+    Verified live to be the EXACT logical inverse of has_sat_number and identical information to is_non_sat_pending
+    on every row -- these three columns are redundant. Prefer is_non_sat_pending (see its own hint) since "SAT
+    pending" is the phrasing a real question is most likely to use.
+  "gold_mi_installation_month_agg.has_sat_number": &hint65 >-
+    Verified live to be the EXACT logical inverse of is_non_sat_pending (and identical information to sat_is_null)
+    on every row of this table. These three columns are redundant restatements of the same fact; prefer
+    is_non_sat_pending (see its own hint).
+  "gold_mi_installation_month_agg.sat_is_null": &hint66 >-
+    Verified live to be the EXACT logical inverse of has_sat_number and identical information to is_non_sat_pending
+    on every row -- these three columns are redundant. Prefer is_non_sat_pending (see its own hint).
+  "gold_mi_installation_day_agg.sat_stage": &hint67 >-
+    A discrete SAT milestone TIER (1-13, verified live against gold_dashboard_stats_snapshot's own sat_stage_trend
+    breakdown), NOT a summable quantity despite its numeric (smallint) type -- NULL exactly where
+    is_non_sat_pending=True (not yet SAT'd at all). Never SUM(sat_stage); GROUP BY it (or filter to a specific
+    stage) instead.
+  "gold_mi_installation_month_agg.sat_stage": &hint68 >-
+    A discrete SAT milestone TIER (1-13), NOT a summable quantity despite its numeric (smallint) type -- NULL
+    exactly where is_non_sat_pending=True. Never SUM(sat_stage); GROUP BY it (or filter to a specific stage)
+    instead.
+  "gold_mi_sat_invoice_day_agg.sat_stage": &hint69 >-
+    A discrete SAT milestone TIER (1-13), NOT a summable quantity despite its numeric (smallint) type. Never
+    SUM(sat_stage); GROUP BY it (or filter to a specific stage) instead.
+  "gold_mi_sat_invoice_snapshot.sat_stage": *hint69
+  "gold_meter_installation_pending_stage_snapshot.current_stage": &hint70 >-
+    PRE-installation pipeline stage a pending meter currently sits at -- verified live: 'inventory', 'agency',
+    'supervisor', 'technician' (in that pipeline order). DIFFERENT vocabulary from the same-named column on
+    gold_inventory_unutilized_stock_snapshot (adds 'warehouse', no 'inventory') and
+    gold_meter_revenue_pending_stage_snapshot (a completely different, post-installation vocabulary:
+    'installation_done_sat_pending'/'sat_done_revenue_pending') -- don't assume this column means the same thing
+    across tables just because the name matches.
+  "gold_inventory_unutilized_stock_snapshot.current_stage": &hint71 >-
+    Where unused stock currently sits -- verified live: 'warehouse', 'agency', 'supervisor', 'technician'. DIFFERENT
+    vocabulary from the same-named column on gold_meter_installation_pending_stage_snapshot (adds 'inventory', no
+    'warehouse') and gold_meter_revenue_pending_stage_snapshot (a completely different, post-installation
+    vocabulary) -- don't assume this column means the same thing across tables.
+  "gold_meter_revenue_pending_stage_snapshot.current_stage": &hint72 >-
+    POST-installation revenue-realization stage -- verified live, exactly 2 values: 'installation_done_sat_pending'
+    (installed, waiting on SAT) and 'sat_done_revenue_pending' (SAT'd, waiting on revenue realization). A COMPLETELY
+    different vocabulary from the same-named current_stage column on
+    gold_meter_installation_pending_stage_snapshot/gold_inventory_unutilized_stock_snapshot -- those describe
+    PRE-installation custody, this describes POST-installation billing progress.
+  "gold_dashboard_stats_snapshot.monthly_installations": &hint73 >-
+    A JSON array of {month, count} objects (jsonb), not a plain filterable/summable value -- this is pre-computed
+    chart data for the dashboard UI. A SQL plan can select the whole column but cannot equality-filter or aggregate
+    into it without JSON-extraction functions; for a single-month figure, prefer a real per-period table (e.g.
+    gold_mi_installation_month_agg) filtered to that month instead.
+  "gold_dashboard_stats_snapshot.monthly_remaining_stock": &hint74 >-
+    A JSON array of {month, count} objects (jsonb), pre-computed chart data -- not directly filterable/summable in
+    SQL. Prefer a real per-period table for a single-month figure instead.
+  "gold_dashboard_stats_snapshot.sat_stage_trend": &hint75 >-
+    A JSON array of {sat_number, count} objects (jsonb) -- one entry per SAT-1..SAT-13 stage tier (see sat_stage's
+    own hint on the *_agg/*_snapshot tables), pre-computed for the dashboard UI. Not directly filterable/summable in
+    SQL -- prefer GROUP BY sat_stage on a real table instead.
+  "gold_dashboard_stats_snapshot.revenue_realized_stage_ageing": &hint76 >-
+    A JSON array of {stage, meter_count, average_days} objects (jsonb), pre-computed journey-stage ageing for the
+    dashboard UI -- see gold_meter_journey_stage_agg for the equivalent real, queryable table. Not directly
+    filterable/summable in SQL.
+  "gold_dashboard_stats_snapshot.remaining_stock_by_meter_type": &hint77 >-
+    A JSON array of {meter_type, label, count} objects (jsonb), pre-computed for the dashboard UI -- see
+    gold_inventory_unutilized_stock_snapshot for the equivalent real, queryable table. Not directly
+    filterable/summable in SQL.
+
+# Deterministic label overrides for a handful of columns whose raw name
+# reads badly once title-cased into a KPI/table-header label (see
+# gmr_agents/sql/executor.py::build_profile_for_plan, which falls back to
+# ColumnMeta.header_label for any SQL alias that matches a real column name
+# verbatim) -- "reassign_out"/"reassign_number" title-case into "Reassign
+# Out"/"Reassign Number", an imperative-verb-reading label that a live user
+# question flagged as confusing; "Reassigned"/"Reassigned Out"/"Reassigned
+# In" read as the status they actually are. Keyed (table_name, column_name),
+# consulted in refresh() when building each Athena column's ColumnMeta.
+header_label_overrides:
+  "hierarchy_summary_autoindexing.reassign_number": Reassigned
+  "hierarchy_summary_autoindexing.reassign_pct": Reassigned %
+  "feeder_ranking_autoindexing.reassign_out": Reassigned Out
+  "feeder_ranking_autoindexing.reassign_in": Reassigned In
+  # Without an override these title-case into "Mi"/"Correct Tagging" --
+  # the bare column names read badly as a KPI label once title-cased with
+  # no other context (same reasoning as the reassign_out/reassign_in
+  # overrides above).
+  "feeder_ranking_autoindexing.mi": Consumers Connected (MI)
+  "feeder_ranking_autoindexing.correct_tagging": Correctly Tagged
+  # "outage_match" and "evidence" read as meaningless jargon on their own --
+  # verified live, they're specifically the DECLARED (system) feeder's own
+  # ratio and the WINNING CANDIDATE (re_tag_to) feeder's ratio respectively
+  # (see this table's own description) -- naming that directly is what
+  # makes "why was this consumer retagged" answerable just by reading the
+  # two figures side by side, without the reader needing to already know
+  # this table's internal convention.
+  "consumer_detail_autoindexing.outage_match": System Feeder Outage Match
+  "consumer_detail_autoindexing.evidence": Retagged Feeder Outage Match
+  "consumer_detail_autoindexing.re_tag_to": Retagged To
+
+# One-sentence, per-table description -- derived from each table's own
+# column composition (verified: every claim below is directly readable off
+# the real column list, not guessed business context) plus this session's
+# already-established acronym meanings (SAT, MF, MI vs OM). Purpose:
+# BOTH the SQL planner prompt (prompt_context() below) AND schema/retrieval.py's
+# BM25 document get this text, so a natural-language question has more to
+# match against than a bare table/column name -- e.g. "technician
+# productivity" alone can't tell gold_om_* (complaint-handling) apart from
+# gold_mi_* (installation) by name/columns alone nearly as well as it can
+# once each says what kind of productivity it counts.
+#
+# NOT individually live-verified against real data the way the column
+# hints and place-name aliases above are (that isn't practical for a
+# one-line gloss on 96 tables) -- flag any of these that turn out wrong so
+# it can be corrected the same verified way those were.
+table_descriptions:
+  # hes_gold -- theft / loss
+  energy_theft_suspect: >-
+    Per-meter theft-suspicion detection from usage-pattern anomalies (evening spikes, day/night imbalance streaks).
+  theft_risk_by_area: Feeder/area-level aggregated theft and diversion risk score.
+  theft_reduction_trend: Period-over-period change in theft-suspect counts per zone (prev vs curr counts, reduction %).
+  # hes_gold -- voltage quality
+  voltage_imbalance: Per-meter voltage-imbalance event rate and how long it's persisted (ageing bucket).
+  voltage_imbalance_alerts: Severity-tiered active voltage-imbalance alerts with streak/run-length tracking.
+  voltage_imbalance_reduction: Period-over-period voltage-imbalance percentage comparison (did it improve).
+  low_voltage_pockets: Zone/area-level count of low-voltage-flagged meters, banded by severity and ageing.
+  low_voltage_pockets_meters: Meter-level detail behind low_voltage_pockets (which specific meters, how many days/blocks affected).
+  voltage_deviation: Per-meter voltage deviation from nominal (mean/max % deviation, min/max/avg voltage).
+  voltage_deviation_index: Per-meter Voltage Deviation Index (VDI) -- a summarized deviation-severity score.
+  voltage_drop: Per-meter voltage-drop magnitude and cumulative drop.
+  voltage_fluctuation_index: Per-meter Voltage Fluctuation Index (VFI) per phase (R/Y/B), banded by fluctuation magnitude.
+  voltage_unbalance_index: Per-meter Voltage Unbalance Index (VUI) across the 3 phases, banded by severity.
+  current_imbalance: Per-meter current-imbalance event rate and ageing bucket (mirrors voltage_imbalance, for current).
+  current_imbalance_alerts: Severity-tiered active current-imbalance alerts with streak/run-length tracking.
+  current_imbalance_reduction: Period-over-period current-imbalance percentage comparison.
+  current_unbalance: Per-meter current-unbalance magnitude by phase, banded (mirrors voltage_unbalance_index, for current).
+  pct_time_current_imbalance: Per-meter % of observed time spent above the current-imbalance threshold.
+  pct_time_out_of_band: Per-meter % of observed time voltage was over- or under-voltage (outside the acceptable band).
+  # hes_gold -- power factor
+  low_power_factor: Zone/area-level count of low-power-factor meters/events, banded by severity and ageing.
+  low_power_factor_meters: Meter-level detail behind low_power_factor (per-meter low-PF %, min/avg PF, ageing).
+  lpf2_low_power_factor: >-
+    Zone/area-level low-power-factor summary, v2 (adds live-block coverage and ageing-streak stats over
+    low_power_factor).
+  lpf2_low_power_factor_daily: 'Per-meter PER-DAY power-factor detail, v2: PF bands, kWh/kVAh, flagged/scored-day markers.'
+  lpf2_low_power_factor_meters: Meter-level low-power-factor summary across the full observed window, v2, including streak/ageing history.
+  power_factor_deterioration: Zone/area-level count of meters whose power factor has been DETERIORATING (getting worse), banded.
+  power_factor_deterioration_meters: Meter-level detail behind power_factor_deterioration (which meters, how many qualifying days).
+  # hes_gold -- load / DTR / feeder network loss
+  dim_dtr_capacity: DTR (distribution transformer) rated capacity (kVA) reference/dimension table.
+  dt_loading: DTR-level loading (as % of rated capacity) distribution, banded.
+  dt_loss: DTR-level technical energy loss (input reading vs billed/child energy), with data-credibility flags.
+  dt_loss_consumers: >-
+    Per-consumer detail behind dt_loss (each connected meter's billed/raw energy contributing to the DTR's loss
+    calc).
+  dt_peak_loading: DTR-level peak load (kVA) against its rating, banded.
+  feeder_loss: Feeder-level technical energy loss (mirrors dt_loss, one network level up).
+  feeder_loss_ai: >-
+    Feeder-level technical loss -- AI-adjusted variant of feeder_loss (same shape, different loss-estimation
+    method).
+  feeder_loss_ai_consumers: Per-consumer detail behind feeder_loss_ai.
+  feeder_loss_consumers: Per-consumer detail behind feeder_loss.
+  load_violation: Per-meter sanctioned-load violations (actual max demand exceeding the sanctioned load).
+  overload_md_breach: Per-meter maximum-demand (MD) overload risk, bucketed by severity.
+  # hes_gold -- outage / reliability
+  hidden_outage_events: Individual detected 'hidden' (undetected/unreported through normal channels) outage events per meter.
+  hidden_outage_summary: Per-meter rollup of hidden-outage event counts and days affected (summarizes hidden_outage_events).
+  outage_ranking: Per-meter outage count and duration, pre-ranked (rank_by_count/rank_by_duration columns already computed).
+  reliability_improvement_trends: Feeder-level period-over-period reliability-index comparison (SAIDI/SAIFI/CAIDI/CAIFI/MAIFI, prev vs curr).
+  reliability_indices: >-
+    Feeder-level reliability indices (SAIDI/SAIFI/CAIDI/CAIFI/MAIFI) -- one row per feeder PER DATE, not a single
+    per-feeder total.
+  # hes_gold -- anomaly / consumption
+  consumption_spike_drop: Per-meter monthly count of consumption spikes/drops (anomalous jumps or falls vs its own baseline).
+  consumption_spike_drop_detail: Block-level (individual reading) detail behind consumption_spike_drop -- the actual anomalous readings.
+  repeat_anomaly_tracking: Per-meter count of how many times it has repeatedly triggered anomaly flags, banded.
+  total_anomalies_detected: Zone-level count of distinct meters flagged, broken down by anomaly type.
+  reverse_flow: Per-meter reverse/export energy-flow detection (net-meter export vs an unexpected/anomalous reverse flow).
+  # hes_gold -- communication / data quality
+  communication_failures: Per-meter communication-failure tracking (days since last seen, or never reported), bucketed.
+  data_quality_issues: Per-meter rollup of data-completeness issues (partial days, % complete) over the observed window.
+  data_quality_issues_daily: Per-meter PER-DAY data-completeness detail (missing blocks, % complete) behind data_quality_issues.
+  # hes_gold -- meter master
+  dim_meter: >-
+    Meter master/dimension table -- one row per meter with its category, type, network hierarchy, and sanctioned
+    load.
+  dim_meter_energy: Meter master/dimension table, energy-metering scope (same shape as dim_meter).
+  # hes_gold -- ETL staging (internal plumbing, not a business metric)
+  _stage_pq_phase: >-
+    ETL staging table (intermediate build artifact) for phase-level power-quality metrics -- not a finished business
+    table.
+  _stage_pq_voltage: >-
+    ETL staging table (intermediate build artifact) for voltage power-quality metrics -- not a finished business
+    table.
+  # hes_gold -- meter-to-feeder auto-indexing (KPI 50). REPLACES the
+  # retired mapping_audit/mapping_audit_candidates/mapping_audit_evidence/
+  # mapping_audit_feeder/mapping_audit_summary family -- those are no
+  # longer in this catalog at all, do not reference them.
+  #
+  # WHICH OF THESE 3 TABLES TO USE (verified against the source ETL job
+  # and the dashboard backend's own query-routing code, autoindexing_repo.py):
+  #   - A count/percentage scoped to project/discom/zone/circle/division
+  #     (including a plain grand total, or no scope at all) -> ALWAYS read
+  #     it directly off hierarchy_summary_autoindexing's matching row.
+  #     Never recompute this from consumer_detail_autoindexing -- both
+  #     agree exactly, but hierarchy_summary_autoindexing is the cheap,
+  #     pre-aggregated, authoritative source for this shape of question.
+  #   - A count scoped to ONE SPECIFIC FEEDER -> read it off
+  #     feeder_ranking_autoindexing's columns for that feeder_code row
+  #     (see that table's own note on reassign_out vs reassign_in).
+  #   - Anything else (a substation, a specific consumer, an arbitrary
+  #     filter/search, or a breakdown by a column that ISN'T one of the 5
+  #     hierarchy levels) -> query consumer_detail_autoindexing directly,
+  #     filtering/grouping on its literal `status` column.
+  hierarchy_summary_autoindexing: |-
+    CUBE rollup (project > discom > zone > circle > division, outermost to innermost) of auto-indexing outcomes -- every 5-column combo set/NULL is a real row (NULL = "all values at this level"); grand total = all 5 NULL. PREFERRED/authoritative for ANY question scoped to project(Agra/Kashi/Triveni)/discom/zone/circle/division, incl. a plain grand total -- don't recompute from consumer_detail_autoindexing or feeder_ranking_autoindexing (both agree, this is the cheap pre-aggregated read; see feeder_ranking_autoindexing's hint for why ITS sums drift slightly at this scope).
+    Metric columns (select any subset together in one query, plain columns, never a CASE WHEN pivot): meters_audited, feeder_count, substation_count; confirmed_number, reassign_number, review_number, no_data_number ("no data" means no_data_number, not a NULL value); auto_indexing_concluded_number (=confirmed+reassign, i.e. "autoindexing/concluded count"); pending_verification_number (=review+no_data, i.e. "pending count"). Each of the last 6 has a _pct sibling for a share/percentage ask.
+    CRITICAL -- this is a genuine CUBE, not a hierarchical rollup: for one real leaf combination, EVERY combination of its ANCESTOR columns being their real value or independently NULL'd out is ALSO its own stored row, carrying the SAME numbers duplicated. Verified live: filtering only division='EDD Ballia Nagar' with no constraint on project/discom/zone/circle matched 16 rows, not 1 -- every one of the 2^4 combinations of those 4 ancestor columns being NULL or real-valued, all sharing identical figures. Selecting the ONE real row for a level L therefore needs BOTH ends pinned: every level ABOVE L (nearer project) constrained NOT NULL (or pinned to a specific value, to scope further), AND every level BELOW L (nearer division) constrained IS NULL. Never leave an ancestor unconstrained -- that pulls in every one of its duplicate rollup rows and any downstream SUM/recompute then overcounts by a multiple of 2^(unconstrained ancestor count).
+    EXCEPTION -- "project" is NOT a strict ancestor of discom/zone/circle/division the way those 4 nest inside each other: verified live, the single discom "PuVVNL" has real, DIFFERENT totals stored under BOTH project='Kashi' AND project='Triveni' (Kashi's PuVVNL figures + Triveni's PuVVNL figures == the project IS NULL PuVVNL row, exactly -- e.g. auto_indexing_concluded_number for Kashi + for Triveni == the project IS NULL value). So whenever "project" would otherwise be filled in as an ancestor (NOT NULL) for some OTHER scoped/broken-down level, it must instead be: pinned to a specific value if the question actually names a project, OR "project IS NULL" if it doesn't (this gives the correct, already-computed total combined across every project touching that discom/zone/circle/division -- NEVER leave it as a bare "project IS NOT NULL", which silently picks just one of possibly several different real answers). discom/zone/circle/division have no such exception -- they keep the NOT NULL ancestor-fill rule below.
+    SINGLE NAMED VALUE at level L (e.g. "reassign cases in Kashi" -> L=project; "...in EDD BALLIA NAGAR division" -> L=division; "...for discom PuVVNL" -> L=discom): L=value AND every level ABOVE L NOT NULL (project excepted -- see above: NULL unless the question also names a project) AND every level BELOW L IS NULL. project='Kashi' AND discom IS NULL AND zone IS NULL AND circle IS NULL AND division IS NULL (project has no ancestor, nothing to require NOT NULL); division='EDD Ballia Nagar' AND project IS NULL AND discom IS NOT NULL AND zone IS NOT NULL AND circle IS NOT NULL (project rolled up since not named; discom/zone/circle still required NOT NULL); discom='PuVVNL' AND project IS NULL AND zone IS NULL AND circle IS NULL AND division IS NULL (discom has nothing below it to NULL here beyond zone/circle/division, and project rolls up since not named -- this is the query that gives the true combined PuVVNL figures, not project='Kashi' alone). Same pattern for zone/circle.
+    BREAKDOWN BY LEVEL L (e.g. "division-wise meters audited/confirmed/..."): same bracket, but L IS NOT NULL instead of pinned to one value -- one row per real value at L. division IS NOT NULL AND project IS NULL AND discom IS NOT NULL AND zone IS NOT NULL AND circle IS NOT NULL; circle IS NOT NULL AND project IS NULL AND discom IS NOT NULL AND zone IS NOT NULL AND division IS NULL; zone IS NOT NULL AND project IS NULL AND discom IS NOT NULL AND circle IS NULL AND division IS NULL; discom IS NOT NULL AND project IS NULL AND zone IS NULL AND circle IS NULL AND division IS NULL; project IS NOT NULL AND discom IS NULL AND zone IS NULL AND circle IS NULL AND division IS NULL. Optionally PIN project to a specific value instead of leaving it NULL (e.g. project='Kashi') to scope the breakdown to just that project's own divisions/circles/zones/discoms; select L's own column alongside the metrics so each row is identifiable.
+  consumer_detail_autoindexing: |-
+    Per-consumer auto-indexing verdict (large table, ~4.0M rows -- needs a date/geo filter): for each consumer, whether their DECLARED feeder (system_feeder) matches the feeder the outage-coincidence evidence actually points to. status is one of CONFIRMED (declared feeder is correct), REASSIGN (a different feeder scored better -- re_tag_to names it; RARE exception: a "cross_substation"-flagged consumer can be REASSIGN even when the recommended feeder equals the declared one, since that flag blocks CONFIRMED outright), REVIEW (evidence inconclusive), or "NO DATA" (consumer never seen in any feeder-specific outage window -- this is the ONLY reliable way to identify a NO DATA consumer; do NOT infer it from outage_match=='0/0', since CONFIRMED/REASSIGN/REVIEW rows can also show '0/0' there). outage_match/evidence are "matched/total" dark-window ratios (declared feeder's own ratio, and the winning candidate's ratio, respectively) -- both literally "-" (not NULL) when status is not REASSIGN; re_tag_to is likewise "-" except on REASSIGN rows. Use THIS table (never hierarchy_summary_autoindexing or feeder_ranking_autoindexing) for anything scoped below the project/discom/zone/circle/division hierarchy -- a substation, a specific consumer, an arbitrary filter, or a breakdown by a non-hierarchy column.
+    "AI feeder"/"recommended feeder" is NOT a stored column -- it means whichever feeder the model's own verdict actually recommends for this consumer, i.e. CASE WHEN status='CONFIRMED' THEN system_feeder WHEN status='REASSIGN' THEN re_tag_to ELSE NULL END. For a single named consumer, this is a bare CASE expression alongside the other requested columns, never wrapped in an aggregate.
+    "Why was consumer X retagged to this feeder" (or any similar reasoning-about-a-reassignment question) is answered by showing, side by side, the SAME comparison this data verdict is actually built from: system_feeder (the declared feeder) with its own outage_match ratio, against re_tag_to (the recommended feeder) with evidence (that feeder's own ratio) -- e.g. a consumer with outage_match='0/8' on their declared feeder and evidence='3/3' on the recommended one was retagged because the recommended feeder's dark-window coincidence rate is decisively higher. Select status, system_feeder, outage_match, re_tag_to, and evidence together (a plain SELECT, WHERE consumer='<value>', answer_kind="detail_record" since this is one row of several descriptive fields, not a numeric KPI) -- do not attempt to compute or explain this for a REVIEW/NO DATA/CONFIRMED consumer, since re_tag_to/evidence are just "-" there (no retag happened to explain).
+    A bare, unqualified "feeder" for a named consumer (e.g. "which feeder is this consumer connected to") means system_feeder specifically (the DECLARED feeder) -- "connected to" is exactly what that column is. ANY single-named-consumer lookup (by consumer id) is a plain SELECT ... WHERE consumer='<value>' -- NEVER wrap it in SUM/COUNT/MAX/AVG/etc; this table's large-table bounding-filter rule (a date/geo filter required before an AGGREGATE) exists for a genuinely unbounded scan, not for reading the one row a consumer id already pins down exactly -- wrapping a single-consumer lookup in an aggregate needlessly trips that rule and gets the whole query rejected for a filter it never needed.
+  feeder_ranking_autoindexing: >-
+    Per-feeder rollup of consumer_detail_autoindexing's verdicts (one row per feeder). mi = TOTAL consumers DECLARED
+    to this feeder regardless of verdict (verified live: mi = correct_tagging+reassign_out+review+no_data exactly)
+    -- here "MI" means "meters indexed", NOT "Meter Installation" the way gold_mi_* WFM tables use it. A feeder can
+    legitimately have mi=0 (nobody's declared feeder, but still someone else's reassign_in target) -- confidence is
+    NULL in that case, not 0. correct_tagging = consumers CONFIRMED at this feeder. reassign_out = consumers
+    DECLARED to this feeder whose evidence says they should move elsewhere; reassign_in = consumers declared to
+    OTHER feeders whose evidence points TO this one. VERIFIED LIVE: reassign_out and reassign_in are two DIFFERENT
+    VIEWS (origin vs destination) of the SAME reassign population, not two separate pools -- SUM(reassign_out) over
+    the WHOLE, UNFILTERED table == SUM(reassign_in) over the whole table == the true total REASSIGN count; ADDING
+    the two columns together (reassign_out+reassign_in) DOUBLE-COUNTS and is wrong regardless of scope. For "how
+    many reassign cases" scoped to ONE FEEDER, reassign_out (consumers currently there needing action) is usually
+    what's meant, but say which one you used. USE hierarchy_summary_autoindexing INSTEAD -- not this table -- for
+    anything scoped to a project/discom/zone/circle/division rather than one feeder: verified live, this table's
+    SUM(reassign_out) for project='Kashi' came out one short of the true total (a feeder's own project
+    here comes from a separate join, not always identical to each consumer's project attribute) -- small, but real,
+    and avoidable by reading the exact number off hierarchy_summary_autoindexing instead. confidence is 0-100 but is
+    NOT an accuracy/correctness score -- it's coverage: the % of this feeder's declared consumers that got ANY
+    decisive verdict (CONFIRMED+REASSIGN) rather than REVIEW/NO DATA, same concept as
+    hierarchy_summary_autoindexing's auto_indexing_concluded_pct one level up. project on THIS table was titlecase
+    (e.g. 'Kashi') as of the last live check, matching the other two tables, but has drifted casing before -- verify
+    rather than assume if a filter unexpectedly returns 0 rows.
+  # hes_silver
+  billing: 'Per-meter billing-cycle record: cumulative energy (import/export, tariff-zone-wise) and max-demand readings.'
+  block_usage: Per-meter block-interval (sub-daily) usage, voltage, and current readings.
+  daily_usage: Per-meter daily cumulative energy-usage readings.
+  power_outage: Per-meter individual power-outage event records (start, end, duration, category).
+  dim_installation: Per-meter installation/location dimension table (network hierarchy, sanctioned load, GPS coordinates).
+  # gmr_wfm_silver -- complaints/tickets, installations, assets
+  unified_complaints: >-
+    Full consumer-complaint/ticket lifecycle records (raised, worked, QC-reviewed) -- large table, needs a date/geo
+    filter.
+  unified_active_complaints: >-
+    Currently OPEN/active complaints only -- not the full historical complaint log (see unified_complaints for
+    that).
+  unified_installations: >-
+    Meter-installation service records (a new meter fitted at a consumer) -- large table, needs a date/geo filter.
+  unified_smart_meter_asset: >-
+    Smart-meter asset master: network hierarchy (feeder/DTR GIS identifiers), consumer category mix, and capacity.
+    Not for one meter's details (stage, status, category, type, install, SAT): those come from
+    unified_installations, unified_smart_meter_inventory and sat_meter_mappings.
+  unified_smart_meter_inventory: >-
+    Smart-meter inventory lifecycle: warehouse -> agency -> supervisor -> technician -> installed, with seal/serial
+    tracking.
+  unified_decommissioned_meter: Meters taken out of service (decommissioned), with the warehouse/supervisor/agency acceptance chain.
+  unified_discom_meter_asset: >-
+    DISCOM-side meter/feeder/DTR asset register -- network configuration detail (AMR/RTDAS monitoring, consumer mix,
+    capacity).
+  unified_indexing: Meter geo-indexing service records (recording a meter's GPS location against its network hierarchy).
+  unified_non_qc_complaints: >-
+    Complaint records that bypassed the normal QC pipeline -- includes seal/cable-replacement detail
+    unified_complaints doesn't have.
+  sat_meter_mappings: >-
+    Maps each meter to its SAT (Site Acceptance Test) number. For "when was meter X's SAT done/completed", this
+    table alone only gives the sat_number -- JOIN to sat_milestones (on BOTH project AND sat_number, see its own
+    hint) to get the actual sat_date. When the question identifies a CONSUMER (consumer_number) instead of a meter
+    serial number directly, JOIN in from unified_installations first (new_meter_serial_number = this table's
+    meter_serial_number) -- that table also has mi_date (installation date), so a "when was this consumer installed
+    AND when was its SAT done" question is one query across all three tables, not two separate ones.
+  sat_milestones: >-
+    Per-SAT-number milestone dates (SAT date, lumpsum/PMPM invoice and collection dates). Has no meter column itself
+    -- for a per-METER SAT date question, JOIN to sat_meter_mappings first (meter_serial_number -> project +
+    sat_number), then to this table on BOTH project AND sat_number. VERIFIED LIVE: sat_number is NOT globally unique
+    -- values like 'SAT-8' repeat across multiple different projects, so joining on sat_number alone silently
+    matches the wrong project's milestone row (or multiplies rows 3x). ALWAYS join on project AND sat_number
+    together, never sat_number alone.
+  # gold_* (Postgres, pre-aggregated) -- installation/inventory/productivity/SAT
+  gold_meter_installation_pending_stage_snapshot: Current snapshot of meter counts still PENDING at each installation stage, by project/warehouse/OEM.
+  gold_mi_installation_day_agg: >-
+    Daily aggregated Meter-Installation (MI) counts by zone/OEM -- both inventory-intake and installation-progress
+    breakdowns.
+  gold_mi_installation_month_agg: >-
+    Monthly aggregated Meter-Installation (MI) counts by zone/OEM (same shape as gold_mi_installation_day_agg,
+    coarser grain).
+  gold_om_technician_productivity_day_agg: 'Daily per-technician complaint-handling (O&M) productivity: complaint_count, active days.'
+  gold_om_technician_productivity_month_agg: Monthly per-technician complaint-handling (O&M) productivity (same shape as the day-agg version).
+  gold_mi_technician_productivity_day_agg: >-
+    Daily per-technician meter-INSTALLATION productivity (MI): installation_count, active days -- NOT
+    complaint-handling (see gold_om_* for that).
+  gold_mi_technician_productivity_month_agg: Monthly per-technician meter-installation (MI) productivity (same shape as the day-agg version).
+  gold_mi_productivity_trend_month_agg: >-
+    Monthly meter-installation productivity trend, aggregated at a configurable level
+    (filter_level/aggregate_level), across active technicians.
+  gold_om_open_ageing_snapshot: Current snapshot of OPEN complaint ticket counts, bucketed by how long they've been open (ageing).
+  gold_non_sat_ageing_snapshot: Current snapshot of installed-but-not-yet-SAT'd meter counts, bucketed by ageing.
+  gold_meter_defect_event_day_agg: Daily count of meter-defect events, broken down by defect type and OEM.
+  gold_meter_inventory_event_day_agg: Daily meter inventory/installed/stock-consumed event counts by zone/category.
+  gold_meter_inventory_event_month_agg: Monthly meter inventory/installed/stock-consumed event counts (same shape as the day-agg version).
+  gold_inventory_monthly_balance: >-
+    Dashboard chart feed only: monthly RUNNING totals per place (needs latest-row-per-place logic). For remaining stock,
+    supplied, installed, utilization or MI pace -- today or as of any date -- use gold_meter_inventory_event_day_agg instead.
+  gold_inventory_unutilized_stock_snapshot: Current snapshot of unutilized (not-yet-deployed) stock sitting in warehouses, by SKU/OEM.
+  gold_meter_journey_stage_agg: >-
+    Aggregated end-to-end meter journey duration (inventory -> agency -> supervisor -> technician -> installation ->
+    SAT -> revenue), summed per group.
+  gold_meter_revenue_pending_stage_snapshot: Current snapshot of meter counts still pending REVENUE realization, by current stage.
+  gold_revenue_ageing_snapshot: Current snapshot of revenue-pending meter counts, bucketed by ageing since SAT.
+  gold_mi_sat_invoice_day_agg: Daily counts of meters reaching SAT and lumpsum/PMPM invoice milestones.
+  gold_mi_sat_invoice_snapshot: Current snapshot of SAT-stage and invoice-eligibility status, by group.
+  gold_dashboard_stats_snapshot: Singleton (one row) snapshot of overall program-wide headline KPIs -- not filterable by zone or date.
+  revenue_receivables: >-
+    Revenue Receivables KPI input -- one row per upload per project (latest created_at per project is current) with
+    lumpsum / PMPM / cable amounts invoiced, realised and realised within timeline (INR).
+  geography_nodes: >-
+    Geography hierarchy (project/DISCOM/zone/circle/division nodes, parent_id links, valid_from/valid_to versions) --
+    lookup for names and levels, e.g. mapping revenue_receivables.project to its DISCOM.
+  sat_eligibility_config: >-
+    Per-project SAT eligibility cutoff date (eligibility_cutoff_date) -- meters installed after it are not yet
+    eligible for SAT; used by the MI vs SAT and Non-SAT ageing KPIs.
+  gold_om_closed_tickets_day_agg: >-
+    O&M tickets closed per day (closed_date) by place, feeder, dtr, complaint_type -- FEEDER and DT meters only
+    (no consumer closures); SUM(closed_tickets). Place values lower-case.
+  gold_om_meter_complaints_agg: >-
+    One row per meter (meter_serial_number) with its O&M complaint counts (total/open/closed_complaints) and SAT status
+    (sat_status 'SAT Done'/'Non-SAT', sat_number). Place values UPPER-case. CONSUMER rows carry only open complaints,
+    DT/FEEDER rows only closed ones.
+
+# Well-known historical/former names for places that also appear as real
+# zone/circle values in this DISCOM's schema -- mapped to the LIST of real
+# stored value(s) they correspond to. Verified live against the actual data
+# before adding, not assumed -- and the two domains disagree, which is
+# exactly why this was checked rather than guessed:
+#   - MDM (Athena hes_gold.theft_risk_by_area, `zone` column): THREE
+#     distinct values -- "VARANASI", "VARANASI I", "VARANASI II" (confirmed
+#     via a live `SELECT DISTINCT zone` -- Athena tables have no
+#     sample_values grounding at all, so this alias dict IS the only
+#     grounding available for them). Same three-way split for Prayagraj
+#     (former Allahabad): "PRAYAGRAJ", "PRAYAGRAJ I", "PRAYAGRAJ II".
+#   - WFM (Postgres gold_mi_installation_day_agg etc., `zone` column): only
+#     TWO values, no bare city name -- "varanasi i" / "varanasi ii" (see
+#     gmr_agents/cache/wfm_catalog.json's sample_values).
+# The lists below carry the union (uppercase, matching the Athena ground
+# truth); validation/sql_guard.py's case-insensitive filter rewriting means the
+# casing here doesn't need to match a given table's own casing, and an IN-
+# list member that happens not to exist on a particular table (e.g. bare
+# "VARANASI" against a WFM table that only has the two sub-zones) simply
+# contributes zero rows for that literal -- never an error. A bare "Kashi"
+# -> "VARANASI" substitution would have silently dropped the two sub-zones
+# entirely; using the union is what keeps this correct on both domains.
+#
+# This is a curated dict for genuine alternate names of the same real-world
+# place (historical name, common alternate spelling) -- reviewed the same
+# way MDM_TABLES/WFM_TABLES above are. It is deliberately NOT a general
+# fuzzy-matching mechanism and must never be extended to column names or
+# measure names -- that is exactly the guessed-substitute behavior
+# planner/prompts.py rule 17 was written to stop.
+place_name_aliases:
+  kashi:
+    - VARANASI
+    - VARANASI I
+    - VARANASI II
+  banaras:
+    - VARANASI
+    - VARANASI I
+    - VARANASI II
+  benares:
+    - VARANASI
+    - VARANASI I
+    - VARANASI II
+  allahabad:
+    - PRAYAGRAJ
+    - PRAYAGRAJ I
+    - PRAYAGRAJ II
+  illahabad:
+    - PRAYAGRAJ
+    - PRAYAGRAJ I
+    - PRAYAGRAJ II

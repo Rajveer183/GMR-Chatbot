@@ -1,0 +1,761 @@
+# Declarative business rules for the LLM SQL planner (WFM + MDM).
+# The planner prompt gets `global` plus 2-3 matching `topics`. Rules mirror the
+# dashboard-verified behaviour of the former planner/fast_paths templates.
+#
+# PROMPT COST MAP (measured 2026-10-04; ~4 chars = 1 token). Every word here is paid
+# for on every question that reaches the field -- keep the hot fields short:
+#   global.rules              SQL planner, EVERY call (+ repairs)   ~1,180 tok  <- hottest
+#   topics.<k>.rules          SQL planner, top 2 topics             ~130-440 tok each
+#   topics.<k>.example        SQL planner, top 2 topics             ~70-280 tok each
+#                             (overlaps examples.yaml; PROMPT_COMPACT=rule_examples drops it)
+#   topics.<k>.title          triage, EVERY call, all topics        ~10 tok each
+#   topics.<k>.description    triage, only the TRIAGE_TOPIC_FULL best-ranked topics
+#                             (~45 tok each) + topic retrieval index
+#   topics.<k>.keywords       retrieval index only -- free in prompts
+#   topics.<k>.answer_notes   answer writer, the question's topics  ~0-190 tok
+#   retrieval_synonyms        retrieval only -- free in prompts
+#   explain_only              explain answers only (glossary chunks)
+version: 1
+
+global:
+  rules:
+    - "Rankings (top / bottom N, best / worst, highest / lowest, rank X by Y): rank the real items only -- never put the ROLLUP 'Total' row among them (leave it out of ranked lists, or give it as a separate overall figure). Comparisons (compare A and B, A vs B, difference, gap, how many more): return each compared value AND the difference (and % difference when useful) as separate columns, one row per item or one row with both. A month / week / year still in progress (the current one) is partial: never call it the highest or lowest -- rank complete periods, and mention the partial one separately if relevant."
+    - "Filters come ONLY from the question (and, for a follow-up, the previous turn). Places, periods and categories that appear in an Example are illustrations -- never copy them into a question that does not state them."
+    - "Dates are IST, inclusive. 'last N days' = CURRENT_DATE - (N-1) .. today; 'last week' = last 7 days ending today; 'this week' = month-anchored week (days 1-7, 8-14, 15-21, 22-28, 29-end) holding today, to today; 'this month' = 1st .. today; 'last month' = whole previous calendar month; 'last N months' = same date N months ago + 1 day .. today; 'this year' = 1 Jan .. today; 'last year' = previous calendar year; month without year = most recent occurrence; 'since X' = X .. today. No date = all time, except O&M closed/productivity."
+    - "An explicit daily/weekly/monthly ask wins. Weeks are month-anchored, never ISO: date_trunc('month', d)::date + ((EXTRACT(DAY FROM d)::int - 1) / 7) * 7. Breakdowns get a leading Total row: GROUP BY ROLLUP (bucket), CASE WHEN GROUPING(bucket) = 1 THEN 'Total' ... END, ORDER BY GROUPING(bucket) DESC."
+    - "Places: project > discom > zone > circle > division > sub_division. Projects: agra, kashi, triveni ('cluster' = project). A bare name = highest level holding it ('agra' = project, 'agra zone' = zone). Compare LOWER(col) = 'kashi' / LOWER(col) IN (...). 'varanasi' zone = ('varanasi i','varanasi ii'); 'prayagraj' = ('prayagraj i','prayagraj ii'). Circle/division names carry prefixes ('edc agra', 'edd chunar'): bare name -> LOWER(col) LIKE '%chunar%'."
+    - "'<level>-wise' / 'by <level>' = GROUP BY that column, label CASE WHEN col IS NULL OR col = '' THEN 'Unmapped' ELSE UPPER(col) END (on the inventory / stock tables a blank zone/circle/division is 'Not installed yet (in stock)' - a meter has no place until it is installed). 'Which X has the most/highest' = rank DESC; 'lowest/lagging/behind' = ASC. make/vendor/brand/manufacturer = oem (AEW, CAP, HPL, SEIPL, Unknown)."
+    - "Categories: CONSUMER, DT, FEEDER. DTR/transformer = 'DT' in Postgres; Athena silver spells it 'DTR' (report_category, complaint_entity_type). Show DT as 'DTR' for installation/SAT/non-SAT/defect/utilization, 'DT' elsewhere. Consumer meter types: '1PH-Consumer_meter','3PH-Consumer_meter','LTCT-Consumer_meter','HTCT-Consumer_meter' (DT meters are meter_type '3PLTCTSM', feeder 'HTCTPTSM'). WORDING: 'type wise' / 'by type' alone = by CATEGORY (Consumer / DTR / Feeder, GROUP BY category); 'consumer type wise' / 'consumer meter type wise' / naming a consumer type = category = 'CONSUMER' GROUP BY meter_type (1PH / 3PH / LTCT / HTCT); 'meter type wise' = every meter_type (1PH, 3PH, LTCT, HTCT, DTR, Feeder). Keep 'consumer' in the resolved question whenever the user says it. There is no Other type: drop NULL/'OTHER-Consumer_meter' rows from type breakdowns, keep them in Total."
+    - "Numbers: % = ROUND(x * 100.0 / NULLIF(y, 0), 2); ratios ROUND(.., 2). Gold tables hold pre-counted rows: SUM the count column (meter_count, ticket_count, ...), never COUNT(*). Money is crore rupees (Rs X cr)."
+    - "One engine per query. Postgres = public.<table>: CURRENT_DATE, date_trunc('month', d)::date, CURRENT_DATE - 7, INTERVAL '1 month', SUM(x) FILTER (WHERE ...); date - date is already whole days (integer) - never EXTRACT(EPOCH/DAY FROM it). Athena/Trino = gmr_wfm_silver.<t> / hes_gold.<t>: current_date, date_add('day', -7, current_date), date_diff('day', a, b), COUNT_IF(...). Never SELECT *; alias every column; no JOIN between gold tables (scalar subqueries or UNION ALL); bound Athena silver scans by date or place; LIMIT lists to 500."
+    - "Snapshot topics (SAT, non-SAT, journey, current stage, stock/revenue ageing, open tickets, receivables) are as on the latest refresh: no date range - say so. Missing latitude/longitude, photos, duplicate/invalid/mismatched records, lot/firmware are not available - say so instead of answering a plain count."
+
+topics:
+  installation:
+    domain: wfm
+    title: "MI progress (meters installed)"
+    description: "How many meters / consumers / DTRs / feeders / meter types were installed, for any period and place, trends, spikes, weekday dips, replacement installs, meter lists."
+    keywords: [installed, installation, installations, mi, mi progress, meters installed, how many installed, lagaye, install trend, daily installs, consumers installed, dtr installed, feeders installed, 1ph, 3ph, ltct, htct, replacement installed, spike, jump, dip, sunday, weekday, list meters, lage, lagaye gaye, kitne meter, meter lage, installs, how many meters, million meters, progress]
+    tables: [gold_mi_installation_month_agg, gold_mi_installation_day_agg, gold_mi_technician_productivity_day_agg, unified_installations]
+    answer_notes:
+      - "MI progress counts new installs only; replacement installs (new meters fitted for defective ones) are excluded."
+      - "A bare 'how many meters?' is ambiguous: say 'Assuming you mean installed meters (all time)' and offer supplied / SAT as alternatives."
+      - "Only the current calendar month and today are partial (data lands with a lag) - never call them a drop. Earlier months are complete: never label a past month partial just because it is the last row (follow PERIODS when given)."
+      - "Trend reading: the low and the peak are the true minimum / maximum among COMPLETE periods in RESULT - check every row before naming them."
+      - "Sunday is the weekly off-day: ~85% fewer technicians, installs per technician stay normal. Month-end (last 2-4 days) usually shows pushes."
+    rules:
+      - "Installed meters = SUM(meter_count) FROM public.gold_mi_installation_month_agg (whole months / all time) or public.gold_mi_installation_day_agg (day ranges, weeks) WHERE has_meter_serial AND progress_category IS NOT NULL AND NOT is_replacement. Date = period_start."
+      - "Category = progress_category; consumer meter type = inventory_meter_type (never progress_meter_type). Categories and types add up to the total. 'consumers/DTR/feeders installed' means installed meters of that category - never MDM or inventory tables."
+      - "Default grain (no explicit ask): multi-month range -> monthly; range under 31 days -> daily; single day/month/all time -> one total."
+      - "Replacement installs (new meters fitted for defective ones) = SUM(meter_count) WHERE is_replacement - excluded from MI progress, counted in stock/SAT/non-SAT."
+      - "Meter lists (Athena): gmr_wfm_silver.unified_installations WHERE TRIM(COALESCE(new_meter_serial_number,'')) <> '' AND UPPER(TRIM(report_category)) IN ('CONSUMER','DTR','FEEDER') AND mi_date in range; columns new_meter_serial_number, consumer_number, mi_date, new_meter_type, new_meter_make, project, zone, division, technician_name, agency; LIMIT 500."
+      - "Trend reading: peak, low, last k periods vs first k, latest full period vs previous; leave the running period out of the reading."
+      - "Jump/drop on a day: compare its installs with the same weekdays in the 3 weeks before; split into technicians (COUNT(DISTINCT technician_name) from gold_mi_technician_productivity_day_agg WHERE category <> 'ALL') and installs per technician; note month-end, Sundays, recent stock receipts."
+      - "Weekday pattern: average installs per weekday over the last 90 complete days (days with 0 count); Sunday is the weekly off-day (fewer technicians, not slower)."
+    example:
+      question: "Zone-wise meters installed in Kashi this year"
+      sql: |
+        SELECT CASE WHEN GROUPING(zone) = 1 THEN 'Total'
+                    WHEN zone IS NULL OR zone = '' THEN 'Unmapped' ELSE UPPER(zone) END AS zone,
+               SUM(meter_count) AS total,
+               COALESCE(SUM(meter_count) FILTER (WHERE progress_category = 'CONSUMER'), 0) AS consumer,
+               COALESCE(SUM(meter_count) FILTER (WHERE progress_category = 'DT'), 0) AS dtr,
+               COALESCE(SUM(meter_count) FILTER (WHERE progress_category = 'FEEDER'), 0) AS feeder
+        FROM public.gold_mi_installation_day_agg
+        WHERE has_meter_serial AND progress_category IS NOT NULL AND NOT is_replacement
+          AND LOWER(project) = 'kashi'
+          AND period_start BETWEEN date_trunc('year', CURRENT_DATE)::date AND CURRENT_DATE
+        GROUP BY ROLLUP (zone)
+        ORDER BY GROUPING(zone) DESC, SUM(meter_count) DESC
+
+  defect:
+    domain: wfm
+    title: "Defective / replaced meters and defect rate"
+    description: "Defective (replaced) meters by type (burnt, faulty, others), reason, OEM, place, period; defect rate %; burnt trend; OEM quality; why an OEM's rate is high."
+    keywords: [defect, defective, defect rate, faulty, burnt, burn, terminal burnt, replaced, replacement, meter replacement, failure rate, oem quality, quality issue, load enhancement, tampered, reason wise, kharab, jala]
+    tables: [gold_meter_defect_event_day_agg, gold_mi_installation_month_agg, gold_mi_installation_day_agg]
+    answer_notes:
+      - "Defect counts are meters reported burnt / faulty / replaced in the period (work completed date) -- write 'reported burnt' or 'replaced', never 'installed'."
+      - "Defect rate counts Meter Faulty only, over installs of OEMs with defects; burnt is usually a site/load issue, not the OEM."
+      - "A high rate from a small installed base (e.g. a few thousand meters) is statistically weak - state the base."
+      - "Rate vs count questions (e.g. 'X has few defects, how is its rate highest?'): show each OEM's defects AND installed base from RESULT - a small denominator makes the rate high."
+    rules:
+      - "Defective meters = SUM(defect_count) FROM public.gold_meter_defect_event_day_agg; period_start = defect (work completed) date; columns category, meter_type, oem, defective_type ('Meter Burnt','Meter Faulty','Others'), detailed_defective_type (reason)."
+      - "OEM key: UPPER(COALESCE(NULLIF(TRIM(oem), ''), 'Unknown'))."
+      - "Defect rate % = SUM(defect_rate_numerator_count) (Meter Faulty only) * 100 / installed, installed = SUM(meter_count) FROM gold_mi_installation_month_agg (day table for partial months) WHERE NOT is_replacement AND has_meter_serial AND oem IS NOT NULL AND <OEM key> IN (SELECT DISTINCT <OEM key> FROM the defect table with the same filters). Apply the same date/place/category filters to both sides (installs: progress_category, inventory_meter_type). Combine via UNION ALL or scalar subqueries."
+      - "A 'total defective' answer also shows faulty, burnt, others and load change (UPPER(detailed_defective_type) IN ('LOAD ENHANCEMENT','LOAD REDUCTION'): inside Others, not a fault)."
+      - "Burnt trend: monthly Meter Burnt, also per 10,000 cumulative installed; 'METER TERMINAL BURNT' points to connection/load. If burnt's share collapses while total replacements hold, call it a reporting change."
+      - "OEM quality: compare with peers in the same category per 1,000 meter-years (installed x years since install month); flag when >15% worse. A high rate from a tiny installed base is noise - state the base."
+      - "Replacement installs (new meters) are the other side of the same event: gold_mi_installation_day_agg SUM(meter_count) WHERE is_replacement."
+    example:
+      question: "Defect rate OEM-wise in Kashi"
+      sql: |
+        SELECT u.oem_key AS oem, SUM(u.defects) AS defective, SUM(u.faulty) AS meter_faulty,
+               SUM(u.installed) AS installed,
+               ROUND(SUM(u.faulty) * 100.0 / NULLIF(SUM(u.installed), 0), 2) AS defect_rate_pct
+        FROM (
+          SELECT UPPER(COALESCE(NULLIF(TRIM(oem), ''), 'Unknown')) AS oem_key, defect_count AS defects,
+                 defect_rate_numerator_count AS faulty, 0 AS installed
+          FROM public.gold_meter_defect_event_day_agg
+          WHERE LOWER(project) = 'kashi'
+          UNION ALL
+          SELECT UPPER(COALESCE(NULLIF(TRIM(oem), ''), 'Unknown')), 0, 0, meter_count
+          FROM public.gold_mi_installation_month_agg
+          WHERE NOT is_replacement AND has_meter_serial AND oem IS NOT NULL AND LOWER(project) = 'kashi'
+            AND UPPER(COALESCE(NULLIF(TRIM(oem), ''), 'Unknown')) IN (
+              SELECT DISTINCT UPPER(COALESCE(NULLIF(TRIM(oem), ''), 'Unknown'))
+              FROM public.gold_meter_defect_event_day_agg WHERE LOWER(project) = 'kashi')
+        ) u
+        GROUP BY u.oem_key
+        ORDER BY defect_rate_pct DESC
+
+  mi_productivity:
+    domain: wfm
+    title: "MI productivity (installs per technician per day)"
+    description: "Installation productivity per technician per day, active technicians, active days, monthly productivity trend, which zone is least productive and why, what-if on productivity or technicians."
+    keywords: [productivity, per technician, per day, technicians, active technicians, active days, installer, efficiency, productivity trend, monthly productivity, what if, if productivity, more technicians, lowest productivity, why, team, kitne technician]
+    tables: [gold_mi_technician_productivity_day_agg, gold_mi_productivity_trend_month_agg]
+    answer_notes:
+      - "Productivity per team = meters installed / technician-days (one technician working one day = 1)."
+      - "Low productivity drivers: many technician-days with 0-1 installs, few working days per technician, a heavier DT/feeder mix (slower jobs). Never blame a named person: for 'who is responsible' explain the drivers by zone/unit and say productivity is a team/process measure; a technician list may be shown as data, without calling anyone responsible."
+    rules:
+      - "public.gold_mi_technician_productivity_day_agg: ALWAYS category <> 'ALL' (sum the per-category rows; never category = 'ALL'). One category: category = 'CONSUMER'/'DT'/'FEEDER'. A meter-type filter is meter_type IN (...) in any category unless consumer is named."
+      - "A named technician: technician_name ILIKE '%<name>%' (stored names carry prefixes / suffixes / IDs), no place filter unless the question states one; GROUP BY project, technician_name so every matching technician is listed."
+      - "Productivity per technician per day = ROUND(SUM(installation_count)::numeric / NULLIF(SUM(technician_day_count), 0), 2); active technicians = COUNT(DISTINCT technician_name); active days = COUNT(DISTINCT period_start); installations = SUM(installation_count). Replacements are excluded; 'how many installed' belongs to the installation topic."
+      - "Monthly trend: public.gold_mi_productivity_trend_month_agg WHERE aggregate_level = 'all' AND category <> 'ALL' AND (project = 'ALL' or LOWER(project) = 'kashi') AND (filter_level = 'all' or filter_level = 'zone'/'circle'/'division'/'sub_division' AND LOWER(filter_label) = 'x'); months overlapping the range: month_end >= start AND month_start <= end; per month_start: ROUND(SUM(total_installations)::numeric / NULLIF(SUM(technician_day_count), 0), 2), SUM(active_technicians), SUM(total_installations)."
+      - "Why lowest/highest unit: last 30 complete days; drop units with <2% of technician-days; compare with the average: rate, share of technician-days with installation_count <= 1 and >= 5, working days per technician, meter-type mix (expected rate at all-unit per-type rates)."
+      - "Who is highest/lowest BY TECHNICIAN (a named-person extreme, not a project/discom/zone/category one -- those already return every value, see PLAN rules): never a bare LIMIT 1. First find the extreme value (MIN/MAX of SUM(installation_count) per technician_name), then SELECT every technician tied at that exact value -- just technician_name and the installed count, two columns, no LIMIT on them (verified live: many technicians tie at 1 meter installed) -- and NEVER add a COUNT(*)/tie-count column to this SELECT: the number of rows returned already IS the tie count (the answer writer is given RESULT's own row count / 'total available' alongside the rows), so a repeated tie-count column adds nothing and renders as the same number copy-pasted down every row of the table, which looks broken. display.table should list only technician_name and the installed count -- never a tie-count/rank column. The ANSWER TEXT (summary/insights), not the table, is where the tie count is stated, always first ('47 technicians tied for the lowest installation count at 1 meter each.'), derived from that row count. Then: tie count <= 10 -> name every one of them in the summary; tie count > 10 -> state the count only in the summary, do not list the names there either (too many to usefully name) -- this 10 cutoff is for the SUMMARY TEXT only, never for the SQL, which always fetches every tied row so the count itself is exact. Never name just one technician as if uniquely lowest/highest unless the tie count is actually 1."
+      - "What-if: base = last 30 complete days; technicians a day = SUM(technician_day_count) / calendar days; installs a day = productivity x technicians; extra = p_new * t_new - p_old * t_old (x30 a month)."
+    example:
+      question: "Zone-wise installation productivity in Triveni last month"
+      sql: |
+        SELECT CASE WHEN GROUPING(zone) = 1 THEN 'Total'
+                    WHEN zone IS NULL OR zone = '' THEN 'Unmapped' ELSE UPPER(zone) END AS zone,
+               ROUND(SUM(installation_count)::numeric / NULLIF(SUM(technician_day_count), 0), 2) AS productivity,
+               COUNT(DISTINCT technician_name) AS active_technicians,
+               COUNT(DISTINCT period_start) AS active_days,
+               SUM(installation_count) AS installations
+        FROM public.gold_mi_technician_productivity_day_agg
+        WHERE category <> 'ALL' AND LOWER(project) = 'triveni'
+          AND period_start >= (date_trunc('month', CURRENT_DATE) - INTERVAL '1 month')::date
+          AND period_start < date_trunc('month', CURRENT_DATE)::date
+        GROUP BY ROLLUP (zone)
+        ORDER BY GROUPING(zone) DESC, productivity DESC
+
+  sat_progress:
+    domain: wfm
+    title: "MI vs SAT progress and invoice funnel"
+    description: "Total MI, eligible MI, Total SAT, SAT %, SAT stages (SAT-1..13), meters pending SAT, lumpsum/PMPM invoiced meters and %, MI vs SAT vs invoice funnel, which project lags on SAT."
+    keywords: [sat, sat done, total sat, sat progress, sat percent, sat %, eligible, eligible mi, total mi, sat stage, sat 1, sat 13, stage wise, lumpsum invoiced, pmpm invoiced, funnel, certified, lagging, sat pending, not invoiced, baaki]
+    tables: [gold_mi_sat_invoice_snapshot, gold_mi_installation_day_agg, sat_eligibility_config]
+    answer_notes:
+      - "SAT batches are accepted per project in sequence (SAT-1 oldest). The newest batches are smaller/partial; SAT-12 and SAT-13 have no batch dates yet."
+      - "Installed-not-SAT (sat_stage IS NULL) = eligible pending (non-SAT) + installed after the cutoff (not yet due). Never call the whole figure eligible."
+      - "A plain count of meters 'without SAT' / 'pending SAT' / 'not SAT done' (no age bands asked) ALWAYS returns three columns from public.gold_mi_sat_invoice_snapshot -- installed_not_sat (sat_stage IS NULL), eligible_pending_sat (AND is_sat_eligible), not_yet_due (AND NOT is_sat_eligible) -- and the answer quotes all three (total = eligible pending + not yet due). Never only one of them."
+      - "Total MI includes replacements; eligible MI = installed on/before the project's SAT cutoff (public.sat_eligibility_config). % SAT vs eligible can exceed 100%."
+      - "On the dashboard's MI vs SAT bars, the two percentages are % SAT vs MI and % SAT vs eligible MI."
+      - "Label each % exactly by its column: sat_pct_vs_mi = 'of installed meters', sat_pct_vs_eligible = 'of eligible meters'."
+      - "'Worst'/'best' project: say which measure decides it (count or %) and give both when they disagree."
+    rules:
+      - "public.gold_mi_sat_invoice_snapshot (no dates, replacements included; columns project.., category, meter_type, sat_stage, is_sat_eligible, has_lumpsum_invoice, has_pmpm_invoice, meter_count)."
+      - "Total MI = SUM(meter_count); Eligible MI = FILTER (WHERE is_sat_eligible) (installed on/before the project cutoff in public.sat_eligibility_config); Total SAT = FILTER (WHERE sat_stage IS NOT NULL); SAT (eligible) = both."
+      - "% SAT vs MI = Total SAT / Total MI; % SAT vs eligible MI = Total SAT / Eligible MI (dashboard formula, can exceed 100%)."
+      - "Lumpsum / PMPM invoiced = FILTER (WHERE has_lumpsum_invoice / has_pmpm_invoice); invoice % = invoiced / Total SAT - never / MI, never add lumpsum and PMPM. 'SAT done not invoiced' = sat_stage IS NOT NULL AND NOT has_lumpsum_invoice (or has_pmpm_invoice)."
+      - "Pending: installed not SAT = sat_stage IS NULL; eligible pending = sat_stage IS NULL AND is_sat_eligible (= non-SAT total); not due yet = sat_stage IS NULL AND NOT is_sat_eligible."
+      - "'SAT progress' = Total MI, Total SAT, % SAT vs MI and pending. Lagging/behind = lowest % SAT vs MI, not fewest SAT."
+      - "Stage-wise: WHERE sat_stage IS NOT NULL GROUP BY sat_stage, label 'SAT-' || sat_stage. sat_stage is a tier: never SUM it."
+      - "OEM-wise: the snapshot has no oem; use gold_mi_installation_day_agg (no replacement filter) with inventory_category as category, inventory_meter_type, sat_stage, meter_count - Total MI / Total SAT only."
+    example:
+      question: "SAT progress project-wise"
+      sql: |
+        SELECT CASE WHEN GROUPING(project) = 1 THEN 'Total' ELSE UPPER(project) END AS project,
+               SUM(meter_count) AS total_mi,
+               COALESCE(SUM(meter_count) FILTER (WHERE sat_stage IS NOT NULL), 0) AS total_sat,
+               ROUND(COALESCE(SUM(meter_count) FILTER (WHERE sat_stage IS NOT NULL), 0) * 100.0
+                     / NULLIF(SUM(meter_count), 0), 2) AS sat_pct_vs_mi,
+               COALESCE(SUM(meter_count) FILTER (WHERE is_sat_eligible), 0) AS eligible_mi,
+               ROUND(COALESCE(SUM(meter_count) FILTER (WHERE sat_stage IS NOT NULL), 0) * 100.0
+                     / NULLIF(SUM(meter_count) FILTER (WHERE is_sat_eligible), 0), 2) AS sat_pct_vs_eligible,
+               COALESCE(SUM(meter_count) FILTER (WHERE sat_stage IS NULL), 0) AS installed_sat_pending
+        FROM public.gold_mi_sat_invoice_snapshot
+        GROUP BY ROLLUP (project)
+        ORDER BY GROUPING(project) DESC, total_mi DESC
+
+  sat_target:
+    domain: wfm
+    title: "SAT target, gap and ETA"
+    description: "How many more SAT meters are needed to reach X% of eligible (or total) MI, room left, SAT pace per month and when the target will be reached."
+    keywords: [sat target, reach, 95%, 98%, how many more sat, when will we reach, by when, kab tak, sat pace, eta, target percent, achieve, gap to target]
+    tables: [gold_mi_sat_invoice_snapshot, sat_milestones]
+    rules:
+      - "Base = Eligible MI (Total MI when the question says 'of MI/installed') from public.gold_mi_sat_invoice_snapshot; % now = Total SAT / base * 100."
+      - "Needed = GREATEST(CEIL(target / 100.0 * base) - Total SAT, 0). Strict view: CEIL(target/100 * eligible) - SAT(eligible)."
+      - "Room = Eligible MI - SAT(eligible) (Total MI - Total SAT on the MI base); needed > room means unreachable until the cutoff moves."
+      - "Pace (separate Athena query): gmr_wfm_silver.sat_milestones (project, sat_number 'SAT-n', sat_date) gives each batch's SAT date; batch size = snapshot SUM(meter_count) per LOWER(project), sat_stage. Pace = meters in batches with sat_date >= today - 182 days, * 30.44 / 182 per month. Undated batches sit between their dated neighbours."
+      - "ETA = today + needed / (pace / 30.44) days; also say how many batches of the recent average size that is. Give per-project figures when several projects are in scope."
+    example:
+      question: "How many more SAT meters does Triveni need to reach 95% of eligible?"
+      sql: |
+        SELECT SUM(meter_count) FILTER (WHERE is_sat_eligible) AS eligible_mi,
+               SUM(meter_count) FILTER (WHERE sat_stage IS NOT NULL) AS total_sat,
+               ROUND(SUM(meter_count) FILTER (WHERE sat_stage IS NOT NULL) * 100.0
+                     / NULLIF(SUM(meter_count) FILTER (WHERE is_sat_eligible), 0), 2) AS sat_pct_now,
+               GREATEST(CEIL(0.95 * SUM(meter_count) FILTER (WHERE is_sat_eligible))
+                        - SUM(meter_count) FILTER (WHERE sat_stage IS NOT NULL), 0) AS more_needed,
+               SUM(meter_count) FILTER (WHERE is_sat_eligible AND sat_stage IS NULL) AS room_eligible_waiting
+        FROM public.gold_mi_sat_invoice_snapshot
+        WHERE LOWER(project) = 'triveni'
+
+  sat_invoice:
+    domain: wfm
+    title: "SAT batches, invoicing lag and PMPM estimate"
+    description: "SAT batch dates, lag between SAT and first invoice, invoice and collection dates per batch, why SAT-done meters are not invoiced, estimated PMPM billing for the month."
+    keywords: [sat batch, sat date, milestone, invoice date, lag, sat to invoice, first invoice, collection date, not invoiced, why not invoiced, pmpm estimate, estimate billing, pmpm rate, per meter rate]
+    tables: [sat_milestones, gold_mi_sat_invoice_snapshot, revenue_receivables, gold_meter_revenue_pending_stage_snapshot]
+    answer_notes:
+      - "Invoicing is done per SAT batch after acceptance; a batch with no invoice date (e.g. the newest batches) explains SAT-done meters not yet invoiced."
+    rules:
+      - "gmr_wfm_silver.sat_milestones (Athena, ~34 rows): one row per project + sat_number ('SAT-n'; stage = CAST(regexp_extract(sat_number, '(\\d+)') AS INTEGER)) with sat_date, lumpsum_invoice_date, pmpm_invoice_date, lumpsum_collection_date, pmpm_collection_date. Compare LOWER(project)."
+      - "SAT -> first invoice lag per batch = GREATEST(date_diff('day', sat_date, LEAST(lumpsum_invoice_date, pmpm_invoice_date)), 0) (whichever is set); the average is weighted by batch meters (snapshot SUM(meter_count) per project, sat_stage) - a second, Postgres query. Say how many meters lack dates."
+      - "Not invoiced (Postgres): snapshot sat_stage IS NOT NULL AND NOT has_pmpm_invoice / NOT has_lumpsum_invoice / neither. Cross-check gold_meter_revenue_pending_stage_snapshot current_stage = 'sat_done_revenue_pending' and gold_revenue_ageing_snapshot SUM(outstanding_count). Reasons in the data: invoicing is per SAT batch, milestone dates are operator-entered, unparsable SAT numbers."
+      - "PMPM rate (Rs/meter/month) = latest pmpm_invoiced (cr) * 1e7 / meter-months billed (each batch's lumpsum-invoiced meters x months since its pmpm_invoice_date, as of the receivables row). Estimate for a month = rate x PMPM-invoiced meters (has_pmpm_invoice). Lumpsum rate = latest lumpsum_invoiced * 1e7 / lumpsum-invoiced meters. Steady-state estimate, no month column exists."
+    example:
+      question: "Days between SAT and first invoice for each SAT batch"
+      sql: |
+        SELECT LOWER(project) AS project, sat_number AS sat_batch, sat_date,
+               LEAST(lumpsum_invoice_date, pmpm_invoice_date) AS first_invoice_date,
+               GREATEST(date_diff('day', sat_date, LEAST(lumpsum_invoice_date, pmpm_invoice_date)), 0) AS lag_days,
+               lumpsum_collection_date, pmpm_collection_date
+        FROM gmr_wfm_silver.sat_milestones
+        WHERE sat_date IS NOT NULL
+        ORDER BY project, sat_date
+
+  non_sat_ageing:
+    domain: wfm
+    title: "Non-SAT ageing (eligible meters pending SAT)"
+    description: "Eligible installed meters still waiting for SAT, by age band (0-30 .. 120+ days), place, category; revenue at risk from them; why meters get stuck; why young bands are empty."
+    keywords: [non sat, non-sat, sat pending, pending sat, not sat, waiting for sat, ageing, aging, age band, older than 90 days, 120+ days, stuck, revenue at risk, blocked, cutoff, eligible pending, atka]
+    tables: [gold_non_sat_ageing_snapshot, gold_mi_sat_invoice_snapshot, gold_mi_installation_day_agg, sat_eligibility_config]
+    answer_notes:
+      - "Non-SAT counts ELIGIBLE meters only: installs after the project cutoff (public.sat_eligibility_config) are 'not yet due' and not aged - so 0-90 day bands are empty."
+      - "Any mismatch between project totals and band totals usually means different scopes (all pending vs eligible pending, or replacements in/out) - quote both figures from RESULT."
+      - "A plain count 'without SAT' / 'pending SAT' (no age bands asked) is not an ageing question: return installed_not_sat, eligible_pending_sat and not_yet_due from public.gold_mi_sat_invoice_snapshot (sat_stage IS NULL; AND is_sat_eligible; AND NOT is_sat_eligible) and quote all three."
+    rules:
+      - "Non-SAT = ELIGIBLE meters only (installed on/before the project cutoff) without a SAT batch: SUM(meter_count) FROM public.gold_non_sat_ageing_snapshot. Never count is_non_sat_pending alone (includes not-yet-eligible installs). Same total: gold_mi_sat_invoice_snapshot WHERE sat_stage IS NULL AND is_sat_eligible."
+      - "Bands age_key: 'age_0_30','age_31_60','age_61_90','age_91_120','age_120_plus' (days since installation, frozen at refresh); order with CASE. Only band edges 30/60/90/120 are answerable: 'over 90 days' = age_91_120 + age_120_plus. An ageing question gets Total plus every band; labels 0-30 days ... 120+ days."
+      - "Young bands are empty because the newest cutoff (public.sat_eligibility_config.eligibility_cutoff_date) is already months old; installs after the cutoff are not in this card."
+      - "No oem, no dates. Category labels: DT -> 'DTR'."
+      - "Revenue at risk = meters in the asked bands x lumpsum per meter (blocked) and x PMPM per meter per month (deferred); rates from the latest revenue_receivables row (see sat_invoice topic); a year = lumpsum + 12 x PMPM."
+      - "Stuck why: stuck rate = eligible pending / eligible per group - category, meter_type (snapshot), replacement vs new (gold_mi_installation_day_agg is_non_sat_pending, period_start <= project cutoff). No reason field exists."
+    example:
+      question: "Non-SAT ageing project-wise"
+      sql: |
+        SELECT CASE WHEN GROUPING(project) = 1 THEN 'Total' ELSE UPPER(project) END AS project,
+               SUM(meter_count) AS total_non_sat,
+               COALESCE(SUM(meter_count) FILTER (WHERE age_key = 'age_0_30'), 0) AS days_0_30,
+               COALESCE(SUM(meter_count) FILTER (WHERE age_key = 'age_31_60'), 0) AS days_31_60,
+               COALESCE(SUM(meter_count) FILTER (WHERE age_key = 'age_61_90'), 0) AS days_61_90,
+               COALESCE(SUM(meter_count) FILTER (WHERE age_key = 'age_91_120'), 0) AS days_91_120,
+               COALESCE(SUM(meter_count) FILTER (WHERE age_key = 'age_120_plus'), 0) AS days_120_plus
+        FROM public.gold_non_sat_ageing_snapshot
+        GROUP BY ROLLUP (project)
+        ORDER BY GROUPING(project) DESC, total_non_sat DESC
+
+  receivables:
+    domain: wfm
+    title: "Receivables: invoice vs revenue released (money)"
+    description: "Receivables summary - delay analysis (money, crore): Invoice Amount (Net), Realised, Within Timeline (unpaid, not yet due), Overdue, outstanding, % realised for lumpsum, PMPM and cable, per project, and their history across submissions."
+    keywords: [receivables, invoiced amount, invoice amount net, net invoice, realised, realized, released, collected, collection, outstanding, overdue, overdue amount, dues, payment, delay analysis, within timeline, on time, crore, revenue released, lumpsum amount, pmpm amount, cable revenue, paisa, collection efficiency, money stuck, owes]
+    tables: [revenue_receivables]
+    answer_notes:
+      - "Collection efficiency = realised / invoiced (rupees, crore)."
+      - "Amounts are filed per project only. When the question asks for a category (consumer / DT / feeder), meter type, zone or date split, open with one plain sentence that this split is not recorded, then give the project-level figures as the closest answer."
+    rules:
+      - "public.revenue_receivables: operator-entered amounts already in crore; columns lumpsum_/pmpm_/cable_ x invoiced, realised, within_timeline; project lower-case; created_at."
+      - "Current figures = each project's LATEST row: ROW_NUMBER() OVER (PARTITION BY project ORDER BY created_at DESC, id DESC) = 1, then SUM across projects."
+      - "Dashboard card (Receivables summary - Delay analysis), per stream: Invoice Amount (Net) = <stream>_invoiced; Realised = <stream>_realised; Within Timeline = <stream>_within_timeline = UNPAID money that is not yet due; Overdue = invoiced - realised - within_timeline (unpaid and past due). Realised + Within Timeline + Overdue = Invoice Amount. Outstanding (all unpaid) = invoiced - realised = Within Timeline + Overdue; % realised = realised / invoiced x 100. Never 'realised - within_timeline' and never call within_timeline 'realised on time'."
+      - "Default answer and 'delay analysis' / 'overdue' / 'invoice vs revenue released': per stream (Lumpsum, PMPM, Cable) plus All streams -- invoice_amount_net, realised, within_timeline, overdue, % realised. A negative overdue means the operator's figures do not add up (within_timeline larger than the unpaid amount): show it and say so."
+      - "History/trend/change: every row ORDER BY project, created_at (latest vs previous submission per project). To-date amounts should not fall - flag a decrease as a correction."
+      - "Filed per project only: no category, zone, meter type or date split. Such a question is NOT unanswerable: drop that filter, return the asked stream/measure per project plus Total (the answer writer says the split is not recorded). Never use meter-count tables for money."
+    example:
+      question: "Lumpsum and PMPM invoiced vs realised project-wise"
+      sql: |
+        SELECT UPPER(project) AS project,
+               lumpsum_invoiced, lumpsum_realised, lumpsum_invoiced - lumpsum_realised AS lumpsum_outstanding,
+               ROUND(lumpsum_realised * 100.0 / NULLIF(lumpsum_invoiced, 0), 2) AS lumpsum_pct_realised,
+               pmpm_invoiced, pmpm_realised, pmpm_invoiced - pmpm_realised AS pmpm_outstanding,
+               ROUND(pmpm_realised * 100.0 / NULLIF(pmpm_invoiced, 0), 2) AS pmpm_pct_realised,
+               created_at AS submitted_at
+        FROM (SELECT r.project, r.created_at, r.lumpsum_invoiced, r.lumpsum_realised, r.pmpm_invoiced,
+                     r.pmpm_realised,
+                     ROW_NUMBER() OVER (PARTITION BY r.project ORDER BY r.created_at DESC, r.id DESC) AS rn
+              FROM public.revenue_receivables r) latest
+        WHERE rn = 1
+        ORDER BY project
+
+  revenue_ageing:
+    domain: wfm
+    title: "Revenue not realized ageing"
+    description: "SAT-certified meters whose PMPM revenue is not yet collected, aged from the SAT date: bands, any threshold, average and oldest age, by place, category, meter type or SAT date."
+    keywords: [revenue not realized, revenue not realised, revenue ageing, uncollected, pmpm not collected, outstanding meters, days since sat, oldest sat date, average age, revenue pending ageing]
+    tables: [gold_revenue_ageing_snapshot]
+    rules:
+      - "public.gold_revenue_ageing_snapshot: SUM(outstanding_count) = SAT-done meters whose batch has no PMPM collection date."
+      - "Age = GREATEST((CURRENT_TIMESTAMP AT TIME ZONE 'Asia/Kolkata')::date - sat_date, 0). Bands: <= 30, 31-60, 61-90, 91-120, > 120 days; any custom threshold works."
+      - "Average age = SUM(age * n) / SUM(n) with n = SUM(outstanding_count) per sat_date in a subquery; oldest = MIN(sat_date)."
+      - "Breakdowns: place, category (DT label 'DT'), meter_type, sat_date. Not Non-SAT ageing, not rupees (receivables)."
+    example:
+      question: "Revenue not realized ageing band-wise"
+      sql: |
+        SELECT CASE WHEN GROUPING(band) = 1 THEN 'Total' ELSE band END AS age_band,
+               SUM(outstanding_count) AS meters
+        FROM (SELECT outstanding_count,
+                     CASE WHEN GREATEST((CURRENT_TIMESTAMP AT TIME ZONE 'Asia/Kolkata')::date - sat_date, 0) <= 30 THEN '0-30 days'
+                          WHEN GREATEST((CURRENT_TIMESTAMP AT TIME ZONE 'Asia/Kolkata')::date - sat_date, 0) <= 60 THEN '31-60 days'
+                          WHEN GREATEST((CURRENT_TIMESTAMP AT TIME ZONE 'Asia/Kolkata')::date - sat_date, 0) <= 90 THEN '61-90 days'
+                          WHEN GREATEST((CURRENT_TIMESTAMP AT TIME ZONE 'Asia/Kolkata')::date - sat_date, 0) <= 120 THEN '91-120 days'
+                          ELSE '120+ days' END AS band
+              FROM public.gold_revenue_ageing_snapshot) b
+        GROUP BY ROLLUP (band)
+        ORDER BY GROUPING(band) DESC, band
+
+  current_stage:
+    domain: wfm
+    title: "Meters current stage (revenue not realized)"
+    description: "Where meters without realized revenue sit now: inventory, agency, supervisor, technician (not installed), installed SAT pending, SAT done revenue pending; by project, category or meter type."
+    keywords: [current stage, which stage, stuck where, with agency, with supervisor, with technician, in inventory, not installed, not yet installed, uninstalled, installed sat pending, sat done revenue pending, revenue not realized stage, pipeline]
+    tables: [gold_meter_installation_pending_stage_snapshot, gold_meter_revenue_pending_stage_snapshot]
+    rules:
+      - "Source = (SELECT project, discom, zone, category, meter_type, current_stage, meter_count FROM public.gold_meter_installation_pending_stage_snapshot UNION ALL SELECT project, discom, zone, UPPER(category), meter_type, current_stage, meter_count FROM public.gold_meter_revenue_pending_stage_snapshot) n; every figure SUM(meter_count). Both have discom and zone (the first four stages take the zone of the warehouse holding the meter, like stock), so a zone / discom filter or zone-wise breakdown goes on the outer query over n."
+      - "current_stage order: 'inventory','agency','supervisor','technician' (not yet installed), 'installation_done_sat_pending','sat_done_revenue_pending' (installed, revenue pending). Total = all six. The app shows them as the dashboard's workflow stages: DI to Agency, Agency to Supervisor, Supervisor to Technician, Technician to Installation, Installation to SAT, SAT to Revenue -- answer with THESE names, never 'installation pending' / 'SAT pending' wording."
+      - "'revenue not realized meters' (any count or breakdown: total, project / zone / category wise) = dashboard KPI 16 = ALL SIX stages from the UNION source (both tables): meters not installed yet are revenue-not-realized too. The revenue-pending table alone (installed meters only) is used only when the question names an installed stage ('installed but SAT pending', 'SAT done but revenue pending'); 'revenue not realized ageing' is the revenue_ageing topic."
+      - "'stage wise' / 'each stage' / 'revenue not realized stage wise' = ALL SIX stages from the UNION source above (both tables), one row per stage in workflow order (ORDER BY CASE current_stage ...) plus Total -- never the revenue-pending table alone (that is only the last two stages)."
+      - "Circle / division / sub_division exist only for stages 5-6 (gold_meter_revenue_pending_stage_snapshot); for a circle or division question give stages 5-6 for it and say the first four stages are tracked per warehouse / zone. No dates."
+      - "Not unutilized stock ageing, not Non-SAT ageing."
+    example:
+      question: "Current stage of meters with revenue not realized, project-wise"
+      sql: |
+        SELECT CASE WHEN GROUPING(project) = 1 THEN 'Total' ELSE UPPER(project) END AS project,
+               COALESCE(SUM(meter_count) FILTER (WHERE current_stage = 'inventory'), 0) AS inventory,
+               COALESCE(SUM(meter_count) FILTER (WHERE current_stage = 'agency'), 0) AS agency,
+               COALESCE(SUM(meter_count) FILTER (WHERE current_stage = 'supervisor'), 0) AS supervisor,
+               COALESCE(SUM(meter_count) FILTER (WHERE current_stage = 'technician'), 0) AS technician,
+               COALESCE(SUM(meter_count) FILTER (WHERE current_stage = 'installation_done_sat_pending'), 0) AS installed_sat_pending,
+               COALESCE(SUM(meter_count) FILTER (WHERE current_stage = 'sat_done_revenue_pending'), 0) AS sat_done_revenue_pending,
+               SUM(meter_count) AS total_meters
+        FROM (SELECT project, category, meter_type, current_stage, meter_count
+              FROM public.gold_meter_installation_pending_stage_snapshot
+              UNION ALL
+              SELECT project, UPPER(category), meter_type, current_stage, meter_count
+              FROM public.gold_meter_revenue_pending_stage_snapshot) n
+        GROUP BY ROLLUP (project)
+        ORDER BY GROUPING(project) DESC, total_meters DESC
+
+  journey_time:
+    domain: wfm
+    title: "Meter journey average time"
+    description: "Average days per journey stage: DI to agency, agency to supervisor, supervisor to technician, technician to installation, installation to SAT, SAT to revenue, total journey; slowest zone or category."
+    keywords: [journey, journey time, average days, lead time, turnaround, levels, journey levels, journey steps, across the levels, di to agency, agency to supervisor, supervisor to technician, technician to installation, installation to sat, sat to revenue, total journey, how long, slowest, fastest, kitne din, journey stage]
+    tables: [gold_meter_journey_stage_agg]
+    rules:
+      - "public.gold_meter_journey_stage_agg; every figure is a ratio of sums ROUND(SUM(x) / NULLIF(SUM(den), 0), 2), never AVG: DI to Agency inventory_to_agency_days_sum, Agency to Supervisor agency_to_supervisor_days_sum, Supervisor to Technician supervisor_to_technician_days_sum, Technician to Installation technician_to_installation_days_sum - all / meter_count; Installation to SAT installation_to_sat_days_sum / sat_meter_count; SAT to Revenue sat_to_revenue_realized_days_sum and Total Journey total_journey_days_sum / revenue_realized_meter_count. Total meters = SUM(meter_count)."
+      - "Stages do not add up to Total Journey (different denominators) - say so when showing all."
+      - "WORDING: 'levels' / 'stages' / 'steps' / 'across the levels' / 'stage wise' of the meter journey = the SIX stages (DI to Agency, Agency to Supervisor, Supervisor to Technician, Technician to Installation, Installation to SAT, SAT to Revenue) plus Total Journey -- one row per stage in that order, never only the total. 'for revenue realized' = the usual figures (SAT to Revenue and Total Journey are over revenue-realized meters). The journey starts at DI (receipt into stock), not at installation. Stages BY another dimension ('zone wise', 'category wise', 'by division', 'project wise'): ONE ROW PER that dimension (ROLLUP Total row) with the six stages + total_journey as COLUMNS (di_to_agency ... total_journey) -- never one row per zone x stage (35 rows the answer cannot cover)."
+      - "Replacements included; add NOT is_replacement only when asked to exclude them. Only time filter: installation_year (integer)."
+      - "'time to revenue realization' alone = Total Journey. Slowest/fastest = rank by the asked stage. Category label 'DT'; consumer types via meter_type."
+    example:
+      question: "Average journey time per stage zone-wise for Agra"
+      sql: |
+        SELECT CASE WHEN GROUPING(zone) = 1 THEN 'Total'
+                    WHEN zone IS NULL OR zone = '' THEN 'Unmapped' ELSE UPPER(zone) END AS zone,
+               ROUND(SUM(inventory_to_agency_days_sum) / NULLIF(SUM(meter_count), 0), 2) AS di_to_agency,
+               ROUND(SUM(agency_to_supervisor_days_sum) / NULLIF(SUM(meter_count), 0), 2) AS agency_to_supervisor,
+               ROUND(SUM(supervisor_to_technician_days_sum) / NULLIF(SUM(meter_count), 0), 2) AS supervisor_to_technician,
+               ROUND(SUM(technician_to_installation_days_sum) / NULLIF(SUM(meter_count), 0), 2) AS technician_to_installation,
+               ROUND(SUM(installation_to_sat_days_sum) / NULLIF(SUM(sat_meter_count), 0), 2) AS installation_to_sat,
+               ROUND(SUM(sat_to_revenue_realized_days_sum) / NULLIF(SUM(revenue_realized_meter_count), 0), 2) AS sat_to_revenue,
+               ROUND(SUM(total_journey_days_sum) / NULLIF(SUM(revenue_realized_meter_count), 0), 2) AS total_journey,
+               SUM(meter_count) AS total_meters
+        FROM public.gold_meter_journey_stage_agg
+        WHERE LOWER(project) = 'agra'
+        GROUP BY ROLLUP (zone)
+        ORDER BY GROUPING(zone) DESC, total_meters DESC
+
+  inventory_utilization:
+    domain: wfm
+    title: "Supply, utilization rate and remaining stock"
+    description: "Meters supplied/received into stock, installed, supply utilization rate %, remaining stock, MI pace vs stock, supply trend, supplied minus installed vs stock reconciliation."
+    keywords: [supply, supplied, received, receipts, inventory, utilization, utilisation, utilization rate, remaining stock, stock balance, stock left, available stock, mi pace, keeping pace, supply vs installation, reconcile, reconciliation, net, maal]
+    tables: [gold_meter_inventory_event_day_agg, gold_meter_inventory_event_month_agg, gold_mi_installation_day_agg]
+    answer_notes:
+      - "Supplied - MI installs differs from stock because replacement installs also leave stock, and some installs have no stock record."
+      - "MI pace vs stock: say what each number is and its period in the first sentence -- 'stock today', 'average installs per day over <pace_period>', 'days of stock left at that pace' -- then name the category / place that runs out first. Never a bare Yes/No 'keeping pace' without the numbers behind it."
+      - "Utilization rate is always cumulative (everything supplied / installed up to that date), so it never jumps above 100% for one month or one date range. For a range, the rate is as of the range's end date; the range's own supplied / installed are movement, shown beside it, never divided into a rate."
+      - "Zone-wise / one-zone supplied, stock and utilization include the meters still in stock, counted in the zone of the warehouse holding them (the app maps each warehouse to its zone from the live data). Group by zone as usual. Circle / division have no stock: there, stock shows as 'Not installed yet (in stock)' -- never call that a circle / division and never answer just '0'."
+    rules:
+      - "public.gold_meter_inventory_event_day_agg (month_agg for whole months). Supplies = SUM(inventory_count); installed = SUM(installed_count); utilization % = installed / supplies; remaining stock = SUM(inventory_count) - SUM(stock_consumed_count)."
+      - "Cumulative up to the period end: WHERE period_start <= end (rate and stock are always balances) -- also for 'utilization from <date> to <date>' / 'utilization summary for <period>' / 'utilization in <month>': rate = SUM(installed_count) / SUM(inventory_count) over period_start <= the END date; in-period supplied / installed may be added as SUM(...) FILTER (WHERE period_start >= start) columns. NEVER compute utilization % from one period's rows only. Exception (counts only, no rate): 'how many supplied/installed IN <period>' without till/so far/cumulative = that period only (period_start BETWEEN), plus net = supplied - installed and a keeping-pace verdict (supplies >= installs)."
+      - "Trend tables (monthwise / weekly utilization): running totals SUM(x) OVER (ORDER BY bucket), with earlier history folded into the first bucket (GREATEST(date_trunc('month', period_start), start) and no lower date bound); utilization % per bucket = cumulative installed / cumulative supplied."
+      - "circle/division are NULL for meters still in stock: label them 'Not installed yet (in stock)' (zone is filled from the warehouse automatically). category by the inventory SKU rule; DT/feeder stock meter_type is raw '3PLTCTSM'/'HTCTPTSM'. No oem or warehouse here (stock_ageing topic)."
+      - "Reconciliation 'supplied - installed vs stock': supplied - MI-progress installs - replacement installs (gold_mi_installation_day_agg is_replacement; they leave stock but are not MI progress) +/- net adjustment (installs with no stock record less scrapped stock) = stock. Separate queries per table."
+    example:
+      question: "Supply utilization category-wise as of today"
+      sql: |
+        SELECT CASE WHEN GROUPING(category) = 1 THEN 'Total'
+                    WHEN category = 'DT' THEN 'DTR' WHEN category = 'FEEDER' THEN 'Feeder'
+                    WHEN category = 'CONSUMER' THEN 'Consumer' ELSE 'Unmapped' END AS category,
+               SUM(inventory_count) AS total_supplies,
+               SUM(installed_count) AS total_installed,
+               ROUND(SUM(installed_count) * 100.0 / NULLIF(SUM(inventory_count), 0), 2) AS utilization_rate_pct,
+               SUM(inventory_count) - SUM(stock_consumed_count) AS remaining_stock
+        FROM public.gold_meter_inventory_event_day_agg
+        WHERE period_start <= CURRENT_DATE
+        GROUP BY ROLLUP (category)
+        ORDER BY GROUPING(category) DESC, total_supplies DESC
+
+  stock_ageing:
+    domain: wfm
+    title: "Unutilized stock ageing"
+    description: "Meters lying unused in stock by age since DI date, warehouse, OEM, SKU, holder stage (warehouse/agency/supervisor/technician), project, category, meter type."
+    keywords: [unused stock, unutilized, unutilised, stock ageing, stock aging, old stock, lying, warehouse, store, godown, sku, held by technician, with agency, days old, 90+ days, di date]
+    tables: [gold_inventory_unutilized_stock_snapshot]
+    rules:
+      - "public.gold_inventory_unutilized_stock_snapshot: SUM(stock_count) = received, never installed, never scrapped."
+      - "Age = GREATEST(CURRENT_DATE - inventory_date, 0); bands <= 30, 31-60, 61-90, > 90 days; any custom threshold works. An ageing question gets Total plus every band."
+      - "Dimensions: project, warehouse (mixed case, e.g. 'Agra_HW' - compare UPPER(warehouse)), oem (UPPER), sku, current_stage ('warehouse','agency','supervisor','technician'), category, meter_type. No zone/circle/division, no date range (as of today)."
+      - "'Less than N days of stock' is the stock_cover topic, not age."
+    example:
+      question: "Unused stock ageing warehouse-wise"
+      sql: |
+        SELECT CASE WHEN GROUPING(warehouse) = 1 THEN 'Total' ELSE UPPER(warehouse) END AS warehouse,
+               SUM(stock_count) AS total_stock,
+               COALESCE(SUM(stock_count) FILTER (WHERE GREATEST(CURRENT_DATE - inventory_date, 0) <= 30), 0) AS days_0_30,
+               COALESCE(SUM(stock_count) FILTER (WHERE GREATEST(CURRENT_DATE - inventory_date, 0) BETWEEN 31 AND 60), 0) AS days_31_60,
+               COALESCE(SUM(stock_count) FILTER (WHERE GREATEST(CURRENT_DATE - inventory_date, 0) BETWEEN 61 AND 90), 0) AS days_61_90,
+               COALESCE(SUM(stock_count) FILTER (WHERE GREATEST(CURRENT_DATE - inventory_date, 0) > 90), 0) AS days_90_plus
+        FROM public.gold_inventory_unutilized_stock_snapshot
+        GROUP BY ROLLUP (warehouse)
+        ORDER BY GROUPING(warehouse) DESC, total_stock DESC
+
+  stock_cover:
+    domain: wfm
+    title: "Stock cover (how many days stock will last)"
+    description: "At the current pace, how many days the stock will last, overall and per project/category/meter type/OEM/warehouse; which sites have less than N days of stock."
+    keywords: [how many days, stock last, run out, running out, days of stock, stock cover, enough stock, at current pace, less than a week of stock, kitne din chalega, sites running out, stores running out, warehouse days left, godown stock]
+    tables: [gold_meter_inventory_event_day_agg, gold_inventory_unutilized_stock_snapshot, gold_mi_installation_day_agg, unified_smart_meter_inventory, unified_installations]
+    answer_notes:
+      - "'Which have less than N days' with none below N: say none, and name the lowest few with their days left."
+      - "Days left = stock / average daily stock consumption (last 6 months). Run-out date = today + days left. When stock runs out, installs stop, so the eligible pool for SAT stops growing."
+    rules:
+      - "Stock = SUM(inventory_count) - SUM(stock_consumed_count) over all dates of public.gold_meter_inventory_event_day_agg."
+      - "Pace (meters leaving stock a day) default = average of the last 6 months' daily rates: each month's SUM(stock_consumed_count) / its days (current month: days elapsed), averaged over 6 (missing months = 0). 'last N days/weeks' or a named range = consumed in it / its days; 'last N months' = N-month average."
+      - "Days left = stock / pace; pace < 1 a day = 'not being used'. Show total, each category and each project; say what runs out first (< 85% of the total's days and >= 5% of stock)."
+      - "Store / site / godown / depot = warehouse. Warehouse-wise is ONE Athena query on gmr_wfm_silver (follow the warehouse example): stock = latest unified_smart_meter_inventory row per serial with no installed_ts and no unified_installations row; pace = meters installed a day from that warehouse (installed_ts). Never answer a store / site / warehouse ask with project or category rows."
+      - "OEM-wise: stock from gold_inventory_unutilized_stock_snapshot; pace = meters installed a day from gold_mi_installation_day_agg WHERE has_meter_serial - separate queries."
+      - "'less than N days/weeks of stock' = list scopes with days left < N, the rest after."
+    example:
+      question: "How many days will stock last project-wise at the current pace?"
+      sql: |
+        WITH m AS (
+          SELECT LOWER(project) AS project, date_trunc('month', period_start)::date AS mon,
+                 SUM(stock_consumed_count) AS used
+          FROM public.gold_meter_inventory_event_day_agg
+          WHERE period_start >= (date_trunc('month', CURRENT_DATE) - INTERVAL '5 months')::date
+            AND period_start <= CURRENT_DATE
+          GROUP BY 1, 2),
+        p AS (SELECT project, SUM(used / CASE WHEN mon = date_trunc('month', CURRENT_DATE)::date
+                   THEN EXTRACT(DAY FROM CURRENT_DATE) ELSE EXTRACT(DAY FROM (mon + INTERVAL '1 month - 1 day')) END) / 6 AS pace
+              FROM m GROUP BY 1),
+        s AS (SELECT LOWER(project) AS project, SUM(inventory_count) - SUM(stock_consumed_count) AS stock
+              FROM public.gold_meter_inventory_event_day_agg GROUP BY 1)
+        SELECT COALESCE(UPPER(u.project), 'TOTAL') AS project, SUM(u.stock) AS in_stock,
+               ROUND(SUM(u.pace), 1) AS pace_per_day,
+               ROUND(SUM(u.stock) / NULLIF(SUM(u.pace), 0)) AS days_left
+        FROM (SELECT project, stock, 0 AS pace FROM s UNION ALL SELECT project, 0, pace FROM p) u
+        GROUP BY ROLLUP (u.project)
+        ORDER BY GROUPING(u.project) DESC, days_left
+
+  om_open_tickets:
+    domain: wfm
+    title: "O&M not-closed ticket ageing"
+    description: "Open O&M complaint tickets by age band (0-7 .. 60+ days), source (1912/AUTO/MANUAL), status, complaint type, place, category; ticket lists, one ticket, technician/agency backlog."
+    keywords: [open tickets, open complaints, not closed, pending complaints, ticket ageing, complaint ageing, 60+ days, backlog, 1912, auto ticket, unassigned, escalated, not in communication, never comm, complaint type, ticket number, o&m open]
+    tables: [gold_om_open_ageing_snapshot, unified_active_complaints, unified_non_qc_complaints]
+    answer_notes:
+      - "Open tickets per technician: also say how many open tickets have no technician assigned (out of all open), when that figure is in the results -- they sit with no one."
+    rules:
+      - "public.gold_om_open_ageing_snapshot: SUM(ticket_count); age_key 'age_0_7','age_8_15','age_16_30','age_31_60','age_60_plus' (days since raised, frozen at refresh), order with CASE; thresholds only at 7/15/30/60. Default answer = Total plus every band."
+      - "Includes every active-feed row, RESOLVED too - say so unless a status is filtered. complaint_status upper-case ('UNASSIGNED','ASSIGNED','CAN NOT ATTEND','ESCALATED TO DISCOM','WORK IN PROGRESS','RESOLVED','ACCEPTED','ON HOLD'); complaint_source '1912','AUTO','MANUAL'; complaint_type upper-case (e.g. 'METER NOT IN COMMUNICATION','NEVER COMM'); category label 'DT'. 'meter type wise' = meter_type, not complaint_type."
+      - "Ticket lists, one ticket, technician/supervisor/agency backlog (Athena): gmr_wfm_silver.unified_active_complaints, age = date_diff('day', CAST(complaint_created_date AS DATE), current_date) (as of today); columns complaint_no, ticket_id, complaint_status, complaint_type, complaint_by, old_meter_serial_number, consumer_number, technician_name, supervisor, agency, project, zone, division. Status there is mixed case: compare UPPER(TRIM(complaint_status)). Require a filter; LIMIT 200."
+      - "Open tickets per technician: ONLY gmr_wfm_silver.unified_active_complaints (the one table with a technician per ticket): COUNT(*) per technician_name WHERE UPPER(TRIM(complaint_status)) <> 'RESOLVED' AND NULLIF(TRIM(technician_name), '') IS NOT NULL, plus a separate count of open tickets with no technician (unassigned). Never join the ageing snapshot (or any place-level count) to technician / productivity tables on place columns: every ticket is repeated per technician-day row and the counts are inflated many times."
+    example:
+      question: "Open O&M tickets ageing by complaint source"
+      sql: |
+        SELECT CASE WHEN GROUPING(complaint_source) = 1 THEN 'Total' ELSE complaint_source END AS source,
+               SUM(ticket_count) AS total_open,
+               COALESCE(SUM(ticket_count) FILTER (WHERE age_key = 'age_0_7'), 0) AS days_0_7,
+               COALESCE(SUM(ticket_count) FILTER (WHERE age_key = 'age_8_15'), 0) AS days_8_15,
+               COALESCE(SUM(ticket_count) FILTER (WHERE age_key = 'age_16_30'), 0) AS days_16_30,
+               COALESCE(SUM(ticket_count) FILTER (WHERE age_key = 'age_31_60'), 0) AS days_31_60,
+               COALESCE(SUM(ticket_count) FILTER (WHERE age_key = 'age_60_plus'), 0) AS days_60_plus
+        FROM public.gold_om_open_ageing_snapshot
+        GROUP BY ROLLUP (complaint_source)
+        ORDER BY GROUPING(complaint_source) DESC, total_open DESC
+
+  om_closed_tickets:
+    domain: wfm
+    title: "O&M ticket closed analysis (closed date)"
+    description: "Non-QC O&M tickets closed by closed date (IST) per day/week/month, place, category, complaint type or technician, and the closed ticket rows."
+    keywords: [closed tickets, tickets closed, closed analysis, closure, closures, closed date, daily closures, resolved tickets, non qc, ticket closed analysis, band hua]
+    tables: [gold_om_closed_tickets_day_agg, unified_non_qc_complaints, gold_om_technician_productivity_day_agg]
+    answer_notes:
+      - "Two closure counts, always both: 'closed by closed date' (the dashboard card; only DT / feeder tickets carry a closed date) and 'work completed' (operational closures, every category incl. consumer). Lead with the work-completed total, then the closed-date figure, and say in one plain sentence that consumer tickets have no closed date -- never give the closed-date figure alone as 'the closed tickets'."
+    rules:
+      - "Any closed-ticket count = TWO queries, always: main = closed by closed date, extra_queries = work completed for the same place / period: SUM(complaint_count) FROM public.gold_om_technician_productivity_day_agg WHERE category <> 'ALL' (period_start = work completion date), by category."
+      - "Closed by closed date: public.gold_om_closed_tickets_day_agg, SUM(closed_tickets) by closed_date (columns project..sub_division lower-case, feeder, dtr, category 'FEEDER'/'DT', meter_type, complaint_type) -- identical to the silver count, and fast. Only DT / feeder tickets carry a closed date (the silver table has none for consumers either), so this IS the all-category closed-date count; use the Athena table below only for ticket rows or columns this table lacks."
+      - "Athena gmr_wfm_silver.unified_non_qc_complaints WHERE closed_date IS NOT NULL; day = CAST(closed_date AT TIME ZONE 'Asia/Kolkata' AS DATE); closed = COUNT(*). Dimensions: project/zone/... (LOWER(TRIM(col))), category = CASE WHEN UPPER(TRIM(complaint_entity_type)) IN ('DT','DTR') THEN 'DT' WHEN UPPER(TRIM(complaint_entity_type)) = 'FEEDER' THEN 'FEEDER' ELSE 'CONSUMER' END, complaint type TRIM(sub_complaint_type), technician_name."
+      - "No date given = last 30 days ending yesterday (CURRENT_DATE - 31 .. CURRENT_DATE - 1) unless 'all time'; say the default was used."
+    example:
+      question: "Closed tickets month-wise in Kashi this year"
+      sql: |
+        SELECT date_trunc('month', CAST(closed_date AT TIME ZONE 'Asia/Kolkata' AS DATE)) AS closed_month,
+               COUNT(*) AS closed_tickets
+        FROM gmr_wfm_silver.unified_non_qc_complaints
+        WHERE closed_date IS NOT NULL
+          AND LOWER(TRIM(project)) = 'kashi'
+          AND CAST(closed_date AT TIME ZONE 'Asia/Kolkata' AS DATE)
+              BETWEEN date_trunc('year', current_date) AND current_date
+        GROUP BY 1
+        ORDER BY 1
+
+  meter_complaints:
+    domain: wfm
+    title: "Complaints per meter (repeat-complaint meters)"
+    description: "Counts across many meters: meters with repeat complaints; complaints by SAT status (SAT Done vs Non-SAT); worst meters by place or category. ONE named meter or consumer number (its complaints / tickets / history) is meter_lookup, not this topic."
+    keywords: [complaints per meter, repeat complaints, repeated complaints, multiple complaints, frequent complaints, meter wise complaints, most complaints, problem meters, chronic, sat done complaints, non-sat complaints, baar baar]
+    tables: [gold_om_meter_complaints_agg]
+    rules:
+      - "public.gold_om_meter_complaints_agg: one row per meter_serial_number; total_complaints, open_complaints, closed_complaints; sat_status 'SAT Done' / 'Non-SAT', sat_number 'SAT-1'..'SAT-13'; category CONSUMER/DT/FEEDER."
+      - "Place columns are UPPER-case here (zone 'AGRA', discom 'DVVNL'/'PuVVNL'), project lower-case: compare with UPPER(col) = 'AGRA' / LOWER(project) = 'agra'."
+      - "Repeat-complaint meter = total_complaints > 1. Meters = COUNT(*); complaints = SUM(total_complaints)."
+      - "CONSUMER rows hold only OPEN complaints (closed_complaints is always 0) and DT/FEEDER rows only CLOSED ones -- never report consumer closed = 0 as a real figure; say which kind each category counts."
+    example:
+      question: "Repeat-complaint meters by zone and SAT status"
+      sql: |
+        SELECT zone, sat_status,
+               COUNT(*) FILTER (WHERE total_complaints > 1) AS repeat_meters,
+               COUNT(*) AS meters_with_complaints,
+               SUM(total_complaints) AS complaints
+        FROM public.gold_om_meter_complaints_agg
+        GROUP BY zone, sat_status
+        ORDER BY repeat_meters DESC
+
+  om_productivity:
+    domain: wfm
+    title: "O&M productivity per team"
+    description: "ONLY for O&M complaint/ticket work (a question naming O&M, complaints or tickets) - plain 'productivity' / 'per team' is mi_productivity. O&M closed tickets (QC + non-QC by work completion), active technicians, tickets per technician per day, monthly trend, top performers and technicians needing support."
+    keywords: [o&m productivity, om productivity, complaint productivity, tickets per technician, closed complaints, resolution speed, top performer, requires support, best technician, worst technician, maintenance team, o&m trend, active months]
+    tables: [gold_om_technician_productivity_day_agg, unified_complaints, unified_non_qc_complaints]
+    answer_notes:
+      - "A named technician: when several stored names match, say how many match and give each one's project and productivity; the grouping is project (not zone) unless the result has a zone column."
+    rules:
+      - "public.gold_om_technician_productivity_day_agg, ALWAYS category <> 'ALL' (sum per-category rows); one category = category = 'X'. period_start = closing (work completed) date."
+      - "Closed tickets = SUM(complaint_count); active technicians = COUNT(DISTINCT technician_name); productivity per technician per day = ROUND(SUM(complaint_count)::numeric / NULLIF(SUM(technician_day_count), 0), 2); active days = COUNT(DISTINCT period_start); active months = COUNT(DISTINCT date_trunc('month', period_start))."
+      - "No date given = last 30 days ending yesterday (period_start BETWEEN CURRENT_DATE - 31 AND CURRENT_DATE - 1); the monthly trend card defaults to the last 13 months (from the 1st). Say the default was used; 'all time' removes it."
+      - "'O&M productivity' / 'per team' = the team measure (pooled closed tickets / pooled technician-days), per project with a ROLLUP 'Total' row -- never one row per technician. Per-technician rows only when technicians, top / bottom performers or a named technician are asked."
+      - "A named technician: technician_name ILIKE '%<name>%' (stored names carry prefixes / suffixes / IDs), no place filter unless the question states one; GROUP BY project, technician_name so every matching technician is listed with closed tickets, technician-days and productivity."
+      - "Top performer / requires support: GROUP BY technician_name ORDER BY productivity DESC (ASC), closed tickets DESC (ASC), name; default 10."
+      - "Ticket rows (Athena): unified_complaints (QC) and unified_non_qc_complaints (non-QC) WHERE work_completed_at IS NOT NULL AND NULLIF(TRIM(technician_name), '') IS NOT NULL - one query per table, need a technician or <= 31 days."
+      - "Not MI productivity tables."
+    example:
+      question: "Top 10 O&M technicians in Agra last month"
+      sql: |
+        SELECT technician_name AS technician,
+               ROUND(SUM(complaint_count)::numeric / NULLIF(SUM(technician_day_count), 0), 2) AS productivity,
+               SUM(complaint_count) AS closed_tickets,
+               SUM(technician_day_count) AS technician_days
+        FROM public.gold_om_technician_productivity_day_agg
+        WHERE category <> 'ALL' AND LOWER(project) = 'agra'
+          AND period_start >= (date_trunc('month', CURRENT_DATE) - INTERVAL '1 month')::date
+          AND period_start < date_trunc('month', CURRENT_DATE)::date
+        GROUP BY technician_name
+        ORDER BY productivity DESC, closed_tickets DESC, technician
+        LIMIT 10
+
+  supply_funnel:
+    domain: wfm
+    title: "Supply-to-collection funnel"
+    description: "End-to-end funnel supplied -> installed -> SAT done -> invoiced -> collected, the biggest drop-off between steps, with money outstanding."
+    keywords: [funnel, drop off, drop-off, biggest drop, leakage, bottleneck, supply to collection, end to end, where are we losing, conversion, collected meters, full funnel]
+    tables: [gold_dashboard_stats_snapshot, gold_mi_sat_invoice_snapshot, sat_milestones, revenue_receivables]
+    answer_notes:
+      - "Funnel: supplied -> installed -> SAT done -> lumpsum invoiced -> PMPM collected; the biggest drop-off is the largest 'lost' between consecutive steps."
+      - "Quote each step's conversion % exactly from RESULT (conversion_pct = this step / the previous step); never recompute it against another step."
+    rules:
+      - "Steps: Supplied = gold_dashboard_stats_snapshot.total_current_inventory_count (all projects only; leave out for one project); Installed = SUM(meter_count) of gold_mi_sat_invoice_snapshot; SAT done = FILTER sat_stage IS NOT NULL; Lumpsum invoiced = FILTER has_lumpsum_invoice; Lumpsum collected = meters of SAT batches whose sat_milestones row has lumpsum_collection_date (PMPM invoiced/collected alongside)."
+      - "Collection dates are per SAT batch (gmr_wfm_silver.sat_milestones, Athena) - a separate query; batch meters = snapshot GROUP BY LOWER(project), sat_stage."
+      - "Lost = previous step - step; % lost = lost / previous; biggest drop-off = largest lost. Add money outstanding (invoiced - realised per stream) from latest revenue_receivables rows."
+      - "Project filter only; no zone/category/dates."
+    example:
+      question: "Where is the biggest drop-off in the supply-to-collection funnel?"
+      sql: |
+        SELECT (SELECT total_current_inventory_count FROM public.gold_dashboard_stats_snapshot WHERE singleton) AS supplied,
+               SUM(meter_count) AS installed,
+               COALESCE(SUM(meter_count) FILTER (WHERE sat_stage IS NOT NULL), 0) AS sat_done,
+               COALESCE(SUM(meter_count) FILTER (WHERE has_lumpsum_invoice), 0) AS lumpsum_invoiced,
+               COALESCE(SUM(meter_count) FILTER (WHERE has_pmpm_invoice), 0) AS pmpm_invoiced
+        FROM public.gold_mi_sat_invoice_snapshot
+
+  dashboard_stats:
+    domain: wfm
+    title: "Dashboard headline stats and watchlist"
+    description: "Home-page headline numbers (installed, SAT %, stock, journey, invoiced, PMPM collected), their change since a date, one-line status, and which numbers to worry about today."
+    keywords: [dashboard, headline, overview, summary, status, one line, quick update, kpis, program status, what to worry about, red flags, watchlist, concerns, since last week, home page, overall numbers]
+    tables: [gold_dashboard_stats_snapshot, gold_mi_installation_day_agg, gold_meter_inventory_event_day_agg, gold_inventory_monthly_balance]
+    answer_notes:
+      - "Any SAT % must name its base: SAT / eligible MI is 'of eligible meters' (the higher figure), SAT / total MI is 'of installed meters'."
+      - "sat_percent on the home page = SAT meters / ELIGIBLE MI (not programme completion, not SAT / installed). Describe it as 'SAT % of eligible meters'. SAT and invoice snapshots have no history, so week-over-week change exists only for installs, supply and stock."
+    rules:
+      - "public.gold_dashboard_stats_snapshot WHERE singleton (one global row, refreshed_at): total_meter_installations, meter_installed_on_last_day, total_sat_meters, sat_percent, total_current_inventory_count, total_current_remaining_stock_count, total_journey_completed_meters, average_meter_journey_days, total_invoice_done_meters, total_pmpm_collection_done_meters. JSONB series (monthly_installations, sat_stage_trend, ...) are chart data only. Place-scoped asks go to the KPI topics."
+      - "As of / change since a date: recompute from dated tables - installed = SUM(meter_count) FILTER (WHERE period_start <= d) of gold_mi_installation_day_agg with MI eligibility; received = SUM(inventory_count), remaining = SUM(inventory_count - stock_consumed_count) with period_start <= d. SAT has no dated history - say so."
+      - "Watchlist (top 3 unless N asked), flag when: open tickets older than 60 days > 20% of open; installed meters waiting > 90 days for SAT > 3% of installed, or no SAT batch for 30 days; no invoice for 45 days or lumpsum outstanding > 20%; revenue not realized > 60 days > 5% of SAT; last 7 days' installs > 20% below the 7 before; any stock cover < 30 days; defect rate > 1.5%. Severity = value / threshold - 1 (cap 3)."
+    example:
+      question: "Give me the dashboard headline numbers"
+      sql: |
+        SELECT refreshed_at, total_meter_installations, meter_installed_on_last_day, total_sat_meters,
+               sat_percent, total_current_inventory_count, total_current_remaining_stock_count,
+               total_journey_completed_meters, average_meter_journey_days, total_invoice_done_meters,
+               total_pmpm_collection_done_meters
+        FROM public.gold_dashboard_stats_snapshot
+        WHERE singleton
+
+  meter_lookup:
+    domain: wfm
+    title: "Single meter / consumer / ticket lookup"
+    description: "Status of one meter serial, consumer number or O&M ticket / complaint number: installation details, SAT batch, stock/custody, replacement, ticket status, technician, work completion."
+    keywords: [meter serial, serial number, meter no, this meter, status of meter, consumer number, is meter sat done, was meter replaced, meter details, who installed meter, meter history, ticket on meter, ticket, ticket number, ticket no, status of ticket, complaints of consumer, complaints of meter, tickets of consumer, complaint history, ticket status, complaint number, complaint no, helpdesk ticket, which technician handled]
+    tables: [unified_installations, sat_meter_mappings, unified_smart_meter_inventory, unified_complaints, unified_active_complaints, unified_non_qc_complaints]
+    answer_notes:
+      - "Ticket dates: 'work completed on' is not 'closed on' -- call a ticket closed only when a closed date is shown. Say where it was found in plain words (open tickets / completed O&M work); 'not found' only when every source is empty."
+    rules:
+      - "ONE identifier = look in EVERY table that holds that kind of identifier together (UNION ALL of per-table SELECTs with the same columns, a found_in label in plain words), never one table only: 'not found' is said only when none of them has it. Identifiers are stored as TEXT: compare TRIM(col) = '<value exactly as typed>' -- never add prefixes (no 'TKT-') or change the value. Digits-only values (consumer / ticket numbers) can carry leading zeros ('0061239000'): match regexp_replace(TRIM(col), '^0+', '') = regexp_replace('<value>', '^0+', '')."
+      - "Ticket / complaint number: gmr_wfm_silver.unified_active_complaints (ticket_id or complaint_no; complaint_status, complaint_type, complaint_created_date = raised on) UNION ALL gmr_wfm_silver.unified_non_qc_complaints (helpdesk_ticket_id or complaint_no; status from dates: closed_date -> 'Closed', work_completed_at -> 'Work completed'; sub_complaint_type). Both: project, zone, division, consumer_number, old_meter_serial_number, technician_name. created_at / ingested_at are load times, never the raised date. A ticket in both = current status from the active feed, completion from non-QC."
+      - "Tickets / complaints of one meter / consumer / technician: the same two tables PLUS gmr_wfm_silver.unified_complaints (QC complaint work: sub_complaint_type, work_completed_at, no ticket number), by meter (TRIM(old_meter_serial_number) = 'X' OR TRIM(new_meter_serial_number) = 'X' where the table has both; non-QC has only old) / TRIM(consumer_number) = 'X' or technician_name ILIKE '%<name>%', newest first, LIMIT 200. Return the ticket ROWS (status, type, technician, dates), never only a count -- the answer gives the count and the latest status from them."
+      - "Athena gmr_wfm_silver tables, exact match first: new_meter_serial_number (letters + digits, e.g. 'CA6028422') vs consumer_number (digits only) - match the column to the value's format; latest row by updated_at DESC. Normalised fallback: regexp_replace(upper(trim(col)), '[^A-Z0-9]+', '') = 'X'."
+      - "Installation: unified_installations (mi_date, report_category, new_meter_type, new_meter_make, project..sub_division, technician_name, agency). SAT: sat_meter_mappings.meter_serial_number -> sat_number; batch dates from sat_milestones on project + sat_number (declared joins); eligible if mi_date <= project cutoff (Postgres sat_eligibility_config, separate query)."
+      - "Stock/custody: unified_smart_meter_inventory (meter_serial_number, di_date, warehouse, sku, manufacturer, meter_status, gmr_to_agency_ts, agency_to_sup_ts, sup_to_tech_ts, installed_ts)."
+      - "Replacement: unified_complaints with old/new_meter_serial_number both set and work_completed_at set; O&M tickets: unified_non_qc_complaints / unified_active_complaints by old_meter_serial_number."
+      - "MDM readings (consumption, voltage, theft) are not here."
+      - "Never look a meter serial up in unified_smart_meter_asset (network / GIS master, not a meter status table). Search inventory, installations and SAT mappings together (FULL OUTER JOIN of one-row CTEs) so a meter found in any of them is found."
+      - "'Current stage' / 'which stage' of ONE meter = furthest step reached, named as the dashboard workflow stages: SAT batch SAT-1..13 with PMPM collection -> Revenue realized; SAT batch -> SAT to Revenue; installed (installations row or installed_ts) -> Installation to SAT; sup_to_tech_ts -> Technician to Installation; agency_to_sup_ts -> Supervisor to Technician; gmr_to_agency_ts -> Agency to Supervisor; else in stock -> DI to Agency."
+    example:
+      question: "When was meter CA6028422 installed and by whom?"
+      sql: |
+        SELECT new_meter_serial_number AS meter_serial, consumer_number, mi_date AS installed_on,
+               report_category AS category, new_meter_type AS meter_type, new_meter_make AS make,
+               project, zone, division, technician_name AS technician, agency
+        FROM gmr_wfm_silver.unified_installations
+        WHERE new_meter_serial_number = 'CA6028422'
+        ORDER BY updated_at DESC
+        LIMIT 5
+
+  mdm_autoindexing:
+    domain: mdm
+    title: "MDM feeder auto-indexing (consumer-feeder tagging audit)"
+    description: "Meters audited, confirmed, reassigned, review, no data, pending verification counts and % by project/discom/zone/circle/division; one feeder's or consumer's tagging status; substation rankings."
+    keywords: [auto indexing, autoindexing, feeder mapping, feeder tagging, mapping audit, confirmed, reassign, reassigned, re-tag, review, no data, pending verification, meters audited, feeder count, substation, correct tagging, confidence, system feeder, ai feeder]
+    tables: [hierarchy_summary_autoindexing, feeder_ranking_autoindexing, consumer_detail_autoindexing]
+    answer_notes:
+      - "Confirmed = declared feeder matches outage evidence; Reassign = evidence points to another feeder (ready to re-tag); Review = inconclusive evidence, needs a field check; No data = never seen in an outage window. Auto-indexing CONCLUDED (complete / done) = Confirmed + Reassigned; PENDING (pending verification) = Review + No data (target 0). Concluded + pending = meters audited. When giving the concluded or pending figure, name its two parts with their numbers (e.g. '<X>% concluded: <A> confirmed + <B> reassigned')."
+      - "Correct feeder tagging drives feeder/DT energy accounting, AT&C loss calculation, outage attribution and reliability indices."
+    rules:
+      - "hes_gold.hierarchy_summary_autoindexing is a CUBE (levels project, discom, zone, circle, division): pin the asked level, set every level before it IS NOT NULL (project: pinned value or IS NULL, never bare NOT NULL), every level after it IS NULL. Grand total = all five IS NULL. Read the stored columns, never SUM: meters_audited, feeder_count, substation_count, confirmed_number/_pct, reassign_number/_pct, review_number/_pct, no_data_number/_pct, auto_indexing_concluded_number/_pct (= confirmed + reassign), pending_verification_number/_pct (= review + no data). '%' asks use *_pct. Project values title-case ('Kashi'); compare LOWER()."
+      - "hes_gold.feeder_ranking_autoindexing: one row per feeder_code (unique; feeder names repeat - filter feeder name then show one row per feeder_code, never sum them; add feeder IS NOT NULL for listings). mi = consumers declared (correct_tagging + reassign_out + review + no_data); confidence = coverage %, not accuracy. Substation ranking = SUM(metric)/SUM(mi) GROUP BY substation. For scoped reassign totals use the hierarchy table."
+      - "hes_gold.consumer_detail_autoindexing: one row per consumer; status 'CONFIRMED','REASSIGN','REVIEW','NO DATA'; re_tag_to/evidence are '-' unless REASSIGN; AI feeder = CASE WHEN status = 'CONFIRMED' THEN system_feeder WHEN status = 'REASSIGN' THEN re_tag_to END."
+      - "No stored target for pending verification: the gap is today's pending (target 0)."
+    example:
+      question: "Confirmed, reassigned and review % zone-wise in Kashi"
+      sql: |
+        SELECT zone AS zone, meters_audited AS meters_audited,
+               confirmed_pct AS confirmed_pct, reassign_pct AS reassigned_pct,
+               review_pct AS review_pct, no_data_pct AS no_data_pct
+        FROM hes_gold.hierarchy_summary_autoindexing
+        WHERE LOWER(project) = 'kashi' AND discom IS NOT NULL AND zone IS NOT NULL
+          AND circle IS NULL AND division IS NULL
+        ORDER BY zone
+
+# Domain words people use -> the programme's own terms. Retrieval only: the
+# query is expanded with these before BM25 + embedding search (never changes
+# the question the LLM answers).
+retrieval_synonyms:
+  shipped: supplied supply
+  delivered: supplied supply
+  received: supplied supply
+  fitted: installed installation
+  put in: installed installation
+  went in: installed installation
+  lage: installed installation
+  lagaye: installed installation
+  acceptance testing: SAT
+  acceptance: SAT
+  maker: OEM
+  manufacturer: OEM
+  vendor: OEM
+  brand: OEM
+  fail: defective defect rate faulty
+  kharab: defective defect
+  jala: burnt
+  money: receivables collection invoiced realised
+  stuck with the discom: outstanding receivables collection efficiency
+  owes: outstanding receivables
+  dues: outstanding receivables
+  bill: invoice
+  billing: invoice PMPM
+  run dry: stock last days
+  run out: stock last days
+  kitne din: how many days
+  re-tag: reassign re-tagged feeder tagging auto-indexing
+  retag: reassign re-tagged feeder tagging auto-indexing
+  field check: review pending verification
+  four months: 120 days
+  three months: 90 days
+  outrunning: keeping pace supply installation
+  through sat: SAT rate percentage
+  best to worst: rank SAT percentage by project
+  invoice nahi: not invoiced
+  pending: pending
+  technician: productivity
+  per day among technicians: top performer productivity
+
+explain_only:
+  mi_progress: "Meters installed (KPI 1): rows with a meter serial, category resolved and not a replacement; SUM(meter_count) of gold_mi_installation_*."
+  total_mi: "Every installed meter incl. replacements, whatever its date (SAT card denominator)."
+  eligible_mi: "Installed meters with installation date on/before the project's SAT eligibility cutoff (sat_eligibility_config) - due for SAT now."
+  total_sat: "Meters in a SAT batch SAT-1..SAT-13. % SAT vs MI = Total SAT / Total MI; % SAT vs eligible = Total SAT / Eligible MI (can exceed 100%)."
+  sat_batch: "A SAT (site acceptance test) batch per project, numbered SAT-n, with SAT, invoice and collection dates in sat_milestones."
+  lumpsum: "One-time payment per meter, invoiced per SAT batch after SAT; % = lumpsum-invoiced meters / Total SAT."
+  pmpm: "Per Meter Per Month recurring payment that starts after SAT, invoiced per batch; % = PMPM-invoiced meters / Total SAT."
+  non_sat: "Eligible meters (installed on/before the cutoff) with no SAT batch yet, aged from installation in 30-day bands."
+  defective_meter: "The OLD meter taken out in a completed replacement complaint, typed Meter Faulty, Meter Burnt or Others (Others includes load enhancement/reduction swaps)."
+  replacement_install: "The NEW meter fitted in place of a defective one: excluded from MI progress, productivity and the defect-rate base; counted in stock, SAT and non-SAT."
+  defect_rate: "Meter Faulty replacements / installed meters (non-replacement, OEMs with defects) x 100; burnt and others are not in the numerator."
+  mi_productivity: "Productivity per team (MI Productivity page) = meters installed / technician-days, where a technician-day is one technician working on one day; the page sums the per-category rows (Consumer, DT, Feeder). Replacements are excluded. E.g. 300 installs by 100 technician-days = 3.0."
+  utilization_rate: "Cumulative installed / cumulative received into stock x 100."
+  remaining_stock: "Received into stock - consumed (installed with a stock record + scrapped)."
+  unutilized_stock: "Meters received but never installed or scrapped; age = days since DI (delivery) date."
+  di_date: "Delivery/intake date when a meter was received into GMR stock."
+  stock_cover: "Days the remaining stock lasts = stock / average meters leaving stock per day (default last 6 months)."
+  journey_time: "Average days between handoffs DI -> agency -> supervisor -> technician -> installed -> SAT -> PMPM collected, as ratios of summed days to meters."
+  current_stage: "Where a meter without realized revenue sits now: inventory, agency, supervisor, technician, installed SAT pending, SAT done revenue pending."
+  revenue_not_realized: "SAT-done meters whose batch has no PMPM collection date, aged from the SAT date (IST)."
+  receivables: "Operator-entered rupee amounts (crore) per project and stream: invoiced, realised, realised within timeline; outstanding = invoiced - realised."
+  om_open_ticket: "Any row in the active complaints feed (RESOLVED included), aged from complaint creation at the last refresh."
+  om_productivity: "Closed QC + non-QC complaints by work completion / technician-day rows."
+  om_closed_analysis: "Non-QC tickets counted by closed_date in IST; closed_date is rarely filled, so it understates closures."
+  confirmed: "Auto-indexing: the consumer's declared feeder matches the outage evidence."
+  reassign: "Auto-indexing: evidence points to a different feeder (re_tag_to)."
+  review: "Auto-indexing: evidence exists but is inconclusive; needs manual check."
+  no_data: "Auto-indexing: consumer never seen in any feeder's outage window, so no evidence."
+  auto_indexing_concluded: "Auto-indexing concluded (complete) = Confirmed + Reassigned consumers: a feeder decision has been reached."
+  pending_verification: "Auto-indexing pending = Review + No data consumers still needing a decision (target 0)."
+  mdm_mi: "In MDM tables 'mi' means meters indexed (consumers declared to a feeder), not meter installation."

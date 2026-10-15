@@ -1,0 +1,2957 @@
+# WFM dashboard KPI definitions -- lineage, detection logic and formulas (loaded by
+# schema/kpi_definitions.py into SilverTable / GoldTable / KPI objects).
+#
+# "{GOLD_JOB}" in any text is replaced by gold_job below when loaded.
+# Every entry was verified against the ETL and dashboard code (file:line references
+# in document/WFM_KPI_Data_Lineage.md); where the formula doc disagrees with the
+# code, the CODE is what is written here.
+
+gold_job: gmr-etl/src/infrastructure/gold_transformer/emr_serverless/jobs/iceberg_gold_transform_emr_job.py
+
+# --------------------------------------------------------------------------- #
+# Pipeline overview
+# --------------------------------------------------------------------------- #
+pipeline_steps:
+  - step: 1. SmartEMS API
+    detail: >-
+      CSV reports pulled by the ETL: installations (DMIQC/CMIQC/CNSQC/FMIQC), complaints (DOMQC/COMQC/FOMQC),
+      warehouse stock INVSMM; SAT meter lists are CSVs uploaded via the backend.
+  - step: 2. Bronze
+    detail: >-
+      Raw Parquet on S3, plus lineage columns injected at ingest (discom, sku, warehouse, report, source_file_key).
+  - step: 3. Silver (Iceberg)
+    detail: >-
+      Headers renamed to snake_case, blank strings/invalid dates cleaned, report_category derived from the report
+      code, a business-key hash per row, QC1/QC2/QC3 versions consolidated into one row, MERGE INTO
+      silver_catalog.silver.<table> (queried here as gmr_wfm_silver.<table>).
+  - step: 4. SAT enrichment
+    detail: >-
+      sat_meter_mappings (meter -> SAT batch, from the uploaded SAT CSVs) and sat_milestones (SAT dates and invoice
+      dates, from Postgres milestone_config).
+  - step: 5. Gold (Spark)
+    detail: >-
+      ONE EMR Spark job reads Silver and computes every gold_* read model -- a FULL recompute on every run, no
+      incremental logic.
+  - step: 6. Postgres publish
+    detail: >-
+      Each gold table is COPY'd to a stage table, then TRUNCATE + INSERT in one transaction into public.gold_* --
+      readers see the old data until the swap commits.
+  - step: 7. Dashboard API
+    detail: >-
+      gmr-backend's kpi_catalog/<kpi>.py runs parameterised SQL over the gold tables (filters, row-level security)
+      and shapes the JSON each dashboard card shows.
+
+spark_views:
+  - view: installations_raw
+    detail: gmr_wfm_silver.unified_installations -- the main meter-installation (MI) population.
+  - view: replacement leg
+    detail: >-
+      unified_complaints rows with old AND new meter serial present AND work_completed_at set: an SM-to-SM
+      replacement. mi_date = date(work_completed_at), report_category = complaint_entity_type, latest row per new
+      serial, serials already in installations removed.
+  - view: installations_all
+    detail: >-
+      installations_raw (is_replacement=FALSE) UNION the replacement leg (is_replacement=TRUE), plus the latest
+      sat_meter_mappings row per serial (mapping's sat_number wins).
+  - view: installations
+    detail: installations_all WHERE NOT is_replacement -- the MI-only population (KPIs 2 and 3).
+  - view: inventory_latest / installations_latest
+    detail: Latest-wins row per normalised serial (ORDER BY updated_at DESC, ingested_at DESC, ...).
+
+serial_normalisation: regexp_replace(upper(trim(serial)), '[^A-Z0-9]+', '') -- used for every serial join in the gold job.
+
+warehouse_project_map:
+  kashi: AZAMGARH_ZW, BALLIA_SWH, MAU_SWH, CHANDAULI_SWH, GHAZIPUR_SWH, JAUNPUR_SWH, VARANASI_HW
+  triveni: PRAYAGRAJ_HW, MIRZAPUR_ZW
+  agra: AGRA_HW, ALIGARH WAREHOUSE
+  unassigned: any other warehouse
+
+replacement_rule: >-
+  An SM-to-SM replacement (new smart meter fitted in place of a failed one) is detected from COMPLAINTS:
+  old_meter_serial_number and new_meter_serial_number both non-blank and work_completed_at set. It is added to the
+  installation population with is_replacement=TRUE. EXCLUDED from KPIs 1, 2, 3 and KPI 4's denominator; INCLUDED in
+  KPIs 5, 6, 7, 8, 9.
+
+silver_tables:
+  unified_installations:
+    name: unified_installations
+    source: 'SmartEMS installation reports: CMIQC (consumer), CNSQC (consumer), DMIQC (DT), FMIQC (feeder)'
+    load_style: CMIQC/CNSQC/DMIQC date-windowed (monthly chunks); FMIQC an authoritative snapshot
+    business_key: >-
+      project + discom + report_category + new_meter_serial_number + mi_date (SHA-256 hash) -- the same serial on a
+      different date/report is a separate row
+    columns:
+      project: raw header 'cluster' (agra / kashi / triveni)
+      "discom, zone, circle, division": same-named headers
+      sub_division: '''subdivision'' / ''sub_division'' / ''subdivisioncode'' / ''subdivison'''
+      mi_date: '''installation date'' / ''installationdate'' / ''midate'' / ''mi date'' -- cleaned to a yyyy-MM-dd DATE'
+      new_meter_serial_number: '''new meter serial number'' / ''newmeternumber'' / ''new_meter_number'''
+      new_meter_type: '''new meter type'' (meter model code, e.g. 1PH-STSM, 3PLTCTSM, HTCTPTSM)'
+      new_meter_make: '''new meter make'' (OEM)'
+      technician_name: '''technician name'' / ''technicianname'' / ''technician'''
+      agency: '''agency'' (present in Silver but not carried into any gold table)'
+      sat_number: '''satnumber'' / ''sat_number'' -- overridden by sat_meter_mappings in gold'
+      report_category: >-
+        DERIVED from the report code in source_file_key: FMIQC->FEEDER, DMIQC->DTR, CMIQC->CONSUMER, anything else
+        (CNSQC)->CONSUMER
+    aliases:
+      - installation silver
+      - installations table
+  unified_complaints:
+    name: unified_complaints
+    source: 'SmartEMS complaint (O&M) reports: COMQC (consumer), DOMQC (DT), FOMQC (feeder)'
+    load_style: COMQC/DOMQC date-windowed; FOMQC an authoritative snapshot
+    business_key: >-
+      complaint_entity_type + discom + sub_complaint_type + first non-empty identifier (new serial, old serial,
+      consumer number, feeder)
+    columns:
+      old_meter_serial_number: '''osm number'' / ''oldmeternumber'' / ''old_meter_number'' -- the meter taken OUT'
+      new_meter_serial_number: '''nsm number'' / ''newmeternumber'' / ''new_meter_number'' -- the meter put IN'
+      new_meter_type: '''nsm type'''
+      sub_complaint_type: '''sub complaint type'' / ''subcomplainttype'' -- the defect text used by KPI 4'
+      work_completed_at: '''work completed'' / ''workcompleted'' -- completion timestamp (defective date / replacement mi_date)'
+      technician_name: '''technician name'''
+      complaint_entity_type: 'DERIVED from the report name: FOM*->FEEDER, DOM*->DTR, COM*->CONSUMER'
+    aliases:
+      - complaints silver
+      - complaint table
+  unified_smart_meter_inventory:
+    name: unified_smart_meter_inventory
+    source: SmartEMS INVSMM (warehouse stock status), fetched per discom x warehouse x SKU
+    load_style: >-
+      Authoritative snapshot -- every run reconciles the whole table (a meter SmartEMS stops reporting disappears
+      from history too)
+    business_key: upper(warehouse) + upper(sku) + meter_serial_number
+    columns:
+      di_date: '''didate'' / ''di date'' -- stock intake (dispatch/DI) date; the age anchor for KPI 7'
+      meter_serial_number: '''meterserialnumber'' / ''meter serial number'''
+      meter_type: '''metertype'''
+      manufacturer: '''manufacturer'' (OEM)'
+      "sku, warehouse, discom": injected by the ingest request (not report columns)
+      "agency, supervisor, technician_name": custody chain -- gives KPI 7's current_stage
+      project: '''cluster'' -- NOT used by gold; gold takes project from the warehouse instead'
+    aliases:
+      - inventory silver
+      - stock table
+      - inventory table
+  sat_meter_mappings:
+    name: sat_meter_mappings
+    source: SAT meter-list CSVs uploaded through the dashboard backend ({sat_prefix}/{SATn}/{PROJECT}.csv)
+    load_style: >-
+      Upsert; serial normalised to A-Z0-9, SAT value upper-cased with whitespace removed; first SAT seen per serial
+      wins
+    business_key: meter_serial_number
+    columns:
+      meter_serial_number: normalised meter serial
+      sat_number: SAT batch, e.g. SAT-1 ... SAT-13
+      project: from the CSV file name (AGRA/KASHI/TRIVENI)
+    aliases:
+      - sat mapping
+  sat_milestones:
+    name: sat_milestones
+    source: Postgres milestone_config (maintained in the dashboard backend)
+    load_style: Upsert
+    business_key: project + sat_number (sat_number alone repeats across projects)
+    columns:
+      sat_date: date the SAT batch was accepted
+      lumpsum_invoice_date: set once the lumpsum invoice for that SAT batch is raised
+      pmpm_invoice_date: set once the PMPM invoice for that SAT batch is raised
+    aliases:
+      - sat milestone
+
+gold_tables:
+  gold_mi_installation_day_agg:
+    name: gold_mi_installation_day_agg
+    built_by: _installation_day_sql() in {GOLD_JOB} (lines 759-873)
+    sources:
+      - gmr_wfm_silver.unified_installations (via installations_all)
+      - gmr_wfm_silver.unified_complaints (replacement leg, flagged is_replacement)
+      - gmr_wfm_silver.sat_meter_mappings (sat_number override)
+      - 'gmr_wfm_silver.unified_smart_meter_inventory (OEM fallback: latest manufacturer per serial)'
+    grain: >-
+      one row per installation day x project x geography x OEM x category x meter type x SAT flags x is_replacement;
+      meter_count = count(*) of Silver installation rows in that combination
+    used_by:
+      - 1
+      - 4
+      - 9
+    columns:
+      "period_start / period_end": cast(mi_date AS date) -- the installation date (both equal on the day table)
+      "project, discom, zone, circle, division, sub_division": lower(trim(...)) of the Silver values
+      oem: coalesce(new_meter_make, inventory.manufacturer, 'Unknown')
+      progress_category: >-
+        from report_category: CONSUMER->CONSUMER, FEEDER->FEEDER, DT or DTR->DT, else NULL -- the category KPI 1 (MI
+        Progress) uses
+      inventory_category: >-
+        report_category if valid, else new_meter_type 3PLTCTSM->DT, HTCTPTSM->FEEDER, else CONSUMER -- used by the
+        SAT/ageing KPIs
+      progress_meter_type: >-
+        narrow map of new_meter_type: 1PH-STSM/NSM1-PH/NBSM-1PH->1PH-Consumer_meter;
+        3PH-STSM/NSM3-PH/NBSM-3PH->3PH-Consumer_meter; 3PLTCTSM->LTCT-Consumer_meter; HTCTPTSM->HTCT-Consumer_meter;
+        anything else NULL
+      inventory_meter_type: extended map (adds 3PNMLTSM/3PNBLTSM->3PH, 3LTTOUSM/LTNBTOUS->LTCT, HT-TOUSM/HTNBTOUS->HTCT); else NULL
+      has_meter_serial: new_meter_serial_number is not blank
+      is_replacement: TRUE for SM-to-SM replacement rows that came from unified_complaints
+      "has_sat_number / sat_is_null": sat_number present / absent
+      is_non_sat_pending: sat_number blank OR equals 'SATPENDING' (whitespace removed, upper-cased)
+      sat_stage: 'sat_number normalised: ''SAT-1''..''SAT-13'' -> 1..13, anything else NULL'
+      meter_count: count(*) -- number of Silver installation rows (installation events, not distinct meters)
+  gold_mi_installation_month_agg:
+    name: gold_mi_installation_month_agg
+    built_by: _write_period_outputs() month roll-up of gold_mi_installation_day_agg in {GOLD_JOB} (lines 2825-2839)
+    sources:
+      - gold_mi_installation_day_agg (same columns)
+    grain: >-
+      one row per month x the same dimensions; period_start = first of month, period_end = last day, meter_count =
+      sum(meter_count)
+    used_by:
+      - 1
+      - 4
+    columns:
+      meter_count: sum of the day table's meter_count for that month
+      "period_start / period_end": trunc(date,'MM') / last_day(date)
+  gold_mi_technician_productivity_day_agg:
+    name: gold_mi_technician_productivity_day_agg
+    built_by: _mi_technician_day() in {GOLD_JOB} (lines 1303-1384)
+    sources:
+      - gmr_wfm_silver.unified_installations via the MI-only `installations` view (NO replacements)
+    grain: >-
+      one row per date x project x geography x technician_name x category x meter_type, plus rows with
+      category='ALL' (no category split); rows need mi_date, a serial and a technician_name
+    used_by:
+      - 2
+      - 3
+    columns:
+      technician_name: trimmed Silver technician_name -- the unit productivity is measured on
+      category: 'from new_meter_type: 3PLTCTSM->DT, HTCTPTSM->FEEDER, else CONSUMER; ''ALL'' = rollup rows'
+      meter_type: extended meter-type map (1PH/3PH/LTCT/HTCT-Consumer_meter)
+      installation_count: count(*) of installations
+      technician_day_count: '1 on every day row (month table: number of day rows)'
+      active_days: '1 on every day row (month table: number of day rows)'
+  gold_mi_technician_productivity_month_agg:
+    name: gold_mi_technician_productivity_month_agg
+    built_by: month roll-up of gold_mi_technician_productivity_day_agg
+    sources:
+      - gold_mi_technician_productivity_day_agg
+    grain: one row per month x the same dimensions
+    used_by:
+      - 2
+    columns:
+      installation_count: SUM over the month
+      "technician_day_count / active_days": count(*) of day rows for that technician/combination
+  gold_mi_productivity_trend_month_agg:
+    name: gold_mi_productivity_trend_month_agg
+    built_by: _mi_productivity_trend() in {GOLD_JOB} (lines 1387-1491)
+    sources:
+      - gold_mi_technician_productivity_day_agg (KPI 2's day grain) -> unified_installations
+    grain: >-
+      a pre-aggregated cube: one row per month x project ('ALL' or real) x filter scope (filter_level/filter_label)
+      x comparison scope (aggregate_level/label) x category ('ALL' or real) x meter_type
+    used_by:
+      - 3
+    columns:
+      "filter_level / filter_label": 'the WHERE-scope: ''all''/''zone''/''circle''/''division''/''sub_division'' and its value'
+      "aggregate_level / label": 'the GROUP-BY scope: ''all''/''project''/''discom''/''zone''/''circle''/''division''/''sub_division'''
+      total_installations: sum of installations
+      active_days: count(DISTINCT mi_date) in the group
+      active_technicians: count(DISTINCT technician_name) in the group
+      technician_day_count: count of distinct (technician, date) pairs in the group
+  gold_meter_defect_event_day_agg:
+    name: gold_meter_defect_event_day_agg
+    built_by: _defect_fact() + _defect_day() in {GOLD_JOB} (lines 1655-1802)
+    sources:
+      - gmr_wfm_silver.unified_complaints (completed replacement complaints)
+      - gmr_wfm_silver.unified_smart_meter_inventory (OEM / meter type of the OLD meter)
+      - gmr_wfm_silver.unified_installations (fallback OEM / meter type)
+    grain: >-
+      one row per defective date x project x geography x category x meter_type x defective_type x
+      detailed_defective_type x OEM
+    used_by:
+      - 4
+    columns:
+      period_start: cast(work_completed_at AS date) -- the defective date
+      category: 'complaint_entity_type: DT/DTR->DT, FEEDER->FEEDER, else CONSUMER'
+      meter_type: >-
+        consumer rows only: coalesce(inventory type, installation type, complaint new_meter_type), extended map;
+        NULL otherwise
+      defective_type: >-
+        classified from cleaned sub_complaint_type: Meter Burnt / Meter Faulty / Meter Tampered / Meter Stop / Meter
+        Bypass / Others
+      detailed_defective_type: 'the cleaned sub_complaint_type text itself: upper(trim(...)) with quotes and non-breaking spaces removed'
+      oem: coalesce(inventory.manufacturer, installation.new_meter_make, 'Unknown') of the OLD meter
+      defect_count: count(*) of replacement complaint rows
+      defect_rate_numerator_count: count of rows where defective_type = 'Meter Faulty' (defect-rate numerator)
+  gold_meter_inventory_event_day_agg:
+    name: gold_meter_inventory_event_day_agg
+    built_by: _inventory_day() in {GOLD_JOB} (lines 1081-1255)
+    sources:
+      - gmr_wfm_silver.unified_smart_meter_inventory (inventory_latest)
+      - gmr_wfm_silver.unified_installations + replacement leg (installations_latest, replacements INCLUDED)
+      - gmr_wfm_silver.unified_complaints (old meters scrapped in a replacement = disposals)
+    grain: >-
+      one row per event date x project x discom x zone x circle x division x sub_division x category x meter_type
+    used_by:
+      - 5
+      - 6
+    columns:
+      inventory_count: 1 per meter on its DI date (received into stock)
+      installed_count: 1 per meter on its MI date (installed)
+      stock_consumed_count: >-
+        1 on the MI date if the installed meter had an inventory row, plus 1 on the disposal date for an uninstalled
+        meter scrapped as an old meter in a replacement
+      project: installation project if installed, else warehouse -> project map
+      "zone, circle, division, sub_division": from the INSTALLATION only -- NULL for meters still in stock
+      category: >-
+        inventory side: 3PLTCTSM/HTCTPTSM AND sku NOT LIKE '%CON%' -> DT/FEEDER, else CONSUMER; falls back to the
+        installation category
+      meter_type: coalesce(inventory, installation, 'OTHER-Consumer_meter'); DT/FEEDER stock keeps raw 3PLTCTSM/HTCTPTSM
+  gold_meter_inventory_event_month_agg:
+    name: gold_meter_inventory_event_month_agg
+    built_by: month roll-up of gold_meter_inventory_event_day_agg
+    sources:
+      - gold_meter_inventory_event_day_agg
+    grain: one row per month x the same dimensions (the three counts summed)
+    used_by:
+      - 5
+      - 6
+    columns:
+      "inventory_count / installed_count / stock_consumed_count": sums over the month
+  gold_inventory_unutilized_stock_snapshot:
+    name: gold_inventory_unutilized_stock_snapshot
+    built_by: _unutilized_stock() in {GOLD_JOB} (lines 1805-1884)
+    sources:
+      - gmr_wfm_silver.unified_smart_meter_inventory (inventory_latest)
+      - gmr_wfm_silver.unified_installations + replacement leg (serials that were installed)
+      - gmr_wfm_silver.unified_complaints (scrapped old meters)
+    grain: >-
+      one row per DI date x project x warehouse x current_stage x category x meter_type x SKU x OEM, counting
+      inventory meters that were never installed and never scrapped
+    used_by:
+      - 5
+      - 6
+      - 7
+    columns:
+      inventory_date: cast(di_date AS date) -- stock intake date; age = today - inventory_date
+      warehouse: coalesce(warehouse, 'UNASSIGNED')
+      project: warehouse -> project map
+      current_stage: >-
+        technician_name present -> 'technician', else supervisor -> 'supervisor', else agency -> 'agency', else
+        'warehouse'
+      "sku / oem": coalesce(sku,'UNKNOWN') / coalesce(manufacturer,'UNKNOWN')
+      stock_count: count(*) of unutilized meters
+  gold_mi_sat_invoice_day_agg:
+    name: gold_mi_sat_invoice_day_agg
+    built_by: _mi_sat_invoice_sql() in {GOLD_JOB} (lines 888-954)
+    sources:
+      - gmr_wfm_silver.unified_installations + replacement leg (replacements INCLUDED)
+      - gmr_wfm_silver.sat_meter_mappings (SAT number per meter)
+      - gmr_wfm_silver.sat_milestones (lumpsum / PMPM invoice dates)
+    grain: one row per installation date x project x geography x category x meter_type x SAT stage x invoice flags
+    used_by:
+      - 8
+      - 12
+    columns:
+      sat_stage: 'sat_number normalised: ''SAT-1''..''SAT-13'' -> 1..13, anything else NULL (= not SAT-done)'
+      has_lumpsum_invoice: sat_milestones.lumpsum_invoice_date IS NOT NULL for that project + SAT
+      has_pmpm_invoice: sat_milestones.pmpm_invoice_date IS NOT NULL for that project + SAT
+      meter_count: count(*) of installation rows
+  gold_mi_sat_invoice_snapshot:
+    name: gold_mi_sat_invoice_snapshot
+    built_by: _mi_sat_invoice_snapshot() in {GOLD_JOB} (lines 969-1018)
+    sources:
+      - gold_mi_sat_invoice_day_agg
+      - Postgres sat_eligibility_config (per-project SAT eligibility cutoff date, read at ETL time)
+    grain: >-
+      the day table with the date dropped: one row per project x geography x category x meter_type x sat_stage x
+      has_lumpsum_invoice x has_pmpm_invoice x is_sat_eligible
+    used_by:
+      - 8
+      - 12
+    columns:
+      is_sat_eligible: coalesce(mi_date <= that project's eligibility_cutoff_date, false) -- computed at ETL refresh time
+      sat_stage: 1..13 or NULL (NULL = not SAT-done)
+      meter_count: sum of meters
+  gold_non_sat_ageing_snapshot:
+    name: gold_non_sat_ageing_snapshot
+    built_by: _non_sat_ageing_snapshot() in {GOLD_JOB} (lines 1021-1077)
+    sources:
+      - 'gold_mi_installation_day_agg (in-job view: unified_installations + replacements + SAT mapping)'
+      - Postgres sat_eligibility_config (per-project cutoff)
+    grain: >-
+      one row per project x geography x category x meter_type x age_key, for Non-SAT-pending meters installed
+      on/before the project's SAT eligibility cutoff
+    used_by:
+      - 9
+    columns:
+      age_key: >-
+        datediff(ETL run date in Asia/Kolkata, mi_date): <=30 age_0_30, <=60 age_31_60, <=90 age_61_90, <=120
+        age_91_120, else age_120_plus -- frozen at ETL refresh time
+      "category / meter_type": inventory_category / inventory_meter_type of the installation
+      meter_count: sum of Non-SAT-pending meters
+  gold_meter_journey_stage_agg:
+    name: gold_meter_journey_stage_agg
+    built_by: _meter_journey() in {GOLD_JOB} (lines 1906-2014)
+    sources:
+      - 'gmr_wfm_silver.unified_smart_meter_inventory (inventory_latest: di_date + the 4 handoff timestamps)'
+      - >-
+          gmr_wfm_silver.unified_installations + replacement leg (installations_latest, replacements INCLUDED;
+          geography + sat_number)
+      - gmr_wfm_silver.sat_meter_mappings (sat_number override)
+      - gmr_wfm_silver.sat_milestones (sat_date, pmpm_collection_date per project + SAT batch)
+    grain: >-
+      one row per project x geography x installation_year x category x meter_type x is_replacement, holding SUMS of
+      elapsed days per stage and meter counts (not averages)
+    used_by:
+      - 10
+    columns:
+      installation_year: year(inventory installed_ts) -- NOT the installation report's mi_date
+      category: >-
+        inventory meter_type + sku: 3PLTCTSM AND sku NOT LIKE '%CON%' -> DT, HTCTPTSM AND sku NOT LIKE '%CON%' ->
+        FEEDER, else CONSUMER
+      meter_type: >-
+        consumer: 1PH/3PH/LTCT/HTCT/OTHER-Consumer_meter (unknown types -> OTHER); DT/FEEDER rows keep the raw
+        3PLTCTSM / HTCTPTSM
+      inventory_to_agency_days_sum: sum of (gmr_to_agency_ts - di_date) in fractional days
+      agency_to_supervisor_days_sum: sum of (agency_to_sup_ts - gmr_to_agency_ts) in days
+      supervisor_to_technician_days_sum: sum of (sup_to_tech_ts - agency_to_sup_ts) in days
+      technician_to_installation_days_sum: sum of (installed_ts - sup_to_tech_ts) in days
+      installation_to_sat_days_sum: sum of (sat_date - installed_ts) over meters whose SAT batch has a sat_date
+      sat_to_revenue_realized_days_sum: sum of (pmpm_collection_date - sat_date) over revenue-realized meters
+      total_journey_days_sum: sum of (pmpm_collection_date - di_date) over revenue-realized meters
+      meter_count: count(*) of eligible meters (all 5 inventory timestamps present and in order, and installed)
+      sat_meter_count: count(sat_date) -- denominator of installation_to_sat
+      revenue_realized_meter_count: count(pmpm_collection_date) -- denominator of sat_to_revenue_realized and total_journey
+      is_replacement: >-
+        TRUE for SM-to-SM replacement installs; KPI 12 includes them, the dashboard stats journey cards exclude them
+  gold_dashboard_stats_snapshot:
+    name: gold_dashboard_stats_snapshot
+    built_by: _dashboard_stats() in {GOLD_JOB} (lines 2394-2670)
+    sources:
+      - gold_mi_installation_day_agg (installations, last-day installs)
+      - gold_mi_sat_invoice_snapshot (SAT, SAT %)
+      - gold_meter_inventory_event_month_agg / gold_inventory_monthly_balance (inventory, remaining stock)
+      - gold_meter_journey_stage_agg (journey, MI-only)
+      - installations_all + sat_milestones (invoice / collection headlines)
+    grain: >-
+      ONE row (singleton = TRUE) of headline numbers plus JSONB series, recomputed every ETL run (refreshed_at);
+      read by GET /api/v1/dashboard/stats
+    used_by:
+      - 19
+    columns:
+      total_meter_installations: MI-Progress total (no replacements)
+      meter_installed_on_last_day: installations on the latest installation day in the data
+      total_sat_meters: meters with a parsable SAT-1..SAT-13 number
+      sat_percent: SAT meters / SAT-eligible installed meters x 100
+      total_current_inventory_count: meters ever received into stock (cumulative inventory)
+      total_current_remaining_stock_count: meters still in stock (received - consumed)
+      total_journey_completed_meters: revenue-realized meters in the journey table (MI only, no replacements)
+      average_meter_journey_days: total journey days / revenue-realized meters (MI only)
+      total_invoice_done_meters: installed meters whose SAT batch has a lumpsum or PMPM invoice date
+      "total_lumpsum_invoice_done_meters / total_pmpm_invoice_done_meters": lumpsum / PMPM invoiced meters
+      total_pmpm_collection_done_meters: meters whose SAT batch has a PMPM collection date
+      "monthly_installations / monthly_remaining_stock": JSONB [{month, count}] series for the home-page charts
+      remaining_stock_by_meter_type: JSONB [{meter_type, label, count}] for the Supply card hover
+      sat_stage_trend: JSONB [{sat_number, count}]
+      revenue_realized_stage_ageing: JSONB [{stage, meter_count, average_days}] -- journey stages, MI only
+  gold_inventory_monthly_balance:
+    name: gold_inventory_monthly_balance
+    built_by: _inventory_monthly_balance() in {GOLD_JOB} (lines 1259-1301)
+    sources:
+      - gold_meter_inventory_event_month_agg
+    grain: >-
+      one row per month x project x geography x category x meter_type WHERE that combination had an event that
+      month; the three counts are RUNNING (cumulative) totals up to that month
+    used_by:
+      - 19
+    columns:
+      inventory_count: cumulative meters received up to period_start's month
+      installed_count: cumulative meters installed
+      stock_consumed_count: cumulative meters consumed from stock (installs with a stock record + scrapped)
+      "period_start / period_end": the month
+  gold_om_open_ageing_snapshot:
+    name: gold_om_open_ageing_snapshot
+    built_by: _om_open_ageing_snapshot() in {GOLD_JOB} (lines 1586-1671)
+    sources:
+      - >-
+          gmr_wfm_silver.unified_active_complaints (EVERY row with a complaint_created_date -- no status filter, no
+          de-duplication)
+      - meter_type_lookup (inventory, then smart-meter asset table, by old_meter_serial_number)
+    grain: >-
+      one row per project x geography x category x meter_type x complaint_source x complaint_status x complaint_type
+      x age_key, ticket_count = count(*); age frozen at the ETL run date
+    used_by:
+      - 17
+    columns:
+      age_key: >-
+        datediff(ETL run date, complaint_created_date): <=7 age_0_7, <=15 age_8_15, <=30 age_16_30, <=60 age_31_60,
+        else age_60_plus
+      complaint_source: >-
+        complaint_by contains '1912' -> '1912'; AUTO / SYSTEM / HES / MDM (or containing AUTO / SYSTEM) -> 'AUTO';
+        anything else -> 'MANUAL'
+      complaint_status: >-
+        upper(trim(complaint_status)), blank -> 'OPEN' (UNASSIGNED, ASSIGNED, CAN NOT ATTEND, ESCALATED TO DISCOM,
+        WORK IN PROGRESS, RESOLVED, ACCEPTED, ON HOLD)
+      complaint_type: upper(trim(complaint_type)), blank -> 'OTHER'
+      category: 'complaint_entity_type: DT/DTR -> DT, FEEDER -> FEEDER, else CONSUMER'
+      meter_type: from meter_type_lookup by old_meter_serial_number
+      ticket_count: count(*) of active-complaint rows
+  gold_om_technician_productivity_day_agg:
+    name: gold_om_technician_productivity_day_agg
+    built_by: _om_technician_day() in {GOLD_JOB} (lines 1495-1583)
+    sources:
+      - gmr_wfm_silver.unified_complaints (QC closed complaints)
+      - gmr_wfm_silver.unified_non_qc_complaints (non-QC closed complaints)
+      - meter_type_lookup (inventory, then smart-meter asset table, by old_meter_serial_number)
+    grain: >-
+      one row per closing day x project x geography x technician_name x category x meter_type, plus 'ALL' rows
+      (category = 'ALL', meter_type NULL) summed across categories; only rows with work_completed_at and a
+      technician_name
+    used_by:
+      - 15
+    columns:
+      period_start: cast(work_completed_at AS date) -- the day the complaint was closed
+      technician_name: trimmed technician_name (a NAME, not an id -- two people with one name merge)
+      category: 'complaint_entity_type: DT/DTR -> DT, FEEDER -> FEEDER, else CONSUMER; ''ALL'' = rollup rows'
+      meter_type: 'from meter_type_lookup by old_meter_serial_number: 1PH/3PH/LTCT/HTCT/OTHER-Consumer_meter'
+      complaint_count: count(*) of closed complaints
+      technician_day_count: >-
+        1 on every row -- so SUM() counts ROWS (technician x day x geography x category x meter type), not distinct
+        technician-days
+      active_days: 1 on every row
+  gold_om_technician_productivity_month_agg:
+    name: gold_om_technician_productivity_month_agg
+    built_by: month roll-up of gold_om_technician_productivity_day_agg (_write_period_outputs)
+    sources:
+      - gold_om_technician_productivity_day_agg
+    grain: >-
+      one row per month x the same dimensions; complaint_count summed, technician_day_count / active_days = number
+      of day rows
+    used_by:
+      - 15
+    columns:
+      complaint_count: SUM over the month
+      "technician_day_count / active_days": count of day rows in the month
+  gold_revenue_ageing_snapshot:
+    name: gold_revenue_ageing_snapshot
+    built_by: _revenue_ageing_sql() in {GOLD_JOB} (lines 2084-2170)
+    sources:
+      - gmr_wfm_silver.unified_installations + replacement leg (installations_latest, with a sat_number)
+      - gmr_wfm_silver.sat_meter_mappings (sat_number override)
+      - 'gmr_wfm_silver.sat_milestones (INNER join: sat_date NOT NULL and pmpm_collection_date IS NULL)'
+      - 'gmr_wfm_silver.unified_smart_meter_inventory (LEFT join: category / meter_type, installation fallback)'
+    grain: >-
+      one row per sat_date x project x geography x category x meter_type, counting certified meters whose SAT batch
+      has no PMPM collection date -- NO age band is stored; bands are computed at query time
+    used_by:
+      - 14
+    columns:
+      sat_date: the SAT batch's certification date -- the age anchor (age = today in IST - sat_date)
+      category: >-
+        coalesce(inventory SKU rule, installation fallback): report_category (CONSUMER / FEEDER / DT, DTR -> DT),
+        else 3PLTCTSM -> DT, HTCTPTSM -> FEEDER, else CONSUMER
+      meter_type: >-
+        coalesce(inventory type, installation type): 1PH/3PH/LTCT/HTCT/OTHER-Consumer_meter; DT / FEEDER rows may
+        keep raw 3PLTCTSM / HTCTPTSM
+      outstanding_count: count(*) of earned-but-uncollected meters
+  gold_meter_installation_pending_stage_snapshot:
+    name: gold_meter_installation_pending_stage_snapshot
+    built_by: _installation_pending_stage() in {GOLD_JOB} (lines 2017-2081)
+    sources:
+      - >-
+          gmr_wfm_silver.unified_smart_meter_inventory (inventory_latest: the 4 handoff timestamps, warehouse,
+          meter_type, sku)
+      - >-
+          gmr_wfm_silver.unified_installations + replacement leg (installations_all serials -- dropped as installed)
+    grain: >-
+      one row per project x warehouse x oem x category x meter_type x current_stage, counting inventory meters that
+      are NOT installed yet
+    used_by:
+      - 11
+    columns:
+      current_stage: >-
+        furthest handoff reached: serial in installations OR installed_ts set -> 'installed' (dropped); else
+        sup_to_tech_ts -> 'technician'; else agency_to_sup_ts -> 'supervisor'; else gmr_to_agency_ts -> 'agency';
+        else 'inventory'
+      project: >-
+        from the WAREHOUSE (VARANASI_HW/AZAMGARH_ZW/BALLIA/MAU/CHANDAULI/GHAZIPUR/JAUNPUR -> kashi,
+        PRAYAGRAJ_HW/MIRZAPUR_ZW -> triveni, AGRA_HW/ALIGARH WAREHOUSE -> agra, else 'unassigned')
+      warehouse: coalesce(nullif(trim(warehouse), ''), 'UNASSIGNED')
+      oem: coalesce(nullif(trim(manufacturer), ''), 'UNKNOWN')
+      category: >-
+        inventory meter_type + sku: 3PLTCTSM AND sku NOT LIKE '%CON%' -> DT, HTCTPTSM AND sku NOT LIKE '%CON%' ->
+        FEEDER, else CONSUMER
+      meter_type: 1PH/3PH/LTCT/HTCT/OTHER-Consumer_meter; DT/FEEDER keep raw 3PLTCTSM / HTCTPTSM
+      meter_count: count(*) of uninstalled inventory meters
+  gold_meter_revenue_pending_stage_snapshot:
+    name: gold_meter_revenue_pending_stage_snapshot
+    built_by: _revenue_pending_stage_sql() in {GOLD_JOB} (lines 2185-2246)
+    sources:
+      - 'gmr_wfm_silver.unified_installations + replacement leg (installations_latest: geography, sat_number)'
+      - 'gmr_wfm_silver.unified_smart_meter_inventory (INNER join: category / meter_type)'
+      - gmr_wfm_silver.sat_meter_mappings (sat_number override)
+      - 'gmr_wfm_silver.sat_milestones (LEFT join on project + sat_number: pmpm_collection_date)'
+    grain: >-
+      one row per project x geography x category x meter_type x current_stage, counting installed meters whose PMPM
+      revenue is NOT collected
+    used_by:
+      - 11
+    columns:
+      current_stage: >-
+        sat_number parses as SAT-1..SAT-13 -> 'sat_done_revenue_pending'; anything else (blank, 'SAT PENDING',
+        unrecognised) -> 'installation_done_sat_pending'. Kept only when the batch's pmpm_collection_date IS NULL
+        (or no milestone row)
+      project: from the INSTALLATION (lower-case)
+      category: inventory meter_type + sku rule (same as the installation-pending snapshot), stored upper-case
+      meter_type: 1PH/3PH/LTCT/HTCT/OTHER-Consumer_meter; DT/FEEDER keep raw 3PLTCTSM / HTCTPTSM
+      meter_count: count(*) of installed, revenue-not-realized meters
+
+kpis:
+  - number: 1
+    title: MI-Progress
+    kpi_code: mi_progress
+    backend_kpi_id: 1
+    section: MI
+    card: Meter Installation progress tracking -- total & category wise, trend and comparison.
+    aliases:
+      - mi progress
+      - mi-progress
+      - meter installation progress
+      - installation progress
+      - mi installation progress
+      - total progress
+      - mi count
+      - mi counts
+      - meter installation count
+      - meters installed
+      - installed meters
+      - meter installations
+      - kpi 1
+      - kpi1
+      - kpi-1
+      - meter installation progress tracking
+      - mi progress card
+      - installation trend
+      - mi trend
+      - mi comparison
+    summary: >-
+      **MI-Progress** counts meter installations. It sums `meter_count` from Postgres `gold_mi_installation_day_agg`
+      (and `gold_mi_installation_month_agg` for whole months), keeping only rows that have a meter serial, a
+      resolved `progress_category` (CONSUMER / FEEDER / DT) and are NOT SM-to-SM replacements. That gold table is
+      built by the ETL from Silver `unified_installations` (SmartEMS CMIQC/CNSQC/DMIQC/FMIQC reports), with
+      replacement rows added from `unified_complaints` only so they can be flagged and excluded, and OEM taken from
+      `unified_smart_meter_inventory` as a fallback.
+    gold_tables:
+      - table: gold_mi_installation_day_agg
+        columns: >-
+          period_start, project, discom, zone, circle, division, sub_division, progress_category,
+          progress_meter_type, inventory_meter_type (use this one for meter type -- extended map, no Other), oem,
+          has_meter_serial, is_replacement, meter_count
+      - table: gold_mi_installation_month_agg
+        columns: same columns -- read for whole months when duration = monthly
+    silver_tables:
+      - table: unified_installations
+        columns: >-
+          mi_date, project, discom, zone, circle, division, sub_division, report_category, new_meter_serial_number,
+          new_meter_type, new_meter_make
+        source: CMIQC, CNSQC, DMIQC, FMIQC
+      - table: unified_complaints
+        columns: >-
+          old/new_meter_serial_number, work_completed_at, complaint_entity_type (replacement rows -- excluded by
+          this KPI)
+        source: COMQC, DOMQC, FOMQC
+      - table: unified_smart_meter_inventory
+        columns: meter_serial_number, manufacturer (OEM fallback)
+        source: INVSMM
+    logic:
+      - step: Flow
+        detail: >-
+          SmartEMS installation reports (DMIQC/CMIQC/CNSQC/FMIQC) -> Silver unified_installations (+
+          unified_complaints, + unified_smart_meter_inventory) -> Spark _installation_day_sql() -> Postgres
+          gold_mi_installation_day_agg / _month_agg -> backend kpi_catalog/mi_progress.py -> API JSON -> card.
+      - step: Silver
+        detail: >-
+          report_category is NOT a report column: the Silver transform derives it from the file name
+          (source_file_key) with a regex -- CMIQC/CNSQC->CONSUMER, DMIQC->DTR, FMIQC->FEEDER.
+      - step: Silver dedup
+        detail: >-
+          Row identity = project + discom + report_category + new_meter_serial_number + mi_date, hashed into
+          business_key_hash. Repeat arrivals (QC1/QC2/QC3 versions, re-ingested files) keep one row; the same serial
+          with a different date or report stays a separate row.
+      - step: Replacement leg
+        detail: >-
+          _replacement_installations_sql (GOLD:500-579): a complaint is a replacement when old_meter_serial_number
+          and new_meter_serial_number are non-blank and work_completed_at IS NOT NULL. mi_date =
+          date(work_completed_at); latest complaint per new serial kept; serials already in installations dropped;
+          every remaining row gets is_replacement=TRUE.
+      - step: installations_all
+        detail: >-
+          installations (is_replacement=FALSE) UNION replacements (is_replacement=TRUE), plus a SAT-number join that
+          KPI 1 does not use.
+      - step: OEM lookup
+        detail: >-
+          inventory_oem = latest manufacturer per serial from inventory; serials normalised with
+          regexp_replace(upper(trim(serial)), '[^A-Z0-9]+', '') so 'ab-123 ' matches 'AB123'.
+      - step: Gold build
+        detail: >-
+          installations_all left-joined to inventory_oem; WHERE mi_date IS NOT NULL; GROUP BY every dimension;
+          meter_count = count(*). One gold row = one day x one combination of geography / category / meter type /
+          OEM / flags.
+      - step: Category
+        detail: progress_category = report_category mapped CONSUMER / FEEDER / DT (DTR->DT); unknown -> NULL.
+      - step: Month table
+        detail: >-
+          gold_mi_installation_month_agg (GOLD:2825-2839): period_start = trunc(period_start,'MM'), period_end =
+          last_day, meter_count = sum(meter_count) -- a 2-year monthly query reads ~24 rows per combination instead
+          of ~730.
+      - step: Postgres publish
+        detail: >-
+          Every ETL run recomputes the whole table from Silver, writes Parquet, then TRUNCATE + INSERT in one
+          transaction. Nothing incremental: the card changes only after an ETL refresh, and a formula change needs
+          no backfill.
+      - step: Eligibility
+        detail: >-
+          has_meter_serial AND progress_category IS NOT NULL AND NOT is_replacement, plus the request's filters
+          (project, category, geography, oem) and row-level security (a user scoped to one zone gets AND
+          LOWER(n.zone) = '<their zone>' appended).
+      - step: Date range
+        detail: >-
+          Up to 4 UNION ALL legs, each with AND NOT n.is_replacement: partial_start_days (day table, from -> end of
+          from's month, only if from is not the 1st); full_months (only whole months lying fully inside [from, to]
+          -- read from the month table when duration=monthly, else from day rows); partial_end_days (day table,
+          start of to's month -> to, only if to is not month-end AND to is in a later month than from). 'to' is
+          inclusive. E.g. 2026-01-15 -> 2026-04-10 monthly = Jan 15-31 day rows + Feb, Mar month rows + Apr 1-10 day
+          rows.
+      - step: Buckets
+        detail: >-
+          daily = the day; weekly = month-anchored (not ISO) weeks, month_start + floor((day-1)/7)*7: days 1-7 ->
+          1st, 8-14 -> 8th, 15-21 -> 15th, 22-28 -> 22nd, 29-31 -> 29th; monthly = 1st of month.
+      - step: Comparison label
+        detail: >-
+          Upper-cased. level=discom with no project selected -> project (AGRA/KASHI/TRIVENI); level=discom with a
+          project -> discom; level=zone/circle/division/sub_division/oem -> that column. Blank or null labels are
+          dropped.
+    formulas:
+      - output: CONSUMER / FEEDER / DT
+        formula: SUM(meter_count) FILTER (WHERE progress_category = 'X')
+      - output: 1PH/3PH/LTCT/HTCT-Consumer_meter
+        formula: >-
+          SUM(meter_count) FILTER (WHERE inventory_meter_type = 'X') (consumer-only requests; the ETL's extended
+          type map)
+      - output: total (per period / label)
+        formula: SUM(meter_count)
+      - output: trend
+        formula: the sums above grouped by period bucket (daily / month-anchored weekly / monthly)
+      - output: comparison
+        formula: the same sums grouped by comparison label; blank or null labels dropped
+      - output: total_progress
+        formula: sum of the trend totals (computed in Python)
+    caveats:
+      - >-
+          Counts installation ROWS (count(*) of Silver rows), not COUNT(DISTINCT serial) -- the documented
+          'duplicate-safe' fallback is not implemented.
+      - >-
+          Replacements are excluded, so MI vs SAT's total_mi is larger than MI-Progress by exactly the replacement
+          count.
+      - >-
+          Category comes from WHICH REPORT the row came from, not the meter type (a 3PLTCTSM meter in a CMIQC report
+          is CONSUMER here but DT in the productivity KPIs).
+      - >-
+          Consumer meter types use inventory_meter_type, the ETL's extended map: 3PNMLTSM/3PNBLTSM count as 3PH,
+          3LTTOUSM/LTNBTOUS as LTCT and HT-TOUSM/HTNBTOUS as HTCT, so the four types add up to the consumer total
+          and there is no 'Other' type. The dashboard's MI-Progress card uses the narrow progress_meter_type map, so
+          its 3PH / LTCT / HTCT figures are lower by exactly those codes.
+      - >-
+          A range that starts on the 1st and ends mid-month in the SAME month (e.g. 2026-09-01 -> 2026-09-15)
+          matches none of the 4 date legs and returns no rows.
+      - '''to'' is inclusive; the dashboard default range is 2024-06-01 to 2026-06-01 when no dates are sent.'
+      - If one serial appears with two different mi_date values, or in two reports, it is counted twice.
+      - Numbers change only after the ETL gold refresh, which recomputes everything.
+      - >-
+          Stale ETL comment: GOLD:837-838 says replacements are excluded 'from the defect-rate denominator only' --
+          out of date, mi_progress.py excludes them in all four date legs.
+    sql_recipe: >-
+      MI-Progress (dashboard KPI 1): FROM public.gold_mi_installation_day_agg (or
+      public.gold_mi_installation_month_agg for whole-month questions), measure SUM(meter_count), and ALWAYS include
+      WHERE has_meter_serial AND progress_category IS NOT NULL AND NOT is_replacement. Category breakdown = GROUP BY
+      progress_category (values 'CONSUMER','FEEDER','DT'); consumer meter-type breakdown (when the question is
+      consumer-only) = GROUP BY inventory_meter_type (values
+      '1PH-Consumer_meter','3PH-Consumer_meter','LTCT-Consumer_meter','HTCT-Consumer_meter'). Date filter on
+      period_start (inclusive range). Weekly trend uses month-anchored weeks, not ISO: date_trunc('month',
+      period_start)::date + (floor((extract(day FROM period_start) - 1) / 7) * 7)::int. A comparison with no project
+      named groups by project; with a project named, by discom. Project/geography/oem values are stored lower-case
+      -- compare with LOWER(). "How many consumers / DT or DTR or transformer / feeders are installed" means
+      installed METERS of that category: the same table and eligibility with progress_category = 'CONSUMER' / 'DT' /
+      'FEEDER' (DTR is stored as 'DT'), and "how many meters are installed" is the same query with no category
+      filter -- so the three categories always add up to the total. Never answer these from
+      gold_meter_inventory_event_*, gold_dashboard_stats_snapshot or any MDM asset table.
+    followups:
+      - What is the MI progress by category for kashi?
+      - Which zone has the highest MI progress?
+      - Explain the MI-Productivity per team KPI
+    filters:
+      - filter: duration
+        values: daily (default), weekly, monthly
+        effect: Trend bucket size
+      - filter: from / to
+        values: dates; default 2024-06-01 -> 2026-06-01
+        effect: Date range, inclusive
+      - filter: project
+        values: agra, kashi, triveni, All Project
+        effect: n.project IN (...)
+      - filter: category
+        values: all, consumer, feeder, dt, 1ph/3ph/ltct/htct-consumer_meter
+        effect: LOWER(progress_category) IN (...) OR LOWER(progress_meter_type) IN (...)
+      - filter: discom / zone / circle / division / sub_division
+        values: any name
+        effect: LOWER(col) = LOWER(value)
+      - filter: oem
+        values: any
+        effect: LOWER(n.oem) = LOWER(value)
+      - filter: level
+        values: discom (default), zone, circle, division, sub_division, oem
+        effect: Picks the comparison dimension
+      - filter: row-level security
+        values: automatic
+        effect: A user scoped to one zone gets AND LOWER(n.zone) = '<their zone>'
+    response:
+      - part: Parts
+        shape: >-
+          total_progress (grand total for the range), trend (per day/week/month), comparison (per geography label or
+          OEM).
+      - part: Normal request
+        shape: 'category = all / feeder / dt / mixed: each item has CONSUMER, FEEDER, DT, total.'
+      - part: Consumer-only request
+        shape: >-
+          category = consumer or a consumer meter type: each item has 1PH-, 3PH-, LTCT-, HTCT-Consumer_meter, total.
+      - part: total_progress
+        shape: Computed in Python (transform_mi_progress_rows) as the sum of all trend totals.
+      - part: Date labels
+        shape: period_value is YYYY-MM for monthly, DD-MM-YY for daily and weekly.
+      - part: Shape
+        shape: >-
+          {"total_progress": N, "trend": [{"period_value": "2026-01", "CONSUMER": .., "FEEDER": .., "DT": ..,
+          "total": ..}], "comparison": [{"label": "KASHI", "CONSUMER": .., "FEEDER": .., "DT": .., "total": ..}]}
+    example:
+      - step: Silver rows
+        result: >-
+          1: CMIQC A1 2026-03-02 CONSUMER 1PH-STSM | 2: CMIQC A2 2026-03-02 CONSUMER 3PH-STSM | 3: DMIQC D1
+          2026-03-09 DTR 3PLTCTSM | 4: CMIQC (blank serial) 2026-03-09 CONSUMER 1PH-STSM | 5: complaint replacement
+          R1 2026-03-10 CONSUMER 1PH-STSM -- all project kashi
+      - step: In gold
+        result: Row 3 DTR -> DT; row 4 has_meter_serial = false; row 5 is_replacement = true.
+      - step: Request
+        result: from=2026-03-01, to=2026-03-31, duration=weekly, project=kashi
+      - step: Dropped
+        result: Row 4 (no serial) and row 5 (replacement).
+      - step: Week of 01-03-26
+        result: CONSUMER = 2 (rows 1 and 2), total 2.
+      - step: Week of 08-03-26
+        result: DT = 1 (row 3), total 1.
+      - step: total_progress
+        result: '3'
+      - step: With category=consumer
+        result: Week of 01-03-26 shows 1PH = 1, 3PH = 1, total 2.
+  - number: 2
+    title: MI-Productivity per team
+    kpi_code: mi_progress_productivity_per_team
+    backend_kpi_id: 2
+    section: MI
+    card: Output per installation team (agency) -- total & category wise. Implemented per technician.
+    aliases:
+      - productivity per team
+      - mi productivity per team
+      - team productivity
+      - mi-productivity
+      - mi productivity
+      - technician productivity
+      - installation productivity per
+      - per technician per day
+      - productivity per technician
+      - kpi 2
+      - kpi2
+      - kpi-2
+    summary: >-
+      **MI-Productivity per team** is installations per technician-day: SUM(installation_count) /
+      SUM(technician_day_count) from Postgres `gold_mi_technician_productivity_day_agg` (month roll-up
+      `gold_mi_technician_productivity_month_agg` for whole months). The gold table is built from Silver
+      `unified_installations` through the MI-only view (replacements excluded), keeping rows that have an
+      installation date, a meter serial and a technician_name. Despite the card saying 'team (agency)', the code
+      measures per `technician_name` -- the Silver `agency` column never reaches gold.
+    gold_tables:
+      - table: gold_mi_technician_productivity_day_agg
+        columns: >-
+          period_start, period_end, project, discom, zone, circle, division, sub_division, technician_name,
+          category, meter_type, installation_count, technician_day_count
+      - table: gold_mi_technician_productivity_month_agg
+        columns: same columns (month roll-up)
+    silver_tables:
+      - table: unified_installations
+        columns: >-
+          mi_date, new_meter_serial_number, technician_name, new_meter_type, project, discom, zone, circle,
+          division, sub_division
+        source: CMIQC, CNSQC, DMIQC, FMIQC
+    logic:
+      - step: Population
+        detail: MI-only `installations` view (no replacements); mi_date, serial and technician_name required.
+      - step: Category
+        detail: 'From new_meter_type: 3PLTCTSM->DT, HTCTPTSM->FEEDER, else CONSUMER (NOT report_category).'
+      - step: Day grain
+        detail: >-
+          GROUP BY date, project, geography, technician_name, category, meter_type: installation_count = count(*),
+          technician_day_count = 1; plus category='ALL' rollup rows.
+      - step: Month table
+        detail: installation_count summed; technician_day_count = number of day rows.
+      - step: Backend
+        detail: >-
+          Per technician: inst = SUM(installation_count), tech_days = SUM(technician_day_count); category=all uses
+          the per-category rows (category <> 'ALL').
+    formulas:
+      - output: productivity_per_technician_per_day
+        formula: ROUND(SUM(installation_count) / SUM(technician_day_count), 2)
+      - output: total_installations
+        formula: SUM(installation_count)
+      - output: total_active_technicians
+        formula: number of distinct technician_name
+      - output: total_active_days
+        formula: number of non-empty trend buckets (days / weeks / months)
+      - output: insights.top / lowest
+        formula: 'technician with the highest / lowest productivity (ties: installs, then name)'
+      - output: trend / comparison / category_breakdown
+        formula: the same ratio per period / geography label / category
+    caveats:
+      - Per TECHNICIAN, not per agency/team; same-named technicians in different projects are merged.
+      - >-
+          Tech-days are over-counted: a technician installing two meter types (or in two sub-divisions) on one day
+          counts as 2 tech-days, which lowers productivity.
+      - total_active_days counts buckets, so for weekly/monthly it is weeks/months, not days.
+    sql_recipe: >-
+      MI-Productivity per team (dashboard KPI 2): FROM public.gold_mi_technician_productivity_day_agg (or
+      _month_agg). Productivity = ROUND(SUM(installation_count)::numeric / NULLIF(SUM(technician_day_count),0), 2).
+      For an all-categories figure the dashboard uses the per-category rows: WHERE category <> 'ALL'; for one
+      category filter category = 'CONSUMER'/'FEEDER'/'DT'. Per technician = GROUP BY technician_name. Active
+      technicians = COUNT(DISTINCT technician_name).
+    followups:
+      - Which technician has the highest installation productivity?
+      - Explain the Monthly Productivity trend KPI
+  - number: 3
+    title: Monthly Productivity trend
+    kpi_code: mi_progress_monthly_productivity_trends
+    backend_kpi_id: 3
+    section: MI
+    card: Monthly view of installation productivity -- total & category wise.
+    aliases:
+      - monthly productivity trend
+      - monthly productivity
+      - productivity trend
+      - monthly mi productivity
+      - kpi 3
+      - kpi3
+      - kpi-3
+    summary: >-
+      **Monthly Productivity trend** reads the pre-aggregated cube `gold_mi_productivity_trend_month_agg`, which the
+      ETL builds from KPI 2's day grain (`gold_mi_technician_productivity_day_agg` <- Silver
+      `unified_installations`, replacements excluded). Each month row carries total_installations, active_days
+      (distinct dates), active_technicians (distinct technicians) and technician_day_count; productivity =
+      total_installations / technician_day_count.
+    gold_tables:
+      - table: gold_mi_productivity_trend_month_agg
+        columns: >-
+          month_start, month_end, project, filter_level, filter_label, aggregate_level, label, category, meter_type,
+          total_installations, active_days, active_technicians, technician_day_count
+    silver_tables:
+      - table: unified_installations
+        columns: mi_date, new_meter_serial_number, technician_name, new_meter_type, project, geography
+        source: CMIQC, CNSQC, DMIQC, FMIQC
+    logic:
+      - step: Input
+        detail: >-
+          KPI 2's day grain regrouped to (month, geography, category, meter_type, technician, date), plus
+          category='ALL' copies.
+      - step: Project
+        detail: Every row duplicated as project='ALL' and as its real project.
+      - step: Cube
+        detail: >-
+          LATERAL VIEW stack(...) expands a filter scope (all/zone/circle/division/sub_division) and an aggregate
+          scope (all/project/discom/zone/circle/division/sub_division); kept when aggregate_rank >= filter_rank.
+      - step: Measures
+        detail: >-
+          total_installations = sum, active_days = count(DISTINCT mi_date), active_technicians = count(DISTINCT
+          technician_name), technician_day_count = count(*) of distinct tech-days.
+      - step: Backend
+        detail: >-
+          Months overlapping [from, to] are included whole; geography via filter_level/filter_label; summary rows
+          are aggregate_level='all'.
+    formulas:
+      - output: total_installations
+        formula: SUM(total_installations) at aggregate_level='all'
+      - output: productivity_per_technician_per_day
+        formula: SUM(total_installations) / SUM(technician_day_count)
+      - output: avg active technicians (trend)
+        formula: technician_day_count / active_days
+      - output: total_active_technicians
+        formula: SUM(active_technicians) (a sum, not distinct)
+      - output: total_active_months
+        formula: number of trend months
+    caveats:
+      - >-
+          total_active_technicians is SUMMED across months (and categories when category=all), so it over-counts.
+      - >-
+          With category=all, trend active_days / tech-days are summed across category rows (inflated); the correct
+          distinct values are on category='ALL' rows.
+      - A discom filter is ignored (no discom filter level in the cube).
+      - Row-level-security-scoped users get empty data (every filter has no db column -> AND 1=0).
+    sql_recipe: >-
+      Monthly Productivity trend (dashboard KPI 3): FROM public.gold_mi_productivity_trend_month_agg. For the
+      program-wide monthly series use WHERE project = 'ALL' AND filter_level = 'all' AND aggregate_level = 'all' AND
+      category = 'ALL' (a real project: project = 'kashi' etc.; one category: category = 'CONSUMER'). Per month:
+      SUM(total_installations), ROUND(SUM(total_installations)::numeric / NULLIF(SUM(technician_day_count),0), 2) AS
+      productivity, SUM(active_technicians), SUM(active_days), GROUP BY month_start. For a zone/circle/division
+      scope use filter_level + filter_label; for a per-zone comparison use aggregate_level = 'zone' and GROUP BY
+      label.
+    followups:
+      - Show the monthly installation productivity trend
+      - Explain the MI-Progress KPI
+  - number: 4
+    title: Meter Replacement
+    kpi_code: defective_meters
+    backend_kpi_id: 4
+    section: MI
+    card: Tracks defective meters based on replacement data (KPI display name 'Defective Meters').
+    aliases:
+      - meter replacement
+      - defective meter
+      - defective meters
+      - defect rate
+      - defect kpi
+      - defective type
+      - burnt meter
+      - faulty meter
+      - meter burnt
+      - meter faulty
+      - kpi 4
+      - kpi4
+      - kpi-4
+    summary: >-
+      **Meter Replacement** (code `defective_meters`) counts meters found defective when they were replaced. A
+      defect is a completed replacement complaint in Silver `unified_complaints`: old AND new meter serial present
+      and work_completed_at set. The ETL classifies the complaint's `sub_complaint_type` into Meter Burnt / Meter
+      Faulty / Others (plus Tampered / Stop / Bypass), looks up the OLD meter's OEM from
+      `unified_smart_meter_inventory`, and writes Postgres `gold_meter_defect_event_day_agg`. Defect rate =
+      Meter-Faulty count / installed meters (from `gold_mi_installation_*_agg`, replacements excluded) x 100, per
+      OEM.
+    gold_tables:
+      - table: gold_meter_defect_event_day_agg
+        columns: >-
+          period_start, project, geography, category, meter_type, defective_type, detailed_defective_type, oem,
+          defect_count, defect_rate_numerator_count
+      - table: gold_mi_installation_month_agg + _day_agg
+        columns: 'denominator: oem, has_meter_serial, is_replacement, meter_count'
+    silver_tables:
+      - table: unified_complaints
+        columns: >-
+          old_meter_serial_number, new_meter_serial_number, work_completed_at, sub_complaint_type,
+          complaint_entity_type, new_meter_type, project, geography
+        source: COMQC, DOMQC, FOMQC
+      - table: unified_smart_meter_inventory
+        columns: meter_serial_number, manufacturer, meter_type (of the OLD meter)
+        source: INVSMM
+      - table: unified_installations
+        columns: new_meter_serial_number, new_meter_make, new_meter_type (fallback) + the installation denominator
+        source: CMIQC, CNSQC, DMIQC, FMIQC
+    logic:
+      - step: Detection
+        detail: >-
+          A defect = complaint with old_meter_serial_number AND new_meter_serial_number non-blank AND
+          work_completed_at IS NOT NULL.
+      - step: Defective date
+        detail: cast(work_completed_at AS date).
+      - step: Text cleaning
+        detail: upper(trim(sub_complaint_type)) with double quotes and non-breaking spaces removed.
+      - step: Classification
+        detail: >-
+          METER BURNT / METER TERMINAL BURNT -> Meter Burnt; DISPLAY BACK LED OFF OR PARTIAL DISPLAY, METER DISPLAY
+          FAULTY / DISPLAY NOT VISIBLE, METER RTC CORRUPTED, NO DISPLAY OR DISPLAY NOT VISIBLE, PUSH BUTTON NOT
+          WORKING -> Meter Faulty; METER TAMPERED variants -> Meter Tampered; METER STOP/STOPPED/RUNNING SLOW ->
+          Meter Stop; METER BYPASSED variants -> Meter Bypass; anything else -> Others.
+      - step: OEM / meter type
+        detail: >-
+          OEM of the OLD meter: coalesce(inventory.manufacturer, installation.new_meter_make, 'Unknown'), joined on
+          the normalised old serial.
+      - step: Gold aggregate
+        detail: defect_count = count(*); defect_rate_numerator_count = rows where defective_type = 'Meter Faulty'.
+      - step: Denominator
+        detail: >-
+          installed meters from gold_mi_installation_month/day_agg WHERE NOT is_replacement AND has_meter_serial AND
+          oem IS NOT NULL, grouped by UPPER(oem).
+    formulas:
+      - output: total_defective
+        formula: SUM(defect_count)
+      - output: total_burnt / total_faulty / total_others
+        formula: SUM(defect_count) FILTER (defective_type = 'Meter Burnt' / 'Meter Faulty' / 'Others')
+      - output: installed_meters
+        formula: SUM(meter_count) from the installation aggregates (no replacements), per OEM
+      - output: defect_rate_pct
+        formula: ROUND(SUM(defect_rate_numerator_count) / installed_meters x 100, 2) -- Meter Faulty only
+    caveats:
+      - Counts complaint rows (count(*)), not distinct old serials.
+      - >-
+          Tampered / Stop / Bypass count in total_defective but in none of burnt/faulty/others, so those three can
+          sum to less than the total.
+      - No period breakdown in the response -- the card's 'Trend' label has no time series behind it.
+      - The denominator ignores the discom filter and row-level-security scope (the numerator applies both).
+    sql_recipe: >-
+      Meter Replacement / Defective Meters (dashboard KPI 4): counts FROM public.gold_meter_defect_event_day_agg:
+      SUM(defect_count) (GROUP BY defective_type for Burnt/Faulty/Others, by oem for per-OEM, by
+      detailed_defective_type for the exact reason); date filter on period_start (the defective date). Defect rate %
+      = 100 * SUM(defect_rate_numerator_count) / installed meters, where installed meters = SUM(meter_count) FROM
+      public.gold_mi_installation_month_agg WHERE NOT is_replacement AND has_meter_serial AND oem IS NOT NULL --
+      combine the two as scalar subqueries in one SELECT (no JOIN between these tables).
+    followups:
+      - How many defective meters are there by defect type?
+      - Which OEM has the most burnt meters?
+  - number: 5
+    title: Total & category wise supply utilization rate
+    kpi_code: inventory_utilization
+    backend_kpi_id: 5
+    section: Supply
+    card: Efficiency of material usage (Installed vs Total Stock) -- trend and comparison.
+    aliases:
+      - supply utilization
+      - supply utilisation
+      - utilization rate
+      - utilisation rate
+      - inventory utilization
+      - inventory utilisation
+      - material usage
+      - installed vs total stock
+      - kpi 5
+      - kpi5
+      - kpi-5
+    summary: >-
+      **Supply utilization rate** = total installed / total inventory x 100, cumulative up to the 'to' date. It sums
+      `inventory_count` (meters received, by DI date) and `installed_count` (meters installed, by MI date) from
+      Postgres `gold_meter_inventory_event_day_agg` / `_month_agg`. The ETL builds those events from Silver
+      `unified_smart_meter_inventory` (INVSMM stock) FULL OUTER JOIN the installations (`unified_installations` +
+      replacement installs from `unified_complaints`), one row per normalised meter serial; remaining stock =
+      inventory - stock_consumed.
+    gold_tables:
+      - table: gold_meter_inventory_event_day_agg / _month_agg
+        columns: >-
+          period_start, period_end, project, discom, zone, circle, division, sub_division, category, meter_type,
+          inventory_count, installed_count, stock_consumed_count
+      - table: gold_inventory_unutilized_stock_snapshot
+        columns: project, warehouse, category, meter_type, inventory_date, stock_count (comparison section only)
+    silver_tables:
+      - table: unified_smart_meter_inventory
+        columns: meter_serial_number, di_date, discom, warehouse, meter_type, sku
+        source: INVSMM
+      - table: unified_installations
+        columns: new_meter_serial_number, mi_date, project, geography, report_category, new_meter_type
+        source: CMIQC, CNSQC, DMIQC, FMIQC
+      - table: unified_complaints
+        columns: old/new_meter_serial_number, work_completed_at (replacement installs, scrapped old meters)
+        source: COMQC, DOMQC, FOMQC
+    logic:
+      - step: One row per serial
+        detail: >-
+          inventory_latest FULL OUTER JOIN installations_latest on the normalised serial, LEFT JOIN disposed old
+          meters.
+      - step: Events
+        detail: >-
+          Receipt on DI date (inventory_count=1); install on MI date (installed_count=1, stock_consumed_count=1 if
+          the meter had an inventory row); disposal of an uninstalled scrapped old meter (stock_consumed_count=1).
+      - step: Project / geography
+        detail: >-
+          project = installation project else warehouse -> project map; zone/circle/division/sub_division only from
+          the installation (NULL for stock).
+      - step: Category
+        detail: >-
+          Inventory: 3PLTCTSM / HTCTPTSM with sku NOT LIKE '%CON%' -> DT / FEEDER, else CONSUMER; falls back to the
+          installation category.
+      - step: Backend
+        detail: >-
+          Opening snapshot sums every month before 'from' (totals are cumulative); a project filter zeroes all three
+          counts for other projects.
+      - step: Trend
+        detail: 'Running totals per bucket: SUM(x) OVER (PARTITION BY bucket ORDER BY period_start).'
+    formulas:
+      - output: total_inventory
+        formula: SUM(inventory_count) (DI date <= to)
+      - output: total_installed
+        formula: SUM(installed_count) (MI date <= to)
+      - output: remaining_stock
+        formula: SUM(inventory_count) - SUM(stock_consumed_count)
+      - output: utilization_rate_pct
+        formula: ROUND(total_installed x 100 / total_inventory, 2)
+      - output: comparison[label]
+        formula: installed = SUM(installed_count); inventory = installed + current unutilized stock_count
+    caveats:
+      - A project filter also reduces inventory (the formula doc says inventory is global).
+      - remaining_stock uses stock_consumed_count, not inventory - installed.
+      - >-
+          Stock rows have NULL zone/circle/division in Gold. The chatbot counts stock in the zone of its warehouse
+          (sql/hierarchy.py) so zone-wise supplied / utilization include it; circle/division still exclude stock.
+      - The comparison's stock is the CURRENT snapshot, not stock as of 'to'.
+    sql_recipe: >-
+      Supply utilization rate (dashboard KPI 5): FROM public.gold_meter_inventory_event_month_agg (or _day_agg),
+      cumulative up to the as-of date: total_inventory = SUM(inventory_count), total_installed =
+      SUM(installed_count), utilization % = ROUND(100.0 * SUM(installed_count) / NULLIF(SUM(inventory_count),0), 2),
+      remaining stock = SUM(inventory_count) - SUM(stock_consumed_count); as-of date filter period_start <= date.
+      Category breakdown GROUP BY category ('CONSUMER','FEEDER','DT').
+    followups:
+      - What is the supply utilization rate by category?
+      - Explain the MI pace vs stock availability KPI
+  - number: 6
+    title: MI pace Vs Stock availability
+    kpi_code: mi_pace_vs_stock
+    backend_kpi_id: 6
+    section: Supply
+    card: Inventory availability vs installation rate -- trend and comparison.
+    aliases:
+      - mi pace
+      - pace vs stock
+      - stock availability
+      - stock availibility
+      - mi pace vs stock
+      - remaining stock
+      - stock available
+      - kpi 6
+      - kpi6
+      - kpi-6
+    summary: >-
+      **MI pace vs Stock availability** tracks cumulative stock received, meters installed and remaining stock over
+      time. It reads the same Postgres `gold_meter_inventory_event_day_agg` / `_month_agg` events as the utilization
+      KPI (built from Silver `unified_smart_meter_inventory` + `unified_installations` + replacement complaints):
+      remaining stock = running SUM(inventory_count - stock_consumed_count), where consumed = installed from stock +
+      scrapped.
+    gold_tables:
+      - table: gold_meter_inventory_event_day_agg / _month_agg
+        columns: >-
+          period_start, period_end, project, geography, category, meter_type, inventory_count, installed_count,
+          stock_consumed_count
+      - table: gold_inventory_unutilized_stock_snapshot
+        columns: project, warehouse, category, meter_type, stock_count (comparison)
+    silver_tables:
+      - table: unified_smart_meter_inventory
+        columns: meter_serial_number, di_date, discom, warehouse, meter_type, sku
+        source: INVSMM
+      - table: unified_installations
+        columns: new_meter_serial_number, mi_date, project, geography, report_category, new_meter_type
+        source: CMIQC, CNSQC, DMIQC, FMIQC
+      - table: unified_complaints
+        columns: old/new_meter_serial_number, work_completed_at
+        source: COMQC, DOMQC, FOMQC
+    logic:
+      - step: Events
+        detail: Same receipt / install / disposal events as the supply-utilization KPI (one row per serial).
+      - step: Stock available
+        detail: received - consumed, where consumed = installed from stock + scrapped old meters.
+      - step: Trend
+        detail: Running totals per bucket of inventory, installed and remaining_stock.
+      - step: By meter type
+        detail: >-
+          remaining_stock_by_meter_type = SUM(inventory_count - stock_consumed_count) GROUP BY meter_type (3PLTCTSM
+          shown as DT, HTCTPTSM as FEEDER).
+    formulas:
+      - output: total_inventory / total_installed
+        formula: SUM(inventory_count) / SUM(installed_count)
+      - output: remaining_stock
+        formula: SUM(inventory_count - stock_consumed_count)
+      - output: utilization_rate_pct
+        formula: installed x 100 / inventory
+      - output: comparison[label]
+        formula: >-
+          installed = SUM(installed_count); remaining_stock = current unutilized stock_count; inventory = installed
+          + stock
+    caveats:
+      - >-
+          Period and comparison remaining_stock use stock_consumed_count / the current snapshot, not inventory -
+          installed.
+      - >-
+          Same caveats as supply utilization: project filter reduces inventory; stock rows have no
+          zone/circle/division.
+    sql_recipe: >-
+      MI pace vs Stock availability (dashboard KPI 6): FROM public.gold_meter_inventory_event_month_agg: per month
+      SUM(inventory_count) AS received, SUM(installed_count) AS installed, SUM(inventory_count -
+      stock_consumed_count) AS net_stock_change; cumulative remaining stock = running SUM of net_stock_change
+      (SUM(...) OVER (ORDER BY period_start)). Remaining stock by meter type = SUM(inventory_count -
+      stock_consumed_count) GROUP BY meter_type.
+    followups:
+      - What is the remaining stock by meter type?
+      - Explain the Un-utilized stock ageing KPI
+  - number: 7
+    title: Un-utilized stock ageing
+    kpi_code: unutilized_stock_aging
+    backend_kpi_id: 7
+    section: Supply
+    card: Duration in days since stock intake (DIDate) for uninstalled items.
+    aliases:
+      - unutilized stock
+      - un-utilized stock
+      - unutilised stock
+      - un-utilised stock
+      - stock ageing
+      - stock aging
+      - unutilized stock ageing
+      - unutilized stock aging
+      - uninstalled stock
+      - didate
+      - kpi 7
+      - kpi7
+      - kpi-7
+    summary: >-
+      **Un-utilized stock ageing** counts meters sitting in inventory that were never installed or scrapped,
+      bucketed by days since stock intake (DI date). It sums `stock_count` from Postgres
+      `gold_inventory_unutilized_stock_snapshot`, which the ETL builds from Silver `unified_smart_meter_inventory`
+      (INVSMM) minus every serial found in the installations (incl. replacement installs) or scrapped as an old
+      meter in `unified_complaints`. Age = today - inventory_date, banded 0-30 / 31-60 / 61-90 / 90+.
+    gold_tables:
+      - table: gold_inventory_unutilized_stock_snapshot
+        columns: inventory_date, project, warehouse, current_stage, category, meter_type, sku, oem, stock_count
+    silver_tables:
+      - table: unified_smart_meter_inventory
+        columns: >-
+          meter_serial_number, di_date, warehouse, technician_name, supervisor, agency, meter_type, sku,
+          manufacturer
+        source: INVSMM
+      - table: unified_installations
+        columns: new_meter_serial_number, mi_date
+        source: CMIQC, CNSQC, DMIQC, FMIQC
+      - table: unified_complaints
+        columns: old/new_meter_serial_number, work_completed_at
+        source: COMQC, DOMQC, FOMQC
+    logic:
+      - step: Detection
+        detail: >-
+          Inventory serial (latest row per serial, di_date required) NOT IN (installed serials with mi_date UNION
+          scrapped old-meter serials).
+      - step: current_stage
+        detail: technician_name present -> technician; else supervisor; else agency; else warehouse.
+      - step: Project
+        detail: From the warehouse -> project map (kashi / triveni / agra / unassigned).
+      - step: Gold
+        detail: >-
+          GROUP BY inventory_date, project, warehouse, current_stage, category, meter_type, sku, oem; stock_count =
+          count(*).
+      - step: Age (backend, query time)
+        detail: GREATEST(CURRENT_DATE - inventory_date, 0) days.
+    formulas:
+      - output: age band
+        formula: <=30 age_0_30; <=60 age_31_60; <=90 age_61_90; else age_90_plus
+      - output: summary[age_band][bucket]
+        formula: SUM(stock_count); bucket = CONSUMER / FEEDER / DT (or meter types)
+      - output: total_stock
+        formula: SUM(stock_count)
+      - output: comparison[label]
+        formula: same, per warehouse (default) / oem / sku
+    caveats:
+      - Which meters are unutilized is fixed at the last ETL refresh; age moves daily with CURRENT_DATE.
+      - >-
+          Comparison levels are warehouse / oem / sku (the formula doc's discom/zone/circle levels are not
+          implemented).
+      - '''Trend'' on this card is the age-band distribution; there is no time series.'
+    sql_recipe: >-
+      Un-utilized stock ageing (dashboard KPI 7): FROM public.gold_inventory_unutilized_stock_snapshot,
+      SUM(stock_count); age bucket = CASE WHEN CURRENT_DATE - inventory_date <= 30 THEN 'age_0_30' WHEN <= 60 THEN
+      'age_31_60' WHEN <= 90 THEN 'age_61_90' ELSE 'age_90_plus' END; GROUP BY that bucket and/or warehouse / oem /
+      sku / current_stage / category.
+    followups:
+      - How much unutilized stock is older than 90 days by warehouse?
+      - Explain the Supply utilization rate KPI
+  - number: 8
+    title: MI Vs SAT-Progress
+    kpi_code: mi_vs_sat
+    backend_kpi_id: 10
+    section: SAT
+    card: Consolidated MI vs SAT tracking with stage-wise verification progress -- total & category wise.
+    aliases:
+      - mi vs sat
+      - mi vs sat progress
+      - mi vs sat-progress
+      - sat progress
+      - sat-progress
+      - sat stage wise
+      - stage-wise
+      - stage wise
+      - sat eligible
+      - sat eligibility
+      - kpi 8
+      - kpi8
+      - kpi-8
+      - kpi 10
+      - kpi10
+    summary: >-
+      **MI vs SAT-Progress** compares installed meters (total_mi) with meters covered by a SAT (Site Acceptance
+      Test) batch. It sums `meter_count` from Postgres `gold_mi_sat_invoice_snapshot`: a meter is SAT-done when
+      `sat_stage` (its SAT number normalised to SAT-1..SAT-13) is not NULL; `is_sat_eligible` = installed on/before
+      the project's SAT eligibility cutoff. The ETL builds it from Silver `unified_installations` + replacement
+      installs from `unified_complaints` (replacements INCLUDED), `sat_meter_mappings` (SAT number per meter) and
+      `sat_milestones` (lumpsum/PMPM invoice dates). Stage-wise = meters per SAT-1..SAT-13.
+    gold_tables:
+      - table: gold_mi_sat_invoice_snapshot
+        columns: >-
+          project, discom, zone, circle, division, sub_division, category, meter_type, sat_stage,
+          has_lumpsum_invoice, has_pmpm_invoice, is_sat_eligible, meter_count
+      - table: sat_eligibility_config (Postgres config)
+        columns: eligibility_cutoff_date -- display only
+    silver_tables:
+      - table: unified_installations
+        columns: mi_date, project, geography, report_category, new_meter_type, new_meter_serial_number, sat_number
+        source: CMIQC, CNSQC, DMIQC, FMIQC
+      - table: unified_complaints
+        columns: replacement leg (included)
+        source: COMQC, DOMQC, FOMQC
+      - table: sat_meter_mappings
+        columns: meter_serial_number, sat_number
+        source: SAT CSV uploads
+      - table: sat_milestones
+        columns: project, sat_number, lumpsum_invoice_date, pmpm_invoice_date
+        source: milestone_config
+    logic:
+      - step: SAT number
+        detail: >-
+          coalesce(sat_meter_mappings.sat_number, installation.sat_number) joined on the normalised serial (project
+          not checked).
+      - step: SAT stage
+        detail: >-
+          regexp_replace(upper(trim(sat_number)),'\s+','') 'SAT-1'..'SAT-13' -> 1..13, anything else NULL. SAT-done
+          = sat_stage IS NOT NULL.
+      - step: Invoices
+        detail: has_lumpsum_invoice / has_pmpm_invoice = the milestone's invoice date is set for that project + SAT.
+      - step: Eligibility
+        detail: is_sat_eligible = mi_date <= the project's cutoff in sat_eligibility_config (computed at ETL time).
+      - step: Snapshot
+        detail: Day aggregate (count(*) per mi_date) with the date dropped, grouped by the SAT/invoice flags.
+    formulas:
+      - output: total_mi
+        formula: SUM(meter_count)
+      - output: total_mi_eligible
+        formula: SUM(meter_count) FILTER (is_sat_eligible)
+      - output: total_sat
+        formula: SUM(meter_count) FILTER (sat_stage IS NOT NULL)
+      - output: total_sat_eligible
+        formula: SUM FILTER (sat_stage IS NOT NULL AND is_sat_eligible)
+      - output: sat_progress_pct
+        formula: total_sat / total_mi x 100
+      - output: sat_progress_pct_eligible
+        formula: 'as coded: total_sat / total_mi_eligible x 100'
+      - output: lumpsum / pmpm invoice %
+        formula: invoice total / total_sat x 100
+      - output: sat_1 ... sat_13
+        formula: SUM(meter_count) WHERE sat_stage = n, by category
+    caveats:
+      - >-
+          Probable bug: sat_progress_pct_eligible divides total_sat (not total_sat_eligible) by total_mi_eligible,
+          so it can exceed 100%.
+      - Eligibility is baked in at ETL refresh -- a changed cutoff only shows after the next gold run.
+      - >-
+          SAT values like 'SAT_1', 'SAT1' or 'SAT-14' get sat_stage NULL and count as neither SAT-done nor Non-SAT
+          pending.
+      - Replacements are included, so total_mi exceeds MI-Progress by the replacement count.
+    sql_recipe: >-
+      MI vs SAT-Progress (dashboard KPI 10): FROM public.gold_mi_sat_invoice_snapshot: total_mi = SUM(meter_count);
+      total_sat = SUM(meter_count) FILTER (WHERE sat_stage IS NOT NULL) (or SUM(CASE WHEN sat_stage IS NOT NULL THEN
+      meter_count ELSE 0 END)); eligible = the same with is_sat_eligible; SAT progress % = 100.0 * total_sat /
+      total_mi; stage-wise = GROUP BY sat_stage WHERE sat_stage IS NOT NULL; invoices via has_lumpsum_invoice /
+      has_pmpm_invoice. This table has no date column -- it is an as-of snapshot.
+    followups:
+      - What is the SAT progress percentage by project?
+      - How many meters are in each SAT stage?
+  - number: 9
+    title: Non-SAT ageing
+    kpi_code: non_sat_ageing
+    backend_kpi_id: 11
+    section: SAT
+    card: Consolidated Non-SAT tracking by installation period and ageing buckets.
+    aliases:
+      - non-sat ageing
+      - non sat ageing
+      - non-sat aging
+      - non sat aging
+      - non-sat
+      - non sat
+      - sat pending ageing
+      - sat pending aging
+      - kpi 9
+      - kpi9
+      - kpi-9
+      - kpi 11
+      - kpi11
+    summary: >-
+      **Non-SAT ageing** counts installed meters that have no SAT yet, bucketed by days since installation. It sums
+      `meter_count` from Postgres `gold_non_sat_ageing_snapshot` by `age_key`. The ETL builds it from the
+      installation day aggregate (Silver `unified_installations` + replacement installs, SAT number from
+      `sat_meter_mappings`): a meter is Non-SAT pending when its sat_number is blank or 'SATPENDING', and it is only
+      counted if installed on/before its project's SAT eligibility cutoff. Age = ETL run date - mi_date: 0-30 /
+      31-60 / 61-90 / 91-120 / 120+.
+    gold_tables:
+      - table: gold_non_sat_ageing_snapshot
+        columns: project, discom, zone, circle, division, sub_division, category, meter_type, age_key, meter_count
+      - table: sat_eligibility_config (Postgres config)
+        columns: eligibility_cutoff_date (display; projects without a row dropped)
+    silver_tables:
+      - table: unified_installations
+        columns: mi_date, project, geography, report_category, new_meter_type, new_meter_serial_number, sat_number
+        source: CMIQC, CNSQC, DMIQC, FMIQC
+      - table: unified_complaints
+        columns: replacement leg (included)
+        source: COMQC, DOMQC, FOMQC
+      - table: sat_meter_mappings
+        columns: meter_serial_number, sat_number (overrides the installation's sat_number)
+        source: SAT CSV uploads
+    logic:
+      - step: Detection
+        detail: is_non_sat_pending = sat_number blank OR (whitespace-stripped, upper-cased) = 'SATPENDING'.
+      - step: Eligibility
+        detail: period_start (mi_date) <= that project's cutoff; a project with no cutoff is excluded.
+      - step: Age
+        detail: >-
+          datediff(ETL run date in Asia/Kolkata, mi_date) -> age_0_30 / age_31_60 / age_61_90 / age_91_120 /
+          age_120_plus (frozen at refresh time).
+      - step: Gold
+        detail: GROUP BY project, geography, inventory_category, inventory_meter_type, age_key; meter_count = sum.
+    formulas:
+      - output: total_non_sat
+        formula: SUM(meter_count)
+      - output: summary[age_key][bucket]
+        formula: SUM(meter_count) per age band x CONSUMER / FEEDER / DT (or meter types)
+      - output: comparison[label]
+        formula: same, per geography label
+    caveats:
+      - >-
+          Age is frozen at ETL refresh time (not computed at query time); bands only move after the next gold run.
+      - Cutoff filtering also happens at refresh time.
+      - Unrecognised SAT values (e.g. 'SAT-14', 'SAT_1') are neither Non-SAT pending nor SAT-done.
+    sql_recipe: >-
+      Non-SAT ageing (dashboard KPI 11): FROM public.gold_non_sat_ageing_snapshot: SUM(meter_count) GROUP BY age_key
+      (stored values 'age_0_30','age_31_60','age_61_90','age_91_120','age_120_plus' -- only some occur) and/or
+      category / project / zone. Order buckets with an explicit CASE, not alphabetically.
+    followups:
+      - How many Non-SAT meters are older than 120 days by zone?
+      - Explain the MI vs SAT-Progress KPI
+  - number: 10
+    title: Meters Journey Avg time
+    kpi_code: meter_journey_avg_time
+    backend_kpi_id: 12
+    section: Meter Journey
+    card: Meters Journey Avg time across the levels for Revenue realized (Total & Category wise).
+    aliases:
+      - meter journey
+      - meters journey
+      - meter journey avg time
+      - meters journey avg time
+      - journey avg time
+      - journey average time
+      - average journey time
+      - avg journey time
+      - total journey
+      - journey time
+      - journey days
+      - meter lifecycle
+      - workflow lead time
+      - lead time
+      - di to agency
+      - inventory to agency
+      - agency to supervisor
+      - supervisor to technician
+      - technician to installation
+      - installation to sat
+      - sat to revenue
+      - sat to revenue realized
+      - revenue realized journey
+      - kpi 12
+      - kpi12
+      - kpi-12
+    summary: >-
+      **Meters Journey Avg time** is the average number of days a meter spends in each stage from receipt into GMR
+      stock (DI date) to revenue realization (PMPM collection): DI -> agency -> supervisor -> technician ->
+      installation -> SAT -> revenue. It reads Postgres `gold_meter_journey_stage_agg`, which stores SUMS of days
+      and meter counts per group, and divides them: each stage = SUM(stage days) / SUM(denominator), rounded to 2
+      decimals. The four handoff stages divide by all eligible meters, installation->SAT by meters with a SAT date,
+      and SAT->revenue and total journey by revenue-realized meters only -- so the stage averages do not add up to
+      the total journey.
+    gold_tables:
+      - table: gold_meter_journey_stage_agg
+        columns: >-
+          project, discom, zone, circle, division, sub_division, installation_year, category, meter_type, the 7
+          *_days_sum columns, meter_count, sat_meter_count, revenue_realized_meter_count
+    silver_tables:
+      - table: unified_smart_meter_inventory
+        columns: >-
+          meter_serial_number, di_date, gmr_to_agency_ts, agency_to_sup_ts, sup_to_tech_ts, installed_ts,
+          meter_type, sku
+        source: INVSMM
+      - table: unified_installations
+        columns: new_meter_serial_number, project, discom, zone, circle, division, sub_division, sat_number
+        source: CMIQC, CNSQC, DMIQC, FMIQC
+      - table: unified_complaints
+        columns: replacement leg (INCLUDED, flagged is_replacement)
+        source: COMQC, DOMQC, FOMQC
+      - table: sat_meter_mappings
+        columns: meter_serial_number, sat_number (overrides the installation's sat_number)
+        source: SAT CSV uploads
+      - table: sat_milestones
+        columns: project, sat_number, sat_date, pmpm_collection_date (one row per SAT batch)
+        source: Postgres milestone_config
+    logic:
+      - step: Flow
+        detail: >-
+          Inventory (5 timestamps) JOIN installations (geography, SAT number) LEFT JOIN sat_milestones (SAT + PMPM
+          collection date) -> Spark _meter_journey() -> Postgres gold_meter_journey_stage_agg -> backend
+          kpi_catalog/meter_journey_avg_time.py -> card.
+      - step: Eligibility
+        detail: >-
+          A meter counts only if di_date, gmr_to_agency_ts, agency_to_sup_ts, sup_to_tech_ts and installed_ts are
+          ALL present and in order (each >= the previous) AND the serial appears in an installation report. One
+          missing/out-of-order timestamp drops the meter from every stage.
+      - step: SAT dates
+        detail: >-
+          sat_milestones is loaded from Postgres milestone_config: one row per project + SAT batch, so every meter
+          in a batch shares the same sat_date and pmpm_collection_date. No matching batch -> the meter stays, with
+          NULL SAT / revenue dates.
+      - step: Stage days
+        detail: >-
+          (unix_timestamp(b) - unix_timestamp(a)) / 86400.0 -- fractional days: DI->agency, agency->supervisor,
+          supervisor->technician, technician->installed, installed->sat_date, sat_date->pmpm_collection_date, and
+          total = pmpm_collection_date - di_date.
+      - step: Gold
+        detail: >-
+          GROUP BY project, geography, installation_year, category, meter_type, is_replacement; stores sum() of each
+          stage's days, meter_count = count(*), sat_meter_count = count(sat_date), revenue_realized_meter_count =
+          count(pmpm_collection_date).
+      - step: Category
+        detail: >-
+          From inventory meter_type + sku: 3PLTCTSM without CON in the SKU -> DT, HTCTPTSM without CON -> FEEDER,
+          everything else CONSUMER (1PH/3PH/LTCT/HTCT/OTHER-Consumer_meter).
+      - step: Replacements
+        detail: >-
+          INCLUDED -- KPI 12 sums across is_replacement; the dashboard-stats journey cards filter to NOT
+          is_replacement, so they differ by design.
+      - step: Comparison label
+        detail: >-
+          level=discom: project when no project is selected, else discom; zone/circle/division/sub_division: that
+          column. Upper-cased.
+    formulas:
+      - output: DI to Agency
+        formula: SUM(inventory_to_agency_days_sum) / SUM(meter_count)
+      - output: Agency to Supervisor
+        formula: SUM(agency_to_supervisor_days_sum) / SUM(meter_count)
+      - output: Supervisor to Technician
+        formula: SUM(supervisor_to_technician_days_sum) / SUM(meter_count)
+      - output: Technician to Installation
+        formula: SUM(technician_to_installation_days_sum) / SUM(meter_count)
+      - output: Installation to SAT
+        formula: SUM(installation_to_sat_days_sum) / SUM(sat_meter_count)
+      - output: SAT to Revenue
+        formula: SUM(sat_to_revenue_realized_days_sum) / SUM(revenue_realized_meter_count)
+      - output: Total Journey
+        formula: SUM(total_journey_days_sum) / SUM(revenue_realized_meter_count)
+      - output: Total Meters
+        formula: SUM(meter_count)
+      - output: Rounding
+        formula: ROUND(..., 2); a bucket with no data shows 0 (COALESCE)
+      - output: Category / meter type
+        formula: >-
+          same ratios per CONSUMER / FEEDER / DT, or per consumer meter type when the request is consumer-only -- a
+          weighted average, not the mean of the buckets
+    caveats:
+      - >-
+          Stage averages use different denominators (all eligible meters / SAT meters / revenue-realized meters), so
+          they do NOT add up to Total Journey.
+      - Replacements are included here; the dashboard-stats journey cards exclude them.
+      - >-
+          Strict eligibility: a single missing or out-of-order handoff timestamp removes the meter entirely, so
+          Total Meters is smaller than MI-Progress.
+      - SAT and revenue dates are per SAT batch, not per meter -- the last two stages move in steps.
+      - A bucket with no SAT / revenue meters shows 0 days, not blank.
+      - 'SAT dates are not order-checked: a sat_date before installed_ts gives negative days for that stage.'
+      - installation_year comes from the inventory installed_ts, not the installation report's mi_date.
+      - No date range -- always 'as on latest date'; the only time filter is installation_year.
+    sql_recipe: >-
+      Meters Journey Avg time (dashboard KPI 12): FROM public.gold_meter_journey_stage_agg. NEVER AVG() a *_days_sum
+      column -- every figure is a ratio of sums, ROUND(..., 2): DI to Agency =
+      SUM(inventory_to_agency_days_sum)/NULLIF(SUM(meter_count),0); Agency to Supervisor =
+      SUM(agency_to_supervisor_days_sum)/NULLIF(SUM(meter_count),0); Supervisor to Technician =
+      SUM(supervisor_to_technician_days_sum)/NULLIF(SUM(meter_count),0); Technician to Installation =
+      SUM(technician_to_installation_days_sum)/NULLIF(SUM(meter_count),0); Installation to SAT =
+      SUM(installation_to_sat_days_sum)/NULLIF(SUM(sat_meter_count),0); SAT to Revenue =
+      SUM(sat_to_revenue_realized_days_sum)/NULLIF(SUM(revenue_realized_meter_count),0); Total Journey =
+      SUM(total_journey_days_sum)/NULLIF(SUM(revenue_realized_meter_count),0); Total Meters = SUM(meter_count). Do
+      NOT filter is_replacement (the KPI includes replacements). Category breakdown = GROUP BY category
+      ('CONSUMER','FEEDER','DT'); consumer-only = WHERE category = 'CONSUMER' GROUP BY meter_type
+      ('1PH-Consumer_meter','3PH-Consumer_meter','LTCT-Consumer_meter','HTCT-Consumer_meter','OTHER-Consumer_meter').
+      Year filter = installation_year (integer). No date column exists -- it is a snapshot. Project/geography values
+      are lower-case -- compare with LOWER().
+    followups:
+      - What is the average meter journey time by category?
+      - Which project has the longest installation to SAT time?
+      - Explain the Meters Journey Avg time KPI
+    filters:
+      - filter: duration
+        values: as on latest date
+        effect: No date range; from/to are ignored
+      - filter: project
+        values: agra, kashi, triveni, All Project
+        effect: LOWER(n.project) = LOWER(value)
+      - filter: category
+        values: all, consumer, feeder, dt, 1ph/3ph/ltct/htct/other-consumer_meter
+        effect: LOWER(category) = ANY(...) OR LOWER(meter_type) = ANY(...)
+      - filter: installation_year
+        values: all, 2024, 2025, 2026
+        effect: installation_year = value
+      - filter: zone / circle / division / sub_division
+        values: any name
+        effect: LOWER(col) = LOWER(value)
+      - filter: level
+        values: discom (default), zone, circle, division, sub_division
+        effect: Picks the comparison dimension
+    response:
+      - part: Parts
+        shape: total_meters, summary (one object per stage), comparison (per geography label).
+      - part: Stage object
+        shape: >-
+          {total, CONSUMER, FEEDER, DT} -- or {total, 1PH-, 3PH-, LTCT-, HTCT-, OTHER-Consumer_meter} when the
+          category filter is consumer-only.
+      - part: Stage keys
+        shape: >-
+          inventory_to_agency, agency_to_supervisor, supervisor_to_technician, technician_to_installation,
+          installation_to_sat, sat_to_revenue_realized, total_journey.
+      - part: Shape
+        shape: >-
+          {"total_meters": N, "summary": {"inventory_to_agency": {"total": .., "CONSUMER": .., "FEEDER": .., "DT":
+          ..}, ..., "total_meters": N}, "comparison": [{"label": "KASHI", "total_meters": N, "inventory_to_agency":
+          {...}, ...}]}
+    example:
+      - step: Meters
+        result: >-
+          M1 consumer 1PH and M2 consumer 3PH (same SAT batch, revenue collected), M3 DT with no SAT yet, M4 missing
+          sup_to_tech_ts -- all kashi
+      - step: Dropped
+        result: M4 (a handoff timestamp is missing); total_meters = 3.
+      - step: DI to Agency
+        result: (2 + 4 + 1) / 3 = 2.33 days (CONSUMER 3, DT 1).
+      - step: Technician to Installation
+        result: (4 + 4 + 10) / 3 = 6 days.
+      - step: Installation to SAT
+        result: (20 + 18) / 2 = 19 days -- only the 2 SAT meters; DT shows 0 (no data).
+      - step: SAT to Revenue
+        result: (30 + 30) / 2 = 30 days.
+      - step: Total Journey
+        result: >-
+          59 days over 2 meters -- while the stages add up to 60.33, because the stages use different meter
+          populations.
+  - number: 11
+    title: Meters Current Stage for Revenue not realized
+    kpi_code: meter_current_stage_revenue_not_realized
+    backend_kpi_id: 16
+    section: Meter Journey
+    card: Meters Current Stage for Revenue not realized (Total & Category wise).
+    aliases:
+      - meter current stage
+      - meters current stage
+      - current stage for revenue not realized
+      - current stage for revenue not realised
+      - meters current stage for revenue not realized
+      - revenue not realized
+      - revenue not realised
+      - revenue not realized stage
+      - revenue pending stage
+      - installation done sat pending
+      - installed sat pending
+      - sat done revenue pending
+      - revenue pending
+      - meter current stage kpi
+      - kpi 16
+      - kpi16
+      - kpi-16
+    summary: >-
+      **Meters Current Stage for Revenue not realized** counts every meter whose PMPM revenue is not collected yet,
+      placed in the ONE stage it is in right now: Inventory, Agency, Supervisor, Technician (not installed yet),
+      Installed / SAT pending, or SAT done / revenue pending. It is a UNION ALL of two Postgres snapshots --
+      `gold_meter_installation_pending_stage_snapshot` (uninstalled inventory meters, by the furthest handoff
+      timestamp reached) and `gold_meter_revenue_pending_stage_snapshot` (installed meters with no PMPM collection
+      date, split by whether the SAT number parses as SAT-1..SAT-13) -- and every number is SUM(meter_count).
+    gold_tables:
+      - table: gold_meter_installation_pending_stage_snapshot
+        columns: >-
+          project (from warehouse), category, meter_type, current_stage (inventory/agency/supervisor/technician),
+          meter_count
+      - table: gold_meter_revenue_pending_stage_snapshot
+        columns: >-
+          project (from installation), category, meter_type, current_stage (installation_done_sat_pending /
+          sat_done_revenue_pending), meter_count
+    silver_tables:
+      - table: unified_smart_meter_inventory
+        columns: >-
+          meter_serial_number, gmr_to_agency_ts, agency_to_sup_ts, sup_to_tech_ts, installed_ts, warehouse,
+          meter_type, sku
+        source: INVSMM
+      - table: unified_installations
+        columns: new_meter_serial_number, project, geography
+        source: CMIQC, CNSQC, DMIQC, FMIQC
+      - table: unified_complaints
+        columns: replacement leg (INCLUDED)
+        source: COMQC, DOMQC, FOMQC
+      - table: sat_meter_mappings
+        columns: meter_serial_number, sat_number
+        source: SAT CSV uploads
+      - table: sat_milestones
+        columns: project, sat_number, pmpm_collection_date (one row per SAT batch)
+        source: Postgres milestone_config
+    logic:
+      - step: Flow
+        detail: >-
+          Inventory + installations (+ SAT mapping and milestones) -> Spark _installation_pending_stage() and
+          _revenue_pending_stage_sql() -> two Postgres snapshots -> backend
+          kpi_catalog/meter_current_stage_revenue_not_realized.py (UNION ALL) -> card.
+      - step: Pre-install stages
+        detail: >-
+          From the latest inventory row per serial. A serial found in installations_all, or with installed_ts set,
+          is 'installed' and dropped. Otherwise the furthest handoff wins: sup_to_tech_ts -> technician; else
+          agency_to_sup_ts -> supervisor; else gmr_to_agency_ts -> agency; else inventory.
+      - step: Pre-install project
+        detail: >-
+          From the warehouse -> project map (VARANASI_HW etc. -> kashi, PRAYAGRAJ_HW / MIRZAPUR_ZW -> triveni,
+          AGRA_HW / ALIGARH WAREHOUSE -> agra, else unassigned).
+      - step: Post-install stages
+        detail: >-
+          Latest installation per serial (replacements included) INNER JOIN inventory, LEFT JOIN sat_milestones on
+          project + sat_number, kept only when pmpm_collection_date IS NULL. SAT-1..SAT-13 ->
+          sat_done_revenue_pending; anything else -> installation_done_sat_pending.
+      - step: Post-install project
+        detail: From the installation report's project.
+      - step: Category
+        detail: >-
+          Inventory meter_type + sku: 3PLTCTSM without CON in the SKU -> DT, HTCTPTSM without CON -> FEEDER, else
+          CONSUMER (1PH/3PH/LTCT/HTCT/OTHER-Consumer_meter).
+      - step: Backend
+        detail: >-
+          UNION ALL of both snapshots (category upper-cased); bucket = meter_type when consumer-only else category;
+          SUM(meter_count) per stage x bucket; stage total = sum of its buckets; comparison always by
+          UPPER(project).
+    formulas:
+      - output: Inventory / Agency / Supervisor / Technician
+        formula: SUM(meter_count) FROM gold_meter_installation_pending_stage_snapshot WHERE current_stage = 'X'
+      - output: Installed, SAT pending
+        formula: >-
+          SUM(meter_count) FROM gold_meter_revenue_pending_stage_snapshot WHERE current_stage =
+          'installation_done_sat_pending'
+      - output: SAT done, revenue pending
+        formula: >-
+          SUM(meter_count) FROM gold_meter_revenue_pending_stage_snapshot WHERE current_stage =
+          'sat_done_revenue_pending'
+      - output: Total meters
+        formula: SUM(meter_count) over both snapshots
+      - output: Category / meter type
+        formula: the same sums per CONSUMER / FEEDER / DT, or per consumer meter type
+      - output: Comparison
+        formula: the same sums per UPPER(project)
+    caveats:
+      - Snapshot only -- no date filter; it changes only after the ETL refresh.
+      - >-
+          Project comes from the warehouse before installation and from the installation after it, so a meter can
+          change project label when it is installed.
+      - >-
+          'SAT done' only means the SAT number parses as SAT-1..SAT-13 -- it does not check sat_date (Agra
+          SAT-8/10/12 have no SAT date yet but still count as SAT done, revenue pending).
+      - >-
+          Unrecognised SAT values (e.g. 'SAT-14') count as Installed / SAT pending here, while MI vs SAT and Non-SAT
+          ageing treat them as neither.
+      - >-
+          Installed meters with no inventory row, and meters with installed_ts but no installation row, are in
+          neither snapshot.
+      - Replacements are included.
+      - Scrapped old meters are not removed from the pre-install stages (unlike unutilized stock ageing).
+      - Only project and category filters exist -- no zone / circle / division comparison.
+    sql_recipe: >-
+      Meters Current Stage for Revenue not realized (dashboard KPI 16): FROM (SELECT project, category, meter_type,
+      current_stage, meter_count FROM public.gold_meter_installation_pending_stage_snapshot UNION ALL SELECT
+      project, UPPER(category), meter_type, current_stage, meter_count FROM
+      public.gold_meter_revenue_pending_stage_snapshot) n: SUM(meter_count) by current_stage (stored values
+      'inventory','agency','supervisor','technician','installation_done_sat_pending','sat_done_revenue_pending').
+      'Not yet installed' = the first four; 'installed but revenue pending' = the last two; 'total meters' =
+      everything. Category = GROUP BY category ('CONSUMER','FEEDER','DT'); consumer meter types via meter_type. No
+      date column. Project values are lower-case; comparison is by project only. Never answer this from
+      gold_inventory_unutilized_stock_snapshot (unutilized stock ageing) or gold_non_sat_ageing_snapshot (Non-SAT
+      ageing).
+    followups:
+      - How many meters are SAT done but revenue pending by project?
+      - Meters current stage for revenue not realized category wise
+      - Explain the Meters Current Stage KPI
+    filters:
+      - filter: duration
+        values: as on latest date
+        effect: No date range
+      - filter: project
+        values: agra, kashi, triveni, All Project
+        effect: n.project IN (...)
+      - filter: category
+        values: all, consumer, feeder, dt, 1ph/3ph/ltct/htct/other-consumer_meter
+        effect: LOWER(category) = ANY(...) OR LOWER(meter_type) = ANY(...)
+    response:
+      - part: Parts
+        shape: total_meters, summary (one object per stage), comparison (per project).
+      - part: Stage keys
+        shape: inventory, agency, supervisor, technician, installation_done_sat_pending, sat_done_revenue_pending.
+      - part: Stage object
+        shape: >-
+          {CONSUMER, FEEDER, DT, total} -- or the 5 consumer meter types + total when the category filter is
+          consumer-only; total is summed in Python.
+      - part: Shape
+        shape: >-
+          {"total_meters": N, "summary": {"inventory": {"CONSUMER": .., "FEEDER": .., "DT": .., "total": ..}, ...,
+          "total_meters": N}, "comparison": [{"label": "KASHI", "total_meters": N, "inventory": {...}, ...}]}
+    example:
+      - step: Meters (kashi)
+        result: >-
+          A in VARANASI_HW with no handoffs | B handed to a supervisor, not installed | C installed, SAT number
+          blank | D installed, SAT-9, PMPM collected | E installed, SAT-11, no PMPM | F installed but not in
+          inventory
+      - step: Stages
+        result: A inventory, B supervisor, C installation_done_sat_pending, E sat_done_revenue_pending.
+      - step: Excluded
+        result: D (revenue realized) and F (no inventory row -- in neither snapshot).
+      - step: total_meters
+        result: '4'
+  - number: 12
+    title: MI vs SAT vs Invoice Funnel
+    kpi_code: mi_vs_sat
+    backend_kpi_id: 10
+    section: Invoicing
+    card: MI vs SAT vs Invoice Funnel -- installed -> SAT certified -> lumpsum / PMPM invoiced (dashboard KPI 10a).
+    aliases:
+      - mi vs sat vs invoice funnel
+      - mi vs sat vs invoice
+      - invoice funnel
+      - invoicing funnel
+      - mi to invoice funnel
+      - mi to invoice
+      - funnel
+      - lumpsum invoiced
+      - lump sum invoiced
+      - pmpm invoiced
+      - lumpsum of sat
+      - pmpm of sat
+      - invoice percentage
+      - kpi 10a
+      - kpi10a
+    summary: >-
+      **MI vs SAT vs Invoice Funnel** (dashboard KPI 10a) shows how far installed meters have progressed toward
+      billing: Total MI -> Total SAT (certified) -> Lumpsum invoiced and PMPM invoiced. It is NOT a separate query:
+      the same `/api/v1/kpis/mi_vs_sat` request as MI vs SAT, over Postgres `gold_mi_sat_invoice_snapshot`. Every
+      count is SUM(meter_count): Total MI = all rows, Total SAT = sat_stage IS NOT NULL (SAT-1..SAT-13), Lumpsum /
+      PMPM invoiced = has_lumpsum_invoice / has_pmpm_invoice (the meter's SAT batch has that invoice date in
+      sat_milestones). The two invoice percentages divide by **Total SAT, not Total MI**.
+    gold_tables:
+      - table: gold_mi_sat_invoice_snapshot
+        columns: >-
+          project, discom, zone, circle, division, sub_division, category, meter_type, sat_stage,
+          has_lumpsum_invoice, has_pmpm_invoice, is_sat_eligible, meter_count
+      - table: gold_mi_sat_invoice_day_agg
+        columns: the day grain it is built from (period_start = mi_date)
+    silver_tables:
+      - table: unified_installations
+        columns: mi_date, project, geography, report_category, new_meter_type, new_meter_serial_number
+        source: CMIQC, CNSQC, DMIQC, FMIQC
+      - table: unified_complaints
+        columns: replacement leg (INCLUDED)
+        source: COMQC, DOMQC, FOMQC
+      - table: sat_meter_mappings
+        columns: meter_serial_number, sat_number (the SAT batch)
+        source: SAT CSV uploads
+      - table: sat_milestones
+        columns: project, sat_number, lumpsum_invoice_date, pmpm_invoice_date (one row per batch)
+        source: Postgres milestone_config
+    logic:
+      - step: Flow
+        detail: >-
+          installations_all (installations + replacements, SAT number from sat_meter_mappings) LEFT JOIN
+          sat_milestones on project + sat_number -> _mi_sat_invoice_sql() -> gold_mi_sat_invoice_day_agg ->
+          _mi_sat_invoice_snapshot() (date dropped, is_sat_eligible added) -> gold_mi_sat_invoice_snapshot ->
+          backend kpi_catalog/mi_vs_sat.py -> the MI vs SAT card AND the invoice funnel card.
+      - step: Installed
+        detail: Every installation row with an mi_date (count(*) of rows, replacements included).
+      - step: Certified (SAT)
+        detail: >-
+          sat_number with spaces removed, upper-cased = 'SAT-1'..'SAT-13' -> sat_stage 1..13; anything else (blank,
+          'SAT PENDING', 'SAT-14') -> NULL = not certified.
+      - step: Invoiced
+        detail: >-
+          has_lumpsum_invoice / has_pmpm_invoice = that project + SAT batch has a lumpsum / PMPM invoice date.
+          Invoice dates belong to the batch, so every meter in an invoiced batch counts.
+      - step: Category
+        detail: >-
+          report_category first (CONSUMER / FEEDER / DT, DTR -> DT); if blank, 3PLTCTSM -> DT, HTCTPTSM -> FEEDER,
+          else CONSUMER. Consumer meter type 1PH/3PH/LTCT/HTCT, unknown -> NULL (shown as OTHER).
+      - step: No batching step
+        detail: >-
+          A meter gets a sat_number only through sat_meter_mappings, whose identity IS the batch, so 'batched' and
+          'SAT done' are the same event.
+      - step: Comparison
+        detail: >-
+          level=discom: project when no project is selected, else discom; or zone / circle / division /
+          sub_division. The same six figures per label.
+    formulas:
+      - output: Total MI
+        formula: SUM(meter_count)
+      - output: Total SAT
+        formula: SUM(meter_count) FILTER (WHERE sat_stage IS NOT NULL)
+      - output: Lumpsum invoiced
+        formula: SUM(meter_count) FILTER (WHERE has_lumpsum_invoice)
+      - output: '% Lumpsum of SAT'
+        formula: Lumpsum invoiced x 100 / Total SAT (0 when Total SAT = 0), 2 decimals
+      - output: PMPM invoiced
+        formula: SUM(meter_count) FILTER (WHERE has_pmpm_invoice)
+      - output: '% PMPM of SAT'
+        formula: PMPM invoiced x 100 / Total SAT, 2 decimals
+      - output: Drop-offs (chatbot)
+        formula: >-
+          installed not SAT = sat_stage IS NULL; SAT not lumpsum/PMPM invoiced = sat_stage IS NOT NULL AND NOT
+          has_lumpsum_invoice / has_pmpm_invoice
+    caveats:
+      - >-
+          The invoice percentages are shares of SAT-done meters, not of installed meters: a meter cannot be billed
+          before its SAT, so dividing by MI would mix the DISCOM's certification lag into GMR's billing lag. %
+          Lumpsum of SAT can read 100% while SAT progress reads 60% -- both correct.
+      - >-
+          Lumpsum and PMPM are independent counts, never to be added -- a batch can have either, both or neither
+          (today they are identical: every invoiced batch has both dates).
+      - >-
+          Invoice dates are per SAT batch, not per meter; (project, sat_number) is unique so nothing double-counts.
+      - '''SAT done'' checks only the SAT number, not sat_date -- batches without a SAT date yet still count.'
+      - Replacements are included, so Total MI exceeds MI-Progress (KPI 1) by the replacement installs.
+      - Counts installation ROWS (installations_all is not reduced to one row per serial).
+      - >-
+          No eligible variants: only the SAT progress % has an eligible version; invoicing uses the full population.
+      - >-
+          Stale WFM docs: they say day_agg (code reads the snapshot), SAT-1..SAT-11 (code: 1..13), cutoffs seeded
+          2026-05-10 and total_mi = KPI 1 -- none true today.
+      - Snapshot 'as on latest SAT' -- no date range; changes after the ETL gold refresh.
+    sql_recipe: >-
+      MI vs SAT vs Invoice Funnel (dashboard KPI 10a, same data as MI vs SAT): FROM
+      public.gold_mi_sat_invoice_snapshot: Total MI = SUM(meter_count); Total SAT = SUM(meter_count) FILTER (WHERE
+      sat_stage IS NOT NULL); Lumpsum invoiced = SUM(meter_count) FILTER (WHERE has_lumpsum_invoice); PMPM invoiced
+      = SUM(meter_count) FILTER (WHERE has_pmpm_invoice); % Lumpsum of SAT = 100.0 * lumpsum / NULLIF(Total SAT, 0)
+      and % PMPM of SAT = 100.0 * PMPM / NULLIF(Total SAT, 0) -- divide by Total SAT, NEVER by Total MI, and never
+      add lumpsum and PMPM. 'SAT done but not invoiced' = sat_stage IS NOT NULL AND NOT has_lumpsum_invoice (or
+      has_pmpm_invoice). No date column; replacements included.
+    followups:
+      - Show the MI vs SAT vs invoice funnel project wise
+      - How many meters are SAT done but not invoiced?
+      - Why is the lumpsum invoice percentage calculated on SAT and not MI?
+    filters:
+      - filter: duration
+        values: as on latest sat
+        effect: Snapshot; from / to ignored
+      - filter: project
+        values: agra, kashi, triveni, All Project (repeatable)
+        effect: n.project IN (...)
+      - filter: category
+        values: all, consumer, feeder, dt, 1ph/3ph/ltct/htct-consumer_meter
+        effect: LOWER(category) = ANY(...) OR LOWER(meter_type) = ANY(...)
+      - filter: level
+        values: discom (default), zone, circle, division, sub_division
+        effect: Comparison dimension
+      - filter: discom / zone / circle / division / sub_division
+        values: any name
+        effect: LOWER(col) = LOWER(value)
+    response:
+      - part: Funnel fields
+        shape: >-
+          total_mi, total_sat, total_lumpsum_invoice, lumpsum_invoice_pct, total_pmpm_invoice, pmpm_invoice_pct --
+          at the top level of the MI vs SAT response and on every comparison row.
+      - part: Same response also has
+        shape: >-
+          total_mi_eligible, total_sat_eligible, sat_progress_pct(_eligible), sat_eligibility_cutoff_date,
+          summary.sat_1..sat_13.
+    example:
+      - step: Meters (kashi)
+        result: >-
+          M1 SAT-9, batch lumpsum + PMPM invoiced | M2 SAT-10, lumpsum only | M3 no SAT number | M4 SAT-11, not
+          invoiced | M5 'SAT-14'
+      - step: Total MI
+        result: '5'
+      - step: Total SAT
+        result: 3 (M1, M2, M4) -- M3 blank and M5's 'SAT-14' do not parse.
+      - step: Lumpsum
+        result: 2 (M1, M2) -> % Lumpsum of SAT = 2 / 3 = 66.67%.
+      - step: PMPM
+        result: 1 (M1) -> % PMPM of SAT = 1 / 3 = 33.33%.
+      - step: Not invoiced
+        result: SAT done but not lumpsum invoiced = 1 (M4); not PMPM invoiced = 2 (M2, M4).
+  - number: 13
+    title: Invoice vs Revenue Released (Receivables summary)
+    kpi_code: revenue_receivables
+    backend_kpi_id: 14
+    section: Commercial
+    card: >-
+      Receivables summary - Delay analysis: Invoice Amount (Net) vs Realised vs Within Timeline (unpaid, not yet due) vs Overdue, for
+      Lumpsum, PMPM and Cable, per project (money, in crore rupees).
+    aliases:
+      - invoice vs revenue released
+      - invoice vs revenue
+      - revenue released
+      - released revenue
+      - receivables
+      - receivables summary
+      - receivable
+      - delay analysis
+      - revenue receivables
+      - realised revenue
+      - realized revenue
+      - amount realised
+      - amount realized
+      - outstanding amount
+      - cable invoiced
+      - cable realised
+      - cable realized
+      - within timeline
+      - kpi 14
+      - kpi14
+      - kpi-14
+      - cable revenue realized
+      - cable revenue realised
+      - cable revenue
+      - cable revenue growth
+      - receivables trend
+      - receivables history
+      - last submission
+    summary: >-
+      **Invoice vs Revenue Released** (dashboard KPI 14, 'Receivables summary - Delay analysis') is MONEY, not
+      meters: how much GMR invoiced, how much was realised (released / paid) and how much was realised within the
+      agreed timeline, for three streams -- Lumpsum, PMPM and Cable -- in crore rupees. There is no ETL: an operator
+      types the figures into a form (POST /api/v1/revenue-receivables) that appends a row per project to Postgres
+      `revenue_receivables`. The card takes each project's LATEST submission and SUMs the projects.
+    gold_tables:
+      - table: revenue_receivables (Postgres, operator-entered -- not a gold table)
+        columns: id, created_at, project, lumpsum/pmpm/cable _invoiced, _realised, _within_timeline
+    silver_tables:
+      - table: (none)
+        columns: No Silver / Gold / ETL -- the figures are typed in by an operator
+        source: POST /api/v1/revenue-receivables (permission submit_revenue_data)
+    logic:
+      - step: Source
+        detail: >-
+          An operator submits one project's 9 amounts; the row is appended (never updated), with the project
+          validated against the geography tree (unknown project -> 422).
+      - step: Latest per project
+        detail: >-
+          ROW_NUMBER() OVER (PARTITION BY project ORDER BY created_at DESC, id DESC) = 1 -- a new submission
+          supersedes the previous one for that project.
+      - step: Discom
+        detail: Resolved through geography_nodes (the PROJECT node's parent), not stored on the row.
+      - step: Summary
+        detail: SUM of each of the 9 amounts across the projects in scope -- never the single newest row overall.
+      - step: Comparison
+        detail: The same 9 amounts per UPPER(project).
+      - step: Scope
+        detail: 'Filters: project (repeatable), discom. A user scoped below project level sees their whole project.'
+      - step: Percentages
+        detail: >-
+          The backend returns none; realised % etc. are computed by the dashboard (and by the chatbot the same way).
+      - step: Cable Revenue realized card
+        detail: >-
+          The dashboard's 'Cable Revenue realized' card is the Cable slice of this KPI: SUM(cable_realised) per
+          project (and cable_invoiced / cable_within_timeline). Cable is billed service-cable work; nothing links it
+          to installation data.
+      - step: History
+        detail: >-
+          Every submission is kept. The backend exposes GET /api/v1/revenue-receivables/{project}/latest and
+          /{project}/history (operator-only); the chatbot's trend and 'change since the last submission' answers
+          read every stored row.
+    formulas:
+      - output: Invoice Amount (Net) / Realised / Within Timeline
+        formula: SUM(<stream>_invoiced / _realised / _within_timeline) over the latest row of each project
+      - output: Overdue (dashboard card)
+        formula: invoiced - realised - within_timeline (unpaid and past due; Within Timeline = unpaid, not yet due)
+      - output: Outstanding (all unpaid)
+        formula: invoiced - realised = Within Timeline + Overdue
+      - output: '% Realised'
+        formula: realised / invoiced x 100
+    caveats:
+      - >-
+          Operator-entered and unvalidated: nothing checks realised <= invoiced, within_timeline <= invoiced - realised (a negative Overdue), or
+          that values are positive.
+      - 'Units are what the operator typed: the docs say crore, but their own POST example uses raw rupees.'
+      - >-
+          It is money, and has nothing to do with the MI vs SAT vs Invoice Funnel, which counts METERS in invoiced
+          SAT batches -- the two are not comparable.
+      - 'No history on the card: older submissions stay in the table but only the latest per project is shown.'
+      - A project never submitted is missing from the comparison and contributes 0.
+      - >-
+          A project's latest within_timeline can be 0 while realised is not -- worth confirming with the
+          operator when it happens.
+      - >-
+          Dashboard mismatch (seen once): the 'Cable Revenue realized' card plotted the PMPM realised values
+          instead of cable realised -- the card appears to read the wrong column (frontend).
+      - >-
+          The card's Category (Consumer / DT / Feeder) and Daily / date-range controls cannot apply: receivables
+          have no category and no date other than the submission date, so 'Cable revenue growth' shows no records
+          for a daily range.
+      - >-
+          Earlier Agra submissions went down and back up (cable realised 21 -> 9 -> 23); to-date amounts cannot
+          fall, so those look like corrections or test entries.
+    sql_recipe: >-
+      Invoice vs Revenue Released / Receivables (dashboard KPI 14): answered by the receivables fast path from the
+      operator table public.revenue_receivables (latest row per project, summed). Never answer receivable / realised
+      / released AMOUNTS from gold_mi_sat_invoice_snapshot (that counts meters, not money).
+    followups:
+      - What is the lumpsum invoiced vs realised amount by project?
+      - Cable revenue realized by project
+      - What changed since the last receivables submission?
+    filters:
+      - filter: project
+        values: All Project, agra, kashi, triveni (repeatable)
+        effect: latest row of those projects
+      - filter: discom
+        values: any discom name
+        effect: LOWER(discom) = LOWER(value), via geography_nodes
+    response:
+      - part: summary
+        shape: '{lumpsum_invoiced, lumpsum_realised, lumpsum_within_timeline, pmpm_..., cable_...} -- summed.'
+      - part: comparison
+        shape: 'one object per project: {label: ''AGRA'', the same 9 amounts}.'
+    example:
+      - step: Submissions
+        result: Agra files lumpsum 110 / 70 / 5 on 1 Sep, then 111.90 / 70.10 / 0.00 on 2 Sep.
+      - step: Card
+        result: Only Agra's 2 Sep row counts; the all-projects total adds Agra's, Kashi's and Triveni's latest rows.
+      - step: Derived
+        result: 'Agra lumpsum: 70.10 / 111.90 = 62.65% realised, 41.80 cr outstanding, 70.10 cr after the timeline.'
+  - number: 14
+    title: Revenue not realized ageing
+    kpi_code: revenue_not_realized_ageing
+    backend_kpi_id: 17
+    section: Revenue
+    card: >-
+      Revenue not realized ageing (Total & Category wise): SAT-certified meters whose PMPM revenue is not collected,
+      by days since the SAT date (0-30 / 31-60 / 61-90 / 91-120 / 120+).
+    aliases:
+      - revenue not realized ageing
+      - revenue not realised ageing
+      - revenue not realized aging
+      - revenue not realised aging
+      - revenue ageing
+      - revenue aging
+      - revenue ageing breakdown
+      - outstanding ageing
+      - outstanding aging
+      - total outstanding
+      - unrealized revenue ageing
+      - kpi 17
+      - kpi17
+      - kpi-17
+    summary: >-
+      **Revenue not realized ageing** (dashboard KPI 17) counts METERS whose revenue is earned but not collected:
+      the meter has a SAT number, its SAT batch has a sat_date, and the batch has no PMPM collection date. Each
+      meter is aged from its SAT date -- age = today (Asia/Kolkata) - sat_date, never below 0 -- and banded 0-30 /
+      31-60 / 61-90 / 91-120 / 120+ days AT REQUEST TIME. It reads Postgres `gold_revenue_ageing_snapshot` (sat_date
+      + outstanding_count per geography and meter type) and sums outstanding_count.
+    gold_tables:
+      - table: gold_revenue_ageing_snapshot
+        columns: >-
+          sat_date, project, discom, zone, circle, division, sub_division, category, meter_type, outstanding_count
+    silver_tables:
+      - table: unified_installations
+        columns: new_meter_serial_number, project, geography, report_category, new_meter_type
+        source: CMIQC, CNSQC, DMIQC, FMIQC
+      - table: unified_complaints
+        columns: replacement leg (INCLUDED)
+        source: COMQC, DOMQC, FOMQC
+      - table: sat_meter_mappings
+        columns: meter_serial_number, sat_number
+        source: SAT CSV uploads
+      - table: sat_milestones
+        columns: project, sat_number, sat_date, pmpm_collection_date
+        source: Postgres milestone_config
+      - table: unified_smart_meter_inventory
+        columns: meter_type, sku (category; optional -- LEFT join)
+        source: INVSMM
+    logic:
+      - step: Flow
+        detail: >-
+          installations_latest (one row per serial, replacements included) with a sat_number -> LEFT JOIN inventory
+          for category -> INNER JOIN sat_milestones on project + sat_number, keeping sat_date NOT NULL and
+          pmpm_collection_date IS NULL -> _revenue_ageing_sql() -> gold_revenue_ageing_snapshot -> backend
+          kpi_catalog/revenue_not_realized_ageing.py -> card.
+      - step: Earned
+        detail: >-
+          Only certified meters: a sat_number AND a sat_date on its batch. No SAT, or a batch without a sat_date yet
+          (e.g. Agra SAT-8/10/12), is not outstanding here.
+      - step: Not realized
+        detail: pmpm_collection_date IS NULL alone (the legacy report needed both collection dates null).
+      - step: No inventory row
+        detail: Still counted -- the installation report's type gives the category.
+      - step: Age
+        detail: >-
+          GREATEST((CURRENT_TIMESTAMP AT TIME ZONE 'Asia/Kolkata')::date - sat_date, 0), computed per request, so
+          meters move bands every day with no ETL refresh.
+      - step: Bands
+        detail: <=30 age_0_30, <=60 age_31_60, <=90 age_61_90, <=120 age_91_120, else age_120_plus.
+      - step: Comparison
+        detail: >-
+          level=discom: project when no project is selected, else discom; or zone / circle / division /
+          sub_division. Blank labels drop out of the comparison but stay in the totals.
+    formulas:
+      - output: Total outstanding
+        formula: SUM(outstanding_count)
+      - output: Age band A
+        formula: SUM(outstanding_count) WHERE the age falls in A
+      - output: Band x category
+        formula: the same per CONSUMER / FEEDER / DT, or per consumer meter type (NULL -> OTHER)
+      - output: Average age (chatbot)
+        formula: SUM(age x outstanding_count) / SUM(outstanding_count)
+    caveats:
+      - Counts METERS, not rupees -- the rupee receivables are the Invoice vs Revenue Released card.
+      - >-
+          All meters in one SAT batch share one sat_date, so whole batches move band together; today every
+          outstanding meter is SAT-11 (14 Jul 2026), so everything sits in one band (61-90 as of 25 Sep 2026).
+      - >-
+          It is smaller than Current Stage's 'SAT done, revenue pending' (KPI 16): that card counts any parsable
+          SAT-1..13 number even with no sat_date and needs an inventory row; this one needs a sat_date and does not.
+      - Replacements are included; meters are de-duplicated by serial (latest installation row).
+      - Not the same as Non-SAT ageing, which ages meters WITHOUT SAT from their installation date.
+    sql_recipe: >-
+      Revenue not realized ageing (dashboard KPI 17): FROM public.gold_revenue_ageing_snapshot, age =
+      GREATEST(CAST(CURRENT_TIMESTAMP AT TIME ZONE 'Asia/Kolkata' AS DATE) - sat_date, 0); bands <=30 / <=60 / <=90
+      / <=120 / >120; SUM(outstanding_count) per band and/or category / meter_type / project / zone. Never use
+      gold_non_sat_ageing_snapshot (Non-SAT) or revenue_receivables (rupees) for this.
+    followups:
+      - Revenue not realized ageing project wise
+      - How many meters have revenue outstanding for more than 60 days?
+      - Explain the revenue not realized ageing KPI
+    filters:
+      - filter: duration
+        values: as on today
+        effect: Age computed at request time
+      - filter: project
+        values: agra, kashi, triveni, All Project
+        effect: n.project IN (...)
+      - filter: category
+        values: all, consumer, feeder, dt, 1ph/3ph/ltct/htct/other-consumer_meter
+        effect: LOWER(category) = ANY(...) OR LOWER(meter_type) = ANY(...)
+      - filter: level
+        values: discom (default), zone, circle, division, sub_division
+        effect: Comparison dimension
+      - filter: discom / zone / circle / division / sub_division
+        values: any name
+        effect: LOWER(col) = LOWER(value)
+    response:
+      - part: Parts
+        shape: >-
+          total_outstanding, summary.age_0_30 .. age_120_plus (each {CONSUMER, FEEDER, DT, total} or the 5 consumer
+          types), comparison[] per label with the same bands.
+    example:
+      - step: Batch
+        result: 'Kashi SAT-11: sat_date 14 Jul 2026, no PMPM collection, 75,483 meters.'
+      - step: Age on 25 Sep 2026
+        result: 73 days -> band 61-90.
+      - step: On 12 Oct 2026
+        result: 90 days -> still 61-90; on 13 Oct it moves to 91-120 with no ETL run.
+      - step: Once collected
+        result: When SAT-11's pmpm_collection_date is filled, the next ETL refresh removes all its meters.
+  - number: 15
+    title: O&M-Productivity per team
+    kpi_code: om_team_productivity
+    backend_kpi_id: 18
+    section: O&M
+    card: >-
+      O&M-Productivity per team (Total & Category wise): closed complaint tickets, active technicians, productivity
+      per technician per day, top performer / requires support, resolution speed trend.
+    aliases:
+      - o&m productivity
+      - o&m-productivity
+      - om productivity
+      - o and m productivity
+      - o&m productivity per team
+      - o&m team productivity
+      - om team productivity
+      - complaint productivity
+      - ticket productivity
+      - total closed tickets
+      - closed tickets
+      - resolution speed
+      - top performer
+      - requires support
+      - kpi 18
+      - kpi18
+      - kpi-18
+    summary: >-
+      **O&M-Productivity per team** measures complaint (O&M) closing productivity: Total closed tickets =
+      SUM(complaint_count), Total active technicians = number of distinct technician names who closed at least one
+      ticket, Productivity per technician per day = closed tickets / SUM(technician_day_count), for the selected
+      date range. It reads Postgres `gold_om_technician_productivity_day_agg` (per-category rows, category <>
+      'ALL'), built from Silver `unified_complaints` (QC) + `unified_non_qc_complaints` (non-QC) closed complaints
+      -- open complaints are never counted.
+    gold_tables:
+      - table: gold_om_technician_productivity_day_agg
+        columns: >-
+          period_start, project, discom, zone, circle, division, sub_division, technician_name, category,
+          meter_type, complaint_count, technician_day_count
+      - table: gold_om_technician_productivity_month_agg
+        columns: same columns -- used for whole months when duration = monthly
+    silver_tables:
+      - table: unified_complaints
+        columns: technician_name, work_completed_at, complaint_entity_type, old_meter_serial_number, geography
+        source: COMQC, DOMQC, FOMQC
+      - table: unified_non_qc_complaints
+        columns: the same columns for non-QC complaints
+        source: non-QC complaint reports
+      - table: unified_smart_meter_inventory
+        columns: meter_type by serial (meter_type_lookup)
+        source: INVSMM
+    logic:
+      - step: Flow
+        detail: >-
+          QC + non-QC closed complaints (UNION ALL) -> meter type by old serial -> Spark _om_technician_day() ->
+          gold_om_technician_productivity_day_agg / _month_agg -> backend kpi_catalog/om_team_productivity.py ->
+          card.
+      - step: Eligible
+        detail: >-
+          work_completed_at IS NOT NULL and a technician_name. The active (open) complaints table is excluded --
+          open tickets have no closing date.
+      - step: Category
+        detail: >-
+          complaint_entity_type DT/DTR -> DT, FEEDER -> FEEDER, else CONSUMER. Total = the per-category rows
+          (category <> 'ALL'), never the 'ALL' rows.
+      - step: Date range
+        detail: >-
+          Same 3-leg reading as MI-Progress: partial start month and partial end month from the day table, whole
+          months in between (month table when duration = monthly). 'to' is inclusive.
+      - step: Technician-day
+        detail: >-
+          technician_day_count is 1 per ROW, and a row is technician x day x geography x category x meter type -- a
+          technician who closes a consumer and a DT ticket on one day counts 2 days.
+      - step: Insights
+        detail: >-
+          Top performer = the technician with the highest closed / technician-days (ties: more closed tickets, then
+          name A-Z); Requires support = the lowest (ties: fewer tickets, then name A-Z).
+      - step: Comparison / trend
+        detail: >-
+          Per label (project when no project is selected, else discom; or zone / circle / division / sub_division)
+          and per day / month-anchored week / month: closed, distinct technicians, and the same ratio.
+    formulas:
+      - output: Total closed tickets
+        formula: SUM(complaint_count)
+      - output: Total active technicians
+        formula: COUNT(DISTINCT technician_name)
+      - output: Productivity per technician per day
+        formula: ROUND(SUM(complaint_count) / SUM(technician_day_count), 2)
+      - output: Top performer / requires support
+        formula: 'per technician: SUM(complaint_count) / SUM(technician_day_count), highest / lowest'
+      - output: Category breakdown
+        formula: the same three per CONSUMER / DT / FEEDER
+    caveats:
+      - >-
+          The denominator counts rows, not distinct technician-days, so productivity is understated compared with
+          tickets / distinct technician-days.
+      - >-
+          'Top performer' and 'Requires support' are ratios, so a technician with one day and 13 tickets tops the
+          list, and many technicians tie at 1.00 -- the alphabetical tie-break picks the name shown (ABHAY).
+      - >-
+          Technicians are identified by name only; the same name in two teams merges, and name spellings split one
+          person.
+      - >-
+          Active technicians in the comparison are counted per label, so the projects' technicians add up to more
+          than the total when someone worked in two projects.
+      - >-
+          A range from the 1st to mid-month of the same month returns no data (the backend's date-leg gap, as in
+          MI-Progress).
+      - Open complaints are not included; this is closed-ticket productivity only.
+    sql_recipe: >-
+      O&M-Productivity per team (dashboard KPI 18): FROM public.gold_om_technician_productivity_day_agg WHERE
+      category <> 'ALL' (per-category rows) and the period_start range: closed tickets = SUM(complaint_count);
+      active technicians = COUNT(DISTINCT technician_name); productivity = ROUND(SUM(complaint_count)::numeric /
+      NULLIF(SUM(technician_day_count), 0), 2). Top performer = GROUP BY technician_name ORDER BY that ratio DESC,
+      closed DESC, name. Never use gold_mi_technician_productivity_* (installations) for O&M / complaints.
+    followups:
+      - O&M productivity project wise for last 30 days
+      - Who is the top performing O&M technician in kashi?
+      - Explain the O&M productivity per team KPI
+    filters:
+      - filter: duration
+        values: daily (default), weekly, monthly
+        effect: Trend bucket size
+      - filter: from / to
+        values: dates
+        effect: Closing-date range, inclusive
+      - filter: project
+        values: agra, kashi, triveni, All Project
+        effect: n.project IN (...)
+      - filter: category
+        values: all, consumer, feeder, dt, consumer meter types
+        effect: UPPER(category) or UPPER(meter_type) = value
+      - filter: discom / zone / circle / division / sub_division
+        values: any name
+        effect: LOWER(col) = LOWER(value)
+      - filter: level
+        values: discom (default), zone, circle, division, sub_division
+        effect: Comparison dimension
+    response:
+      - part: summary
+        shape: '{total_closed_tickets, total_active_technicians, productivity_per_technician_per_day}'
+      - part: insights
+        shape: '{top_performing_technician: {name, productivity}, lowest_performing_technician: {...}}'
+      - part: trend / comparison
+        shape: 'per date / per label: total_closed_tickets, active_technicians, productivity'
+      - part: category_breakdown
+        shape: CONSUMER / DT / FEEDER with the same three figures
+    example:
+      - step: Range
+        result: 25 Aug - 24 Sep 2026, all projects
+      - step: Cards
+        result: 17,763 closed tickets, 1,378 active technicians, 2.44 per technician per day
+      - step: Insights
+        result: >-
+          Top performer ARYENDRA KUMAR VISION ETAH (13 tickets in 1 technician-day = 13.00); requires support ABHAY
+          (1.00)
+      - step: By project
+        result: Kashi 12,752 closed / 647 technicians / 2.87; Agra 2,778 / 398 / 1.73; Triveni 2,233 / 333 / 1.80
+  - number: 16
+    title: O&M Productivity trend
+    kpi_code: om_team_productivity
+    backend_kpi_id: 18
+    section: O&M
+    card: >-
+      O&M Productivity trend (Total & Category wise): the O&M productivity card read month by month -- total closed
+      tickets, total active months, total active technicians, productivity per technician per day, monthly
+      performance trend and comparison by project.
+    aliases:
+      - o&m productivity trend
+      - o&m productivity trends
+      - om productivity trend
+      - o and m productivity trend
+      - o&m monthly productivity
+      - o&m monthly performance trend
+      - monthly performance trend
+      - o&m trend
+      - total active months
+    summary: >-
+      **O&M Productivity trend** is not a separate backend KPI: the dashboard calls the same O&M team productivity
+      query (`om_team_productivity`) with duration = monthly and draws its trend month by month. Total closed
+      tickets = SUM(complaint_count); Total active technicians = distinct technician names; Productivity per
+      technician per day = SUM(complaint_count) / SUM(technician_day_count); Total active months = the number of
+      months in the trend (computed by the dashboard). Whole months are read from
+      `gold_om_technician_productivity_month_agg`, partial first / last months from the day table.
+    gold_tables:
+      - table: gold_om_technician_productivity_month_agg
+        columns: >-
+          period_start (1st of month), geography, technician_name, category, meter_type, complaint_count,
+          technician_day_count, active_days
+      - table: gold_om_technician_productivity_day_agg
+        columns: partial first / last month
+    silver_tables:
+      - table: unified_complaints
+        columns: closed QC complaints
+        source: COMQC, DOMQC, FOMQC
+      - table: unified_non_qc_complaints
+        columns: closed non-QC complaints
+        source: non-QC complaint reports
+    logic:
+      - step: Same query
+        detail: >-
+          kpi_catalog/om_team_productivity.py with duration=monthly -- identical formulas to O&M-Productivity per
+          team; only the trend bucket is the month.
+      - step: Month table
+        detail: >-
+          gold_om_technician_productivity_month_agg: complaint_count summed over the month, technician_day_count =
+          number of day rows (so the ratio equals the day table's).
+      - step: Monthly point
+        detail: >-
+          per month: SUM(closed), COUNT(distinct technicians that month), SUM(closed) / SUM(technician-day rows).
+      - step: Active months
+        detail: 'Not in the API: the dashboard counts the months in the trend array.'
+      - step: Active days
+        detail: >-
+          The chart legend shows Active Days, but the O&M API returns none; the chatbot gives distinct closing days
+          (COUNT(DISTINCT period_start)).
+      - step: Comparison
+        detail: Per project (all projects) or discom / zone / circle / division, over the whole range.
+    formulas:
+      - output: Total closed tickets
+        formula: SUM(complaint_count)
+      - output: Total active months
+        formula: number of months with data in the range
+      - output: Total active technicians
+        formula: COUNT(DISTINCT technician_name) over the whole range (not the sum of months)
+      - output: Productivity per technician per day
+        formula: ROUND(SUM(complaint_count) / SUM(technician_day_count), 2)
+      - output: Monthly bars
+        formula: the same three per month
+    caveats:
+      - >-
+          Total active technicians is the distinct count over the whole range, so it is far below the sum of the
+          monthly technician counts.
+      - >-
+          Same understated denominator as the per-team card: technician-days are counted per row (technician x day x
+          geography x category x meter type).
+      - The current month is partial (data up to the last ETL refresh), so its bar is smaller.
+      - Category = complaint_entity_type (DT/DTR -> DT, FEEDER, else CONSUMER); Consumer is ~99% of tickets.
+    sql_recipe: >-
+      O&M Productivity trend (dashboard KPI 18, monthly): FROM public.gold_om_technician_productivity_day_agg WHERE
+      category <> 'ALL' and the date range, GROUP BY DATE_TRUNC('month', period_start): SUM(complaint_count),
+      COUNT(DISTINCT technician_name), ROUND(SUM(complaint_count)::numeric / NULLIF(SUM(technician_day_count), 0),
+      2); active months = COUNT(DISTINCT DATE_TRUNC('month', period_start)).
+    followups:
+      - O&M productivity trend for consumer complaints from Sep 2025 to Sep 2026
+      - Which month had the highest O&M productivity?
+      - Explain the O&M productivity trend KPI
+    filters:
+      - filter: duration
+        values: monthly
+        effect: Trend bucket = month
+      - filter: from / to
+        values: months
+        effect: Range, inclusive
+      - filter: project / category / meter type / level
+        values: as O&M-Productivity per team
+        effect: Same filters
+    response:
+      - part: Same API
+        shape: summary, insights, trend[] (one per month, date YYYY-MM), comparison[], category_breakdown
+    example:
+      - step: Range
+        result: Sep 2025 - Sep 2026, Consumer
+      - step: Cards
+        result: 342,840 closed tickets, 13 active months, 7,432 technicians, 2.87 per technician per day
+      - step: Monthly productivity
+        result: >-
+          Sep 25 2.33, Oct 1.87, Nov 2.12, Dec 2.16, Jan 26 2.70, Feb 3.08, Mar 3.14, Apr 3.31, May 3.17, Jun 3.11,
+          Jul 2.75, Aug 2.61, Sep 2.45
+      - step: By project
+        result: Kashi 233,549, Agra 73,331, Triveni 35,960 closed tickets
+  - number: 17
+    title: O&M Not closed ticket Ageing
+    kpi_code: om_open_ageing
+    backend_kpi_id: 19
+    section: O&M
+    card: >-
+      O&M Not closed ticket Ageing: open complaint tickets by age since creation (0-7 / 8-15 / 16-30 / 31-60 / 60+
+      days), with Source, Status, Complaint type, Category, Project and Level filters.
+    aliases:
+      - o&m not closed ticket ageing
+      - not closed ticket ageing
+      - not closed tickets
+      - open ticket ageing
+      - open tickets ageing
+      - o&m open ticket ageing
+      - open complaint ageing
+      - total open tickets
+      - open tickets
+      - open complaints
+      - pending complaints
+      - pending tickets
+      - unresolved complaints
+      - complaint ageing
+      - ticket ageing
+      - kpi 19
+      - kpi19
+      - kpi-19
+    summary: >-
+      **O&M Not closed ticket Ageing** counts complaint tickets in the ACTIVE complaints feed
+      (`unified_active_complaints`), banded by days since the complaint was created: 0-7 / 8-15 / 16-30 / 31-60 /
+      60+. It sums `ticket_count` from Postgres `gold_om_open_ageing_snapshot`, which also carries the card's
+      filters: Source (1912 / AUTO / MANUAL, derived from complaint_by), Status (the ticket's complaint_status),
+      Complaint type, Category (Consumer / DT / Feeder) and geography.
+    gold_tables:
+      - table: gold_om_open_ageing_snapshot
+        columns: >-
+          project, discom, zone, circle, division, sub_division, category, meter_type, complaint_source,
+          complaint_status, complaint_type, age_key, ticket_count
+    silver_tables:
+      - table: unified_active_complaints
+        columns: >-
+          complaint_no, ticket_id, complaint_by, complaint_type, complaint_description, complaint_status,
+          complaint_created_date, technician_name, supervisor, agency, escalation_status, old_meter_serial_number,
+          consumer_number, geography
+        source: SmartEMS active complaint report
+      - table: unified_smart_meter_inventory
+        columns: meter_type by serial (meter_type_lookup)
+        source: INVSMM
+    logic:
+      - step: Flow
+        detail: >-
+          unified_active_complaints (all rows with a complaint_created_date) -> meter type by old serial -> Spark
+          _om_open_ageing_snapshot() -> gold_om_open_ageing_snapshot -> backend kpi_catalog/om_open_ageing.py ->
+          card.
+      - step: Age
+        detail: >-
+          datediff(ETL run date in IST, complaint_created_date) -> 0-7 / 8-15 / 16-30 / 31-60 / 60+ -- frozen at the
+          refresh, not recomputed per request.
+      - step: Source
+        detail: >-
+          complaint_by containing '1912' -> 1912 (helpline); AUTO / SYSTEM / HES / MDM or containing AUTO / SYSTEM
+          -> AUTO (system-raised, e.g. non-communication); everything else -> MANUAL (a person's name).
+      - step: Status
+        detail: complaint_status upper-cased; blank -> OPEN. Every status is counted -- including RESOLVED.
+      - step: Complaint type
+        detail: complaint_type upper-cased; blank -> OTHER.
+      - step: Category
+        detail: complaint_entity_type DT/DTR -> DT, FEEDER -> FEEDER, else CONSUMER.
+      - step: Backend
+        detail: >-
+          SUM(ticket_count) per band x category, total, and per comparison label (project when all projects, else
+          discom; or zone / circle / division / sub_division). Source / status / type are IN filters on the snapshot
+          columns.
+    formulas:
+      - output: Total open tickets
+        formula: SUM(ticket_count)
+      - output: 0-7 / 8-15 / 16-30 / 31-60 / 60+ days
+        formula: SUM(ticket_count) WHERE age_key = band
+      - output: Band x category
+        formula: the same per CONSUMER / DT / FEEDER
+    caveats:
+      - >-
+          'Open' means 'in the active complaints feed': tickets with status RESOLVED (and every other status)
+          are counted -- filter Status to exclude them.
+      - Ages are frozen at the ETL run date (the last refresh); they only move after the next refresh.
+      - 'No de-duplication: a ticket that appears twice in the feed counts twice.'
+      - >-
+          Source is inferred from the free-text complaint_by: any name that is not 1912 / AUTO / SYSTEM / HES / MDM
+          counts as MANUAL.
+      - >-
+          Technician / supervisor / agency are not in the snapshot -- the chatbot answers those from the raw feed,
+          where age is computed as of today.
+      - >-
+          This is not O&M productivity (closed tickets) -- a closed ticket may still sit in the active feed as
+          RESOLVED.
+    sql_recipe: >-
+      O&M Not closed ticket Ageing (dashboard KPI 19): FROM public.gold_om_open_ageing_snapshot, SUM(ticket_count)
+      by age_key ('age_0_7','age_8_15','age_16_30','age_31_60','age_60_plus'), complaint_source
+      ('1912','AUTO','MANUAL'), complaint_status (upper case), complaint_type (upper case), category, project /
+      geography. Order bands with an explicit CASE. For technician / supervisor / agency or ticket-level detail use
+      gmr_wfm_silver.unified_active_complaints.
+    followups:
+      - Open tickets by source
+      - How many AUTO tickets are older than 60 days in kashi?
+      - Explain the O&M not closed ticket ageing KPI
+    filters:
+      - filter: duration
+        values: as on latest date
+        effect: Snapshot
+      - filter: complaint_source
+        values: all, 1912, auto, manual
+        effect: n.complaint_source IN (...)
+      - filter: complaint_status
+        values: any status
+        effect: n.complaint_status IN (...)
+      - filter: complaint_type
+        values: any type
+        effect: n.complaint_type IN (...)
+      - filter: project / category / discom / zone / circle / division / sub_division
+        values: as other KPIs
+        effect: standard
+      - filter: level
+        values: discom (default), zone, circle, division, sub_division
+        effect: Comparison dimension
+    response:
+      - part: Parts
+        shape: >-
+          total_open_tickets, summary.age_0_7 .. age_60_plus (each {CONSUMER, FEEDER, DT, total}), comparison[] per
+          label.
+    example:
+      - step: Snapshot 25 Sep 2026
+        result: '674,061 tickets: 0-7 45,237; 8-15 89,018; 16-30 83,146; 31-60 227,844; 60+ 228,816'
+      - step: By project
+        result: Kashi 276,849 (60+ 119,850); Triveni 212,106; Agra 185,106
+      - step: By source
+        result: AUTO 525,193; MANUAL 143,706; 1912 5,162
+      - step: By status
+        result: UNASSIGNED 545,038; CAN NOT ATTEND 53,097; ASSIGNED 32,251; ... RESOLVED 6,633
+  - number: 18
+    title: O&M Ticket Closed Analysis
+    kpi_code: om_ticket_closed_analysis
+    backend_kpi_id: 0
+    section: O&M
+    card: >-
+      O&M Ticket Closed Analysis: total closed, daily closures and comparison by project, filtered by category and
+      complaint type, for a date range.
+    aliases:
+      - o&m ticket closed analysis
+      - ticket closed analysis
+      - closed analysis
+      - daily closures
+      - ticket closures
+      - complaint closures
+      - closure analysis
+      - closed date
+    summary: >-
+      **O&M Ticket Closed Analysis** counts NON-QC complaint tickets by their `closed_date` (converted to IST) in
+      the selected range -- `gmr_wfm_silver.unified_non_qc_complaints`. It is not a gmr-backend KPI (no kpi_catalog
+      module computes it); the definition was matched against the dashboard exactly. Only a tiny share of non-QC
+      rows carry a closed_date, so this card is far smaller than O&M productivity's closed tickets
+      (work_completed_at, QC + non-QC) for the same range.
+    gold_tables:
+      - table: (none -- read from Silver)
+        columns: unified_non_qc_complaints.closed_date
+    silver_tables:
+      - table: unified_non_qc_complaints
+        columns: >-
+          closed_date, work_completed_at, sub_complaint_type, complaint_entity_type, technician_name, complaint_no,
+          old_meter_serial_number, consumer_number, geography
+        source: non-QC complaint reports
+    logic:
+      - step: Population
+        detail: >-
+          unified_non_qc_complaints rows with closed_date set -- QC complaints (unified_complaints) are not in this
+          card.
+      - step: Date
+        detail: >-
+          closed_date converted to Asia/Kolkata, then compared with the range (inclusive). A 22:37 UTC close on 24
+          Aug counts on 25 Aug.
+      - step: Category
+        detail: 'complaint_entity_type: DT/DTR -> DT, FEEDER -> FEEDER, else CONSUMER.'
+      - step: Complaint type
+        detail: sub_complaint_type (e.g. Meter Not in Communication, RC_DC Site/Field related).
+      - step: Daily closures
+        detail: COUNT(*) per IST closing day; weekly / monthly by the same date.
+      - step: Comparison
+        detail: COUNT(*) per project (or discom / zone / circle / division).
+    formulas:
+      - output: Total closed
+        formula: COUNT(*) of non-QC tickets with closed_date (IST) in the range
+      - output: Daily closures
+        formula: the same per day
+      - output: Comparison
+        formula: the same per project / geography label
+    caveats:
+      - >-
+          closed_date is almost never filled (a tiny share of non-QC rows, nearly all 'Meter Not in Communication'),
+          so the card shows a tiny fraction of real closures -- O&M productivity's closed tickets use
+          work_completed_at (QC + non-QC) and are the operational figure.
+      - >-
+          closed_date and work_completed_at can differ by days or weeks (Triveni's 4 closures on 4 Sep 2026 were
+          work-completed on 22 Jul).
+      - Project names are stored in mixed case ('Kashi' / 'kashi'); they are compared case-insensitively.
+      - >-
+          This logic is not in the WFM backend repository -- the definition is inferred from an exact match with the
+          dashboard and should be confirmed with the dashboard team.
+    sql_recipe: >-
+      O&M Ticket Closed Analysis: FROM gmr_wfm_silver.unified_non_qc_complaints WHERE closed_date IS NOT NULL, date
+      = CAST(closed_date AT TIME ZONE 'Asia/Kolkata' AS DATE); COUNT(*) by date / project / category
+      (complaint_entity_type) / complaint type (sub_complaint_type). For operational closures use
+      gold_om_technician_productivity_day_agg.
+    followups:
+      - O&M ticket closed analysis month wise
+      - Ticket closures vs work completed in September 2026
+      - Explain the O&M ticket closed analysis KPI
+    filters:
+      - filter: duration
+        values: daily, weekly, monthly
+        effect: Closure bucket
+      - filter: range
+        values: dates
+        effect: closed_date (IST), inclusive
+      - filter: category
+        values: total, consumer, DT, feeder
+        effect: complaint_entity_type
+      - filter: complaint type
+        values: any sub_complaint_type
+        effect: sub_complaint_type
+      - filter: project / level
+        values: as other KPIs
+        effect: project / geography
+    response:
+      - part: Card
+        shape: Total closed; daily closures series; comparison by project
+    example:
+      - step: Range
+        result: 25 Aug - 24 Sep 2026, all categories and types
+      - step: Daily
+        result: 25 Aug 1 (Kashi, closed 22:37 UTC on 24 Aug), 4 Sep 4 (Triveni), 11 Sep 4 (Kashi), 14 Sep 1 (Kashi)
+      - step: Total
+        result: 10 closed -- Kashi 6, Triveni 4 (vs 17,763 closed by work completion on the productivity card)
+  - number: 19
+    title: Dashboard headline stats
+    kpi_code: dashboard_stats
+    backend_kpi_id: 0
+    section: Home
+    card: >-
+      The dashboard home page's headline cards: total installations, installed on the last day, SAT meters and SAT
+      %, inventory and remaining stock, journey-completed meters and average journey days, invoice and collection
+      headlines, plus the monthly installation / remaining-stock charts.
+    aliases:
+      - dashboard stats
+      - dashboard summary
+      - dashboard headline
+      - headline stats
+      - headline numbers
+      - home page
+      - executive summary
+      - executive dashboard
+      - dashboard overview
+      - overall summary
+      - installed on last day
+      - meter installed on last day
+      - remaining stock
+      - monthly balance
+      - inventory monthly balance
+    summary: >-
+      The **dashboard headline stats** come from one precomputed Postgres row, `gold_dashboard_stats_snapshot`
+      (singleton = TRUE), rebuilt by every ETL run and served by GET /api/v1/dashboard/stats. Users scoped to a
+      geography get the same figures recomputed from the gold tables for their scope. The monthly remaining-stock
+      series comes from `gold_inventory_monthly_balance`, which stores RUNNING totals per place.
+    gold_tables:
+      - table: gold_dashboard_stats_snapshot
+        columns: all headline columns + JSONB series
+      - table: gold_inventory_monthly_balance
+        columns: >-
+          period_start, geography, category, meter_type, cumulative inventory_count / installed_count /
+          stock_consumed_count
+    silver_tables:
+      - table: (via the gold tables)
+        columns: installations, inventory, SAT mappings, SAT milestones
+        source: SmartEMS reports + SAT uploads
+    logic:
+      - step: Snapshot
+        detail: One row, recomputed from the gold tables at the end of each ETL run (refreshed_at).
+      - step: Scoped users
+        detail: >-
+          A zone / circle / division user gets the same metrics aggregated live from the gold tables for their
+          geography (dashboard_stats_service._get_scoped_stats).
+      - step: Journey headlines
+        detail: >-
+          MI only (replacements excluded) -- so average_meter_journey_days is slightly different from KPI 12's
+          total journey, which includes replacements.
+      - step: Monthly balance
+        detail: >-
+          Running sums per (project, geography, category, meter type) ordered by month, emitted only for months that
+          combination had an event. The balance as of month M is therefore the LATEST row per combination with
+          period_start <= M, summed -- summing one month's rows across places undercounts.
+    formulas:
+      - output: Remaining stock
+        formula: cumulative inventory_count - stock_consumed_count
+      - output: SAT %
+        formula: total SAT meters / SAT-eligible meters x 100
+      - output: Average journey days
+        formula: SUM(total_journey_days_sum) / SUM(revenue_realized_meter_count), NOT is_replacement
+    caveats:
+      - The snapshot is as of the last ETL refresh (refreshed_at).
+      - Headline invoice / collection counts are meters in invoiced / collected SAT batches, not rupees.
+      - Journey headlines exclude replacements; KPI 12 includes them.
+      - >-
+          gold_inventory_monthly_balance counts are cumulative and only present in months with activity -- always
+          take the latest row per place up to the month.
+    sql_recipe: >-
+      Dashboard headline stats: SELECT the columns FROM public.gold_dashboard_stats_snapshot WHERE singleton (one
+      row). For stock balance as of a month M from public.gold_inventory_monthly_balance use the LATEST row per
+      (project, discom, zone, circle, division, sub_division, category, meter_type) with period_start <= M (DISTINCT
+      ON / ROW_NUMBER), then SUM(inventory_count - stock_consumed_count).
+    followups:
+      - Show the dashboard summary
+      - Monthly installations on the dashboard
+      - Remaining stock by meter type
+    filters:
+      - filter: scope
+        values: the caller's geography
+        effect: global users read the singleton row
+    response:
+      - part: GET /api/v1/dashboard/stats
+        shape: >-
+          the headline fields + monthly_installations, monthly_remaining_stock, remaining_stock_by_meter_type,
+          sat_stage_trend, revenue_realized_stage_ageing
+    example:
+      - step: 25 Sep 2026
+        result: >-
+          4,189,029 installed (2,050 on the last day), 3,754,199 SAT (93.49%), 4,352,642 received, 116,177 in stock,
+          3,288,776 journey-completed at 186.59 days, 3,326,034 invoiced / PMPM-collected meters

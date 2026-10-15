@@ -1,0 +1,110 @@
+:root {
+  /* ---- Brand --------------------------------------------------------------
+     Ported from the Smart Meter Operations Dashboard theme (dashboard10) --
+     see smart-meter-theme.md. --bhel-blue is that theme's accent-navy
+     (primary), --bhel-navy-deep its darkest hero-gradient stop. */
+  --bhel-blue: #0b3c6d;
+  --bhel-blue-dark: #0a3d7c;
+  --bhel-navy: #0b3c6d;
+  --bhel-navy-deep: #06264d;
+
+  /* One accent, used everywhere something is "primary" -- the send button,
+     table headers, links, focus rings. */
+  --accent: var(--bhel-blue);
+  --accent-dark: var(--bhel-blue-dark);
+  --accent-soft: rgba(11, 60, 109, 0.1);
+  --accent-ring: rgba(11, 60, 109, 0.16);
+
+  /* ---- Surfaces & text ---------------------------------------------------- */
+  --page-bg: #f8fafc;
+  --card-bg: #ffffff;
+  --sidebar-bg: #ffffff;
+  --border: #e2e8f0;
+  --border-light: #f1f5f9;
+  --text-main: #1e293b;
+  --text-muted: #64748b;
+  --text-subtle: #94a3b8;
+  --active-bg: #e1e8f0;
+
+  --table-header-bg: var(--accent);
+  --table-header-text: #ffffff;
+  --table-row-alt: #f1f5f9;
+  --table-row-hover: #f8fafc;
+
+  --success: #15803d;
+  --success-soft: rgba(21, 128, 61, 0.12);
+  --warning: #d97706;
+  --warning-soft: rgba(217, 119, 6, 0.12);
+  --danger: #b91c1c;
+  --danger-soft: rgba(185, 28, 28, 0.1);
+
+  /* ---- Chart palette --------------------------------------------------------
+     The 8-color categorical palette from dataviz.tokens.js (light), first
+     six taken in order. */
+  --chart-1: #2a78d6;
+  --chart-2: #eb6834;
+  --chart-3: #1baf7a;
+  --chart-4: #eda100;
+  --chart-5: #e87ba4;
+  --chart-6: #008300;
+
+  /* ---- Accent rotation --------------------------------------------------
+     A curated second/third/fourth "hero" gradient, each built from a color
+     already in the chart palette above (never a new, unrelated hue) --
+     used to give a row of several KPI/chart cards visual variety instead
+     of every single one repeating the exact same navy-blue gradient, while
+     staying inside the same family the charts themselves already draw
+     from. */
+  --accent-2: var(--chart-4);
+  --accent-2-deep: #b87a00;
+  --accent-3: var(--chart-5);
+  --accent-3-deep: #b84c79;
+  --accent-4: var(--chart-3);
+  --accent-4-deep: #0f7d57;
+
+  /* ---- Typography ---------------------------------------------------------
+     Inter everywhere, matching the Smart Meter theme -- one face for both
+     display (brand, section titles, big KPI numbers) and dense body/table
+     text. */
+  --font-display: 'Inter', -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+
+  /* ---- Spacing scale (8px base) ------------------------------------------- */
+  --space-1: 4px;
+  --space-2: 8px;
+  --space-3: 12px;
+  --space-4: 16px;
+  --space-5: 20px;
+  --space-6: 24px;
+  --space-7: 32px;
+  --space-8: 40px;
+
+  /* ---- Radius --------------------------------------------------------------
+     Tailwind rounded-lg/xl/2xl/3xl equivalents, matching the Smart Meter
+     theme's card/chip/panel radii. */
+  --radius-sm: 8px;
+  --radius-md: 12px;
+  --radius-lg: 16px;
+  --radius-xl: 24px;
+  --radius-pill: 999px;
+
+  /* ---- Shadow --------------------------------------------------------------
+     Accent-tinted rather than flat gray, per the Smart Meter theme. */
+  --shadow: 0 1px 2px rgba(15, 23, 42, 0.04), 0 1px 3px rgba(11, 60, 109, 0.08);
+  --shadow-md: 0 4px 12px rgba(11, 60, 109, 0.1), 0 2px 4px rgba(15, 23, 42, 0.04);
+  --shadow-card: 0 2px 4px rgba(15, 23, 42, 0.04), 0 18px 36px -24px rgba(11, 60, 109, 0.35);
+  --shadow-lg: 0 20px 50px rgba(11, 60, 109, 0.2);
+  --shadow-float: 0 -8px 24px rgba(11, 60, 109, 0.08);
+
+  /* ---- Motion -------------------------------------------------------------- */
+  --ease: cubic-bezier(0.16, 1, 0.3, 1);
+  --duration-fast: 150ms;
+  --duration: 200ms;
+  --duration-slow: 380ms;
+
+  /* ---- Layout --------------------------------------------------------------- */
+  --chat-sidebar-width: 260px;
+  --chat-content-max: min(1480px, calc(100vw - var(--chat-sidebar-width) - 48px));
+  --z-sticky: 5;
+  --z-composer: 20;
+  --z-modal: 1000;
+}

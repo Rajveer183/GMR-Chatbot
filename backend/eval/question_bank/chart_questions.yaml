@@ -1,0 +1,19 @@
+# One question per chart type: the chart the planner should pick (or an
+# equally good alternative) for each. Run with eval/question_bank/run_charts.py
+charts:
+  - {q: "Which ten divisions have the most 120+ day non-SAT meters?", want: [horizontal_bar]}
+  - {q: "Show SAT meters by SAT stage", want: [bar, line, area]}
+  - {q: "Compare MI and SAT counts for each project side by side", want: [grouped_bar, combo]}
+  - {q: "Zone-wise installations in Kashi this year split into consumer, DTR and feeder", want: [stacked_bar, stacked_horizontal_bar]}
+  - {q: "What share of each project's non-SAT meters falls in each age band?", want: [percent_stacked_bar, stacked_bar]}
+  - {q: "Monthly burnt meters over the last 12 months", want: [line, area, bar]}
+  - {q: "Describe the installation trend over the last 12 months", want: [area, line]}
+  - {q: "Show SAT progress by project with the SAT percentage", want: [combo, grouped_bar]}
+  - {q: "Show the split of audited consumers into confirmed, reassign, review and no data", want: [donut, pie, bar]}
+  - {q: "Build the full funnel from supply to collection", want: [funnel]}
+  - {q: "What share of auto-indexing is complete?", want: [radial, none]}
+  - {q: "Average daily installs by weekday for each project", want: [heatmap, grouped_bar]}
+  - {q: "How many meters were installed yesterday?", want: [none]}
+  - {q: "Show defective meters per OEM split by burnt, faulty and others", want: [stacked_bar, stacked_horizontal_bar, grouped_bar]}
+  - {q: "Give me a pie chart of defective meters by defect type", want: [pie]}
+  - {q: "Show installations and productivity per project for the last 30 days", want: [combo, grouped_bar]}

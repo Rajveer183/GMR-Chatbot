@@ -1,0 +1,23 @@
+version: '3.9'
+
+services:
+  gmr-backend:
+    image: gmr-ai-be:latest
+    container_name: gmr-ai-be-backend
+    build:
+      context: .
+      dockerfile: Dockerfile
+    ports:
+      - '8000:8000'
+    env_file:
+      - .env
+    volumes:
+      - ./outputs:/app/outputs
+    restart: unless-stopped
+    command: ["uvicorn", "gmr_agents.main:app", "--host", "0.0.0.0", "--port", "8000"]
+    networks:
+      - app-network
+
+networks:
+  app-network:
+    external: true

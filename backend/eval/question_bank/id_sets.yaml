@@ -1,0 +1,31 @@
+# Named question-id sets for run_bank.py (`--ids <set name>` or `--ids mi01,su05`).
+# Replaces the old ids_*.txt files.
+sets:
+  a: [mi01, mi02, mi03, mi04, mi05, mi06, mi07, mi08, mi09, mi10, su01, su02, su03, su04, su05, su06, su07, su08, in01, in02, in03, in04, in05, in06, in07, in08, in09, in10, in11, sa01, sa02, sa03, sa04, sa05, sa06, sa07, sa08, sa09, sa10, sa11, sa12, ns01, ns02, ns03, ns04, ns05, ns06, ns07, ns08, ns09]
+  b: [de01, de02, de03, de04, de05, de06, de07, de08, de09, de10, de11, fe01, fe02, fe03, fe04, fe05, fe06, fe07, fe08, fe09, pm01, pm02, pm03, pm04, pm05, cx01, cx02, cx03, cx04, cx05, cx06, fn01, fn02, fn03, fn04, fn05, fn06]
+  c: [am01, am02, am03, am04, am05, am06, mt01, mt02, mt03, mt04, mt05, mt06, mt07, mt08, mt09, mt10, mt11, hi01, hi02, hi03, hi04, hi05, hi06, hi07, hi08, gr01, gr02, gr03, gr04, gr05, gr06, gr07, gr08, gr09, gr10, gr11, gr12, px01, px02, px03, px04, px05, px06, px07, px08, px09, px10, px11, px12]
+  x: [mi01, mi02, mi03, mi04, mi05, mi06, mi07, mi08, mi09, mi10, su01, su02, su03, su04, su05, su06, su07, su08, in01, in02, in03, in04, in05, in06, in07, in08, in09, in10, in11, sa01, sa02, sa03, sa04, sa05, sa06, sa07, sa08, sa09, sa10, sa11, sa12, ns01, ns02, ns03, ns04, ns05, ns06, ns07, ns08, ns09, de01, de02, de03, de04, de05, de06, de07, de08, de09, de10, de11, fe01, fe02, fe03, fe04]
+  y: [fe05, fe06, fe07, fe08, fe09, pm01, pm02, pm03, pm04, pm05, cx01, cx02, cx03, cx04, cx05, cx06, fn01, fn02, fn03, fn04, fn05, fn06, am01, am02, am03, am04, am05, am06, mt01, mt02, mt03, mt04, mt05, mt06, mt07, mt08, mt09, mt10, mt11, hi01, hi02, hi03, hi04, hi05, hi06, hi07, hi08, gr01, gr02, gr03, gr04, gr05, gr06, gr07, gr08, gr09, gr10, gr11, gr12, px01, px02, px03, px04, px05, px06, px07,
+    px08, px09, px10, px11, px12]
+  k_mp: [mp01, mp02, mp03, mp04, mp05, mp06, mp07, mp08, mp09, mp10, mp11, mp12, mp13, mp14, mp15, mp16, mp17, mp18, mp19, mp20]
+  k_pr: [pr01, pr02, pr03, pr04, pr05, pr06, pr07, pr08, pr09, pr10, pr11, pr12, pr13, pr14, pr15, pr16]
+  k_rp: [rp01, rp02, rp03, rp04, rp05, rp06, rp07, rp08, rp09, rp10, rp11, rp12, rp13, rp14, rp15]
+  k_ut: [ut01, ut02, ut03, ut04, ut05, ut06, ut07, ut08, ut09, ut10, ut11, ut12, ut13, ut14, ut15]
+  k_sk: [sk01, sk02, sk03, sk04, sk05, sk06, sk07, sk08, sk09, sk10, sk11, sk12, sk13, sk14, sk15]
+  k_ms: [ms01, ms02, ms03, ms04, ms05, ms06, ms07, ms08, ms09, ms10, ms11, ms12, ms13, ms14, ms15, ms16, ms17]
+  k_na: [na01, na02, na03, na04, na05, na06, na07, na08, na09, na10, na11, na12, na13, na14, na15]
+  k_jt: [jt01, jt02, jt03, jt04, jt05, jt06, jt07, jt08, jt09, jt10, jt11, jt12, jt13, jt14, jt15, jt16, jt17, jt18, jt19, jt20, jt21, jt22, jt23, jt24, jt25, jt26, jt27, jt28, jt29, jt30, jt31, jt32, jt33, jt34, jt35, jt36, jt37, jt38]
+  k_cs: [cs01, cs02, cs03, cs04, cs05, cs06, cs07, cs08, cs09, cs10, cs11, cs12, cs13, cs14, cs15, cs16, cs17, cs18, cs19, cs20, cs21, cs22, cs23, cs24, cs25, cs26]
+  k_fu: [fu01, fu02, fu03, fu04, fu05, fu06, fu07, fu08, fu09, fu10, fu11, fu12, fu13, fu14, fu15, fu16, fu17, fu18, fu19, fu20, fu21, fu22, fu23, fu24, fu25, fu26, fu27, fu28]
+  k_rv: [rv01, rv02, rv03, rv04, rv05, rv06, rv07, rv08, rv09, rv10, rv11, rv12, rv13, rv14, rv15, rv16, rv17, rv18, rv19, rv20, rv21]
+  k_cb: [cb01, cb02, cb03, cb04, cb05, cb06, cb07, cb08, cb09, cb10, cb11, cb12, cb13, cb14, cb15, cb16, cb17, cb18, cb19, cb20]
+  k_ra: [ra01, ra02, ra03, ra04, ra05, ra06, ra07, ra08, ra09, ra10, ra11, ra12, ra13, ra14, ra15, ra16, ra17, ra18, ra19]
+  k_op: [op01, op02, op03, op04, op05, op06, op07, op08, op09, op10, op11, op12, op13, op14, op15, op16, op17, op18, op19, op20, op21, op22, op23, op24, op25, op26, op27, op28, op29, op30, op31]
+  k_oa: [oa01, oa02, oa03, oa04, oa05, oa06, oa07, oa08, oa09, oa10, oa11, oa12, oa13, oa14, oa15, oa16, oa17, oa18, oa19, oa20, oa21, oa22, oa23, oa24, oa25, oa26]
+  k_oc: [oc01, oc02, oc03, oc04, oc05, oc06, oc07, oc08, oc09, oc10, oc11, oc12, oc13]
+  k_all: [mp01, mp02, mp03, mp04, mp05, mp06, mp07, mp08, mp09, mp10, mp11, mp12, mp13, mp14, mp15, mp16, mp17, mp18, mp19, mp20, pr01, pr02, pr03, pr04, pr05, pr06, pr07, pr08, pr09, pr10, pr11, pr12, pr13, pr14, pr15, pr16, rp01, rp02, rp03, rp04, rp05, rp06, rp07, rp08, rp09, rp10, rp11, rp12, rp13, rp14, rp15, ut01, ut02, ut03, ut04, ut05, ut06, ut07, ut08, ut09, ut10, ut11, ut12, ut13, ut14, ut15,
+    sk01, sk02, sk03, sk04, sk05, sk06, sk07, sk08, sk09, sk10, sk11, sk12, sk13, sk14, sk15, ms01, ms02, ms03, ms04, ms05, ms06, ms07, ms08, ms09, ms10, ms11, ms12, ms13, ms14, ms15, ms16, ms17, na01, na02, na03, na04, na05, na06, na07, na08, na09, na10, na11, na12, na13, na14, na15, jt01, jt02, jt03, jt04, jt05, jt06, jt07, jt08, jt09, jt10, jt11, jt12, jt13, jt14, jt15, jt16, jt17, jt18, jt19, jt20,
+    jt21, jt22, jt23, jt24, jt25, jt26, jt27, jt28, jt29, jt30, jt31, jt32, jt33, jt34, jt35, jt36, jt37, jt38, cs01, cs02, cs03, cs04, cs05, cs06, cs07, cs08, cs09, cs10, cs11, cs12, cs13, cs14, cs15, cs16, cs17, cs18, cs19, cs20, cs21, cs22, cs23, cs24, cs25, cs26, fu01, fu02, fu03, fu04, fu05, fu06, fu07, fu08, fu09, fu10, fu11, fu12, fu13, fu14, fu15, fu16, fu17, fu18, fu19, fu20, fu21, fu22, fu23,
+    fu24, fu25, fu26, fu27, fu28, rv01, rv02, rv03, rv04, rv05, rv06, rv07, rv08, rv09, rv10, rv11, rv12, rv13, rv14, rv15, rv16, rv17, rv18, rv19, rv20, rv21, cb01, cb02, cb03, cb04, cb05, cb06, cb07, cb08, cb09, cb10, cb11, cb12, cb13, cb14, cb15, cb16, cb17, cb18, cb19, cb20, ra01, ra02, ra03, ra04, ra05, ra06, ra07, ra08, ra09, ra10, ra11, ra12, ra13, ra14, ra15, ra16, ra17, ra18, ra19, op01, op02,
+    op03, op04, op05, op06, op07, op08, op09, op10, op11, op12, op13, op14, op15, op16, op17, op18, op19, op20, op21, op22, op23, op24, op25, op26, op27, op28, op29, op30, op31, oa01, oa02, oa03, oa04, oa05, oa06, oa07, oa08, oa09, oa10, oa11, oa12, oa13, oa14, oa15, oa16, oa17, oa18, oa19, oa20, oa21, oa22, oa23, oa24, oa25, oa26, oc01, oc02, oc03, oc04, oc05, oc06, oc07, oc08, oc09, oc10, oc11, oc12,
+    oc13]
