@@ -181,7 +181,7 @@ def _stock_by_zone(table: str, stock_zones: list[tuple]) -> str:
     """The event table with its no-zone stock rows replaced by the same meters from the
     stock snapshot, each placed in its warehouse's zone (split ones by whole meters)."""
     cols = ("period_start, period_end, project, discom, zone, circle, division, sub_division, category, "
-            "meter_type, inventory_count, installed_count, stock_consumed_count")
+            "meter_type, inventory_count, installed_count, stock_consumed_count, warehouse, sku, oem")
     if table.endswith("_month_agg"):
         start = "date_trunc('month', s.inventory_date)::date"
         end = "(date_trunc('month', s.inventory_date) + INTERVAL '1 month - 1 day')::date"
@@ -194,7 +194,7 @@ def _stock_by_zone(table: str, stock_zones: list[tuple]) -> str:
         f"UNION ALL "
         f"SELECT {start}, {end}, LOWER(s.project), m.discom, m.zone, NULL, NULL, NULL, s.category, s.meter_type, "
         f"CAST(ROUND(s.stock_count * COALESCE(m.hi, 1)) - ROUND(s.stock_count * COALESCE(m.lo, 0)) AS BIGINT), "
-        f"CAST(0 AS BIGINT), CAST(0 AS BIGINT) "
+        f"CAST(0 AS BIGINT), CAST(0 AS BIGINT), s.warehouse, s.sku, s.oem "
         f"FROM public.gold_inventory_unutilized_stock_snapshot AS s "
         f"LEFT JOIN (VALUES {values}) AS m(project, discom, warehouse, zone, lo, hi) "
         f"ON m.project = LOWER(s.project) AND m.warehouse = LOWER(s.warehouse)"

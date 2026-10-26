@@ -31,3 +31,27 @@ rejected:
   - {trace_id: 0cc95136, question: "Meter replacement circle wise in Azamgarh zone", reason: "meter replacement read from replacement installs, not the defect table"}
   - {trace_id: 54f6b227, question: "Meter replacement and defect rate for feeder meters in 2026", reason: "defect rate per OEM only, no blended Total row"}
   - {trace_id: 10fcef47, question: "Meter replacement last month", reason: "meter replacement total without burnt / faulty / others"}
+  - {trace_id: 986b5861, question: "What is the supply utilization rate?", reason: "utilization rate alone, no supplies / installed / remaining stock"}
+  - {trace_id: 997b7a10, question: "What is the supply utilization rate?", reason: "utilization rate alone, no supplies / installed / remaining stock"}
+  - {trace_id: 20ad65ed, question: "Supply utilization rate for OEM AEW", reason: "utilization rate alone, no supplies / installed / remaining stock"}
+  - {trace_id: 6b1135ba, question: "Supply utilization rate for OEM AEW", reason: "utilization rate alone, no supplies / installed / remaining stock"}
+  - {trace_id: c097f6bd, question: "DT supply utilization for OEM AEW", reason: "utilization rate alone, no supplies / installed / remaining stock"}
+  - {trace_id: ed560c4f, question: "Supply utilization rate as of 30 September 2026", reason: "utilization rate alone, no supplies / installed / remaining stock"}
+  - {trace_id: 5ccf2b2e, question: "Show supply utilization SKU wise", reason: "kept only SKUs active in the latest month"}
+  - {trace_id: dada983d, question: "Supply utilization rate for Aligarh Warehouse and Mirzapur ZW", reason: "two warehouses with no combined Total"}
+  - {trace_id: 0d47d949, question: "Supply utilization for OEMs CAP and SEIPL", reason: "refused: said the inventory tables have no OEM"}
+  - {trace_id: ff8319f9, question: "MI pace vs stock availability", reason: "pace and days left only, no supplies / installed"}
+  - {trace_id: 52fc588b, question: "MI pace vs stock for Prayagraj HW warehouse", reason: "pace and days left only, no supplies / installed"}
+  - {trace_id: 18ac50f6, question: "MI pace vs stock OEM wise", reason: "pace and days left only, no supplies / installed"}
+  - {trace_id: 2448f649, question: "MI pace vs stock for SKU M-LTCTDT-AEW", reason: "pace and days left only, no supplies / installed"}
+  - {trace_id: f3bf416f, question: "MI pace vs stock availability for triveni project", reason: "pace and days left only, no supplies / installed"}
+  - {trace_id: 642a2ac8, question: "MI pace vs stock SKU wise", reason: "blank SKU row, no supplies / installed"}
+  - {trace_id: 9493b639, question: "MI pace vs stock for Varanasi HW and Jaunpur SWH", reason: "pace and days left only, no supplies / installed"}
+  - {trace_id: 2fafb868, question: "Un-utilized stock ageing for Agra HW", reason: "Agra HW warehouse read as the Agra project (49,307 instead of 37,139)"}
+  - {trace_id: a1bbafa4, question: "SAT percentage against eligible MI for Agra", reason: "SAT(eligible) / eligible MI (93.89%), not all SAT / eligible MI (94.62%)"}
+  - {trace_id: 0b320590, question: "Non-SAT ageing", reason: "split by project, no overall age bands"}
+  - {trace_id: c4c2093e, question: "Non-SAT ageing for feeder meters", reason: "split by project, no overall age bands"}
+  - {trace_id: e6b5256b, question: "Meters journey average time across the levels for revenue realized", reason: "stage averages without total meters"}
+  - {trace_id: 0ac59fd1, question: "Meter journey avg time for meters installed in 2025", reason: "stage averages without total meters"}
+  - {trace_id: 1fcbfe19, question: "Meter journey avg time for consumer meters in Agra", reason: "stage averages without total meters"}
+  - {trace_id: ffc4c3d1, question: "Meters current stage for revenue not realized for consumer meters", reason: "dropped OTHER-Consumer_meter (1,011,742 instead of 1,011,743)"}

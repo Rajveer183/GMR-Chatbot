@@ -128,6 +128,10 @@ _TREND_CUBE = "gold_mi_productivity_trend_month_agg"
 # The card is monthly only: a 'daily / weekly productivity trend' is KPI 2's.
 _KPI3_CARD_RE = re.compile(r"(?<!daily )(?<!weekly )\bproductivity trend\b|\bmonthly (?:mi )?productivity\b|\bkpi[- ]?3\b", re.I)
 _KPI3_RE = re.compile(_KPI3_CARD_RE.pattern + r"|\b(?:average|avg\.?) active technicians\b", re.I)
+_SUPPLY_CARD_RE = re.compile(r"\b(?:supply|inventory) utili[sz]ation\b|\butili[sz]ation rate\b|\bmi pace\b|"
+                             r"\bpace vs\.? stock\b|\bstock availa?bi?li?ty\b", re.I)
+_WAREHOUSE_RE = re.compile(r"\b(?!(?:a|an|the|each|every|per|by|any|one|this|that|which|all|some)\b)[a-z]+[ _-]?"
+                           r"(?:hw|zw|swh|warehouse)\b", re.I)
 
 
 def check(question: str, sql_texts: list[str], columns: set[str] | None = None) -> list[str]:
@@ -281,6 +285,24 @@ def check(question: str, sql_texts: list[str], columns: set[str] | None = None) 
         problems.append("remaining stock has no circle / division (stock is held per warehouse, counted in its zone), so "
                         "a circle/division filter always gives 0 -- filter the ZONE (or project) for the stock "
                         "(extra query), and keep the circle/division filter only for supplied / installed")
+
+    # The supply utilization / MI pace vs stock cards show supplies, installed, rate and stock together. Live 26 Oct:
+    # 'supply utilization rate for OEM AEW' came back as 97.84% alone.
+    if (_SUPPLY_CARD_RE.search(question) and "gold_meter_inventory_event_" in low
+            and not any(re.search(ask, question.lower()) for _, ask, _ in _TIME_BREAKDOWNS)
+            and not re.search(r"\btrend\b", question, re.I)
+            and not (re.search(r"\bsum\s*\(\s*inventory_count\s*\)\s+as\b", low)
+                     and re.search(r"\bsum\s*\(\s*installed_count\s*\)\s+as\b", low)
+                     and "stock_consumed_count" in low)):
+        problems.append("a supply utilization / MI pace vs stock answer gives the card's four figures as columns: "
+                        "SUM(inventory_count) AS total_supplies, SUM(installed_count) AS total_installed, the "
+                        "utilization %, and SUM(inventory_count) - SUM(stock_consumed_count) AS remaining_stock")
+
+    # 'Agra HW' is the warehouse Agra_HW, not the Agra project. Live 26 Oct: 'stock ageing for Agra HW' was answered for
+    # project = 'agra' (49,307 instead of 37,139).
+    if _WAREHOUSE_RE.search(question) and (cols is None or "warehouse" in cols) and "warehouse" not in low:
+        problems.append("the question names a warehouse (a name ending HW / ZW / SWH / Warehouse) -- filter "
+                        "LOWER(warehouse) = 'agra_hw' (etc.), not the project")
 
     # Time breakdown asked but dropped: 'productivity weekly in august' once came back as one
     # monthly figure. An average ('daily average', 'avg monthly') is not a breakdown.

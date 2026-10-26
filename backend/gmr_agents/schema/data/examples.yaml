@@ -119,8 +119,9 @@ examples:
              SUM(inventory_count) AS meters_supplied, SUM(stock_consumed_count) AS stock_consumed
       FROM public.gold_meter_inventory_event_day_agg
 
-  - q: ["What percentage of supplied meters has been installed?", "utilization rate", "supply utilization"]
+  - q: ["What percentage of supplied meters has been installed?", "utilization rate", "supply utilization", "What is the supply utilization rate?"]
     suggest: "What percentage of supplied meters has been installed?"
+    note: "Always the card's four figures: supplies, installed, utilization %, remaining stock -- never the rate alone."
     sql: |
       SELECT SUM(inventory_count) AS meters_supplied, SUM(installed_count) AS meters_installed,
              ROUND(SUM(installed_count) * 100.0 / NULLIF(SUM(inventory_count), 0), 2) AS utilization_pct,
@@ -134,6 +135,7 @@ examples:
       SELECT CASE WHEN GROUPING(zone) = 1 THEN 'Total' ELSE UPPER(zone) END AS zone,
              SUM(inventory_count) AS total_supplies, SUM(installed_count) AS total_installed,
              ROUND(SUM(installed_count) * 100.0 / NULLIF(SUM(inventory_count), 0), 2) AS utilization_rate_pct,
+             SUM(inventory_count) - SUM(stock_consumed_count) AS remaining_stock,
              SUM(inventory_count) FILTER (WHERE period_start >= DATE '2026-06-23') AS supplied_in_period,
              SUM(installed_count) FILTER (WHERE period_start >= DATE '2026-06-23') AS installed_in_period
       FROM public.gold_meter_inventory_event_day_agg
@@ -141,6 +143,31 @@ examples:
         AND period_start <= DATE '2026-09-23'
       GROUP BY ROLLUP (zone)
       ORDER BY GROUPING(zone) DESC, zone
+
+  - q: ["Supply utilization rate for OEMs CAP and SEIPL", "supply utilization for some OEMs", "utilization rate for two SKUs", "supply utilization for these warehouses"]
+    note: "warehouse / sku / oem are event-table columns. Several named: Total (them combined) first via ROLLUP, then each. One named: the same four figures without the ROLLUP."
+    sql: |
+      SELECT CASE WHEN GROUPING(UPPER(oem)) = 1 THEN 'Total' ELSE UPPER(oem) END AS oem,
+             SUM(inventory_count) AS total_supplies, SUM(installed_count) AS total_installed,
+             ROUND(SUM(installed_count) * 100.0 / NULLIF(SUM(inventory_count), 0), 2) AS utilization_rate_pct,
+             SUM(inventory_count) - SUM(stock_consumed_count) AS remaining_stock
+      FROM public.gold_meter_inventory_event_day_agg
+      WHERE UPPER(oem) IN ('CAP', 'SEIPL') AND period_start <= CURRENT_DATE
+      GROUP BY ROLLUP (UPPER(oem))
+      ORDER BY GROUPING(UPPER(oem)) DESC, total_supplies DESC
+
+  - q: ["Supply utilization rate warehouse wise", "supply utilization OEM wise", "supply utilization SKU wise", "remaining stock and utilization by warehouse"]
+    note: "X-wise = plain GROUP BY over every row up to the as-of date (no per-month window that drops quiet groups); installs with no warehouse stay only in the Total. Swap warehouse for oem / sku."
+    sql: |
+      SELECT CASE WHEN GROUPING(warehouse) = 1 THEN 'Total' ELSE UPPER(warehouse) END AS warehouse,
+             SUM(inventory_count) AS total_supplies, SUM(installed_count) AS total_installed,
+             ROUND(SUM(installed_count) * 100.0 / NULLIF(SUM(inventory_count), 0), 2) AS utilization_rate_pct,
+             SUM(inventory_count) - SUM(stock_consumed_count) AS remaining_stock
+      FROM public.gold_meter_inventory_event_day_agg
+      WHERE period_start <= CURRENT_DATE
+      GROUP BY ROLLUP (warehouse)
+      HAVING GROUPING(warehouse) = 1 OR COALESCE(TRIM(warehouse), '') <> ''
+      ORDER BY GROUPING(warehouse) DESC, total_supplies DESC
 
   - q: ["Supply utilization monthwise from Jan 2026 to Aug 2026 in Kashi", "monthly utilization rate trend", "utilization rate month by month"]
     note: "Trend = running totals: earlier history folds into the first month, rate per month = cumulative installed / cumulative supplied (never one month's installs / that month's supplies)."
@@ -171,11 +198,13 @@ examples:
       GROUP BY ROLLUP (meter_type)
       ORDER BY GROUPING(meter_type) DESC, remaining_stock DESC
 
-  - q: ["mi pace vs stock category wise", "Is installation pace keeping up with stock category wise in Kashi", "installs per day vs remaining stock by category", "days of stock left by category"]
-    note: "MI pace = average meters installed per day over the 6 months up to the as-of date (that month so far + 5 full months); stock = as of that date. The as-of date lives ONLY in w (CURRENT_DATE, or e.g. DATE '2026-08-31' for 'as of August 2026') -- every other place reads (SELECT as_of FROM w) / (SELECT since FROM w), so nothing extra goes into GROUP BY. One SELECT with GROUP BY ROLLUP (never join separate CTEs without ON). pace_period carries the window so the answer can state it. Without 'category wise' drop the category column and ROLLUP."
+  - q: ["mi pace vs stock category wise", "Is installation pace keeping up with stock category wise in Kashi", "installs per day vs remaining stock by category", "days of stock left by category", "MI pace vs stock availability for a warehouse / OEM / SKU"]
+    note: "Card figures first (supplies, installed, utilization %, remaining stock), then the pace. MI pace = average meters installed per day over the 6 months up to the as-of date (that month so far + 5 full months); stock = as of that date. The as-of date lives ONLY in w (CURRENT_DATE, or e.g. DATE '2026-08-31' for 'as of August 2026') -- every other place reads (SELECT as_of FROM w) / (SELECT since FROM w), so nothing extra goes into GROUP BY. One SELECT with GROUP BY ROLLUP (never join separate CTEs without ON). pace_period carries the window so the answer can state it. Without 'category wise' drop the category column and ROLLUP; warehouse / oem / sku wise or a picked one uses those event-table columns the same way."
     sql: |
       WITH w AS (SELECT CURRENT_DATE AS as_of, (date_trunc('month', CURRENT_DATE) - INTERVAL '5 months')::date AS since)
       SELECT CASE WHEN GROUPING(category) = 1 THEN 'Total' ELSE category END AS category,
+             SUM(inventory_count) AS total_supplies, SUM(installed_count) AS total_installed,
+             ROUND(SUM(installed_count) * 100.0 / NULLIF(SUM(inventory_count), 0), 2) AS utilization_rate_pct,
              SUM(inventory_count) - SUM(stock_consumed_count) AS remaining_stock,
              ROUND(SUM(installed_count) FILTER (WHERE period_start >= (SELECT since FROM w)) * 1.0
                    / ((SELECT as_of FROM w) - (SELECT since FROM w) + 1), 1) AS installs_per_day,
@@ -206,6 +235,17 @@ examples:
              SUM(COALESCE(e.net_stock, 0)) OVER (ORDER BY days.day) AS remaining_stock
       FROM days LEFT JOIN e ON e.day = days.day
       ORDER BY days.day
+
+  - q: ["Un-utilized stock ageing for Agra HW", "stock ageing for a warehouse", "unused stock ageing in Prayagraj HW", "stock ageing for Aligarh Warehouse"]
+    note: "A name ending HW / ZW / SWH / Warehouse is the warehouse (LOWER(warehouse) = 'agra_hw'), never the project 'agra'. Total plus every age band."
+    sql: |
+      SELECT 'Agra_HW' AS warehouse, SUM(stock_count) AS total_stock,
+             COALESCE(SUM(stock_count) FILTER (WHERE GREATEST(CURRENT_DATE - inventory_date, 0) <= 30), 0) AS days_0_30,
+             COALESCE(SUM(stock_count) FILTER (WHERE GREATEST(CURRENT_DATE - inventory_date, 0) BETWEEN 31 AND 60), 0) AS days_31_60,
+             COALESCE(SUM(stock_count) FILTER (WHERE GREATEST(CURRENT_DATE - inventory_date, 0) BETWEEN 61 AND 90), 0) AS days_61_90,
+             COALESCE(SUM(stock_count) FILTER (WHERE GREATEST(CURRENT_DATE - inventory_date, 0) > 90), 0) AS days_90_plus
+      FROM public.gold_inventory_unutilized_stock_snapshot
+      WHERE LOWER(warehouse) = 'agra_hw'
 
   - q: ["Invoice vs revenue released", "receivables summary delay analysis", "how much is overdue", "overdue amount lumpsum and cable", "invoice amount net vs realised"]
     note: "Dashboard card per stream: Realised + Within Timeline (unpaid, not yet due) + Overdue = Invoice Amount (Net); Overdue = invoiced - realised - within_timeline. Latest row per project, summed. A negative overdue = the operator's figures do not add up -- say so."
@@ -309,8 +349,8 @@ examples:
                     WHEN 'technician' THEN 4 WHEN 'installation_done_sat_pending' THEN 5
                     WHEN 'sat_done_revenue_pending' THEN 6 END
 
-  - q: ["Show meters journey avg time across the levels for revenue realized", "journey time stage wise", "average days at each level of the meter journey", "lead time per stage"]
-    note: "'levels' = the six journey stages + Total Journey, one row each in workflow order (bars like the dashboard's Workflow Lead Time card). Each stage keeps its own denominator."
+  - q: ["Show meters journey avg time across the levels for revenue realized", "journey time stage wise", "average days at each level of the meter journey", "lead time per stage", "journey avg time for one year or category"]
+    note: "'levels' = the six journey stages + Total Journey, one row each in workflow order (bars like the dashboard's Workflow Lead Time card). Each stage keeps its own denominator; meters = the meters behind it (DI to Agency's = the card's Total Meters). Filters (project, category, installation_year = 2025) go inside s."
     sql: |
       WITH s AS (
         SELECT SUM(inventory_to_agency_days_sum) AS di_agency, SUM(agency_to_supervisor_days_sum) AS agency_sup,
@@ -319,15 +359,15 @@ examples:
                SUM(sat_to_revenue_realized_days_sum) AS sat_rev, SUM(total_journey_days_sum) AS total_days,
                SUM(revenue_realized_meter_count) AS rev_meters
         FROM public.gold_meter_journey_stage_agg)
-      SELECT v.stage, v.avg_days
+      SELECT v.stage, v.avg_days, v.meters
       FROM s CROSS JOIN LATERAL (VALUES
-        (1, 'DI to Agency', ROUND(s.di_agency / NULLIF(s.meters, 0), 2)),
-        (2, 'Agency to Supervisor', ROUND(s.agency_sup / NULLIF(s.meters, 0), 2)),
-        (3, 'Supervisor to Technician', ROUND(s.sup_tech / NULLIF(s.meters, 0), 2)),
-        (4, 'Technician to Installation', ROUND(s.tech_inst / NULLIF(s.meters, 0), 2)),
-        (5, 'Installation to SAT', ROUND(s.inst_sat / NULLIF(s.sat_meters, 0), 2)),
-        (6, 'SAT to Revenue', ROUND(s.sat_rev / NULLIF(s.rev_meters, 0), 2)),
-        (7, 'Total Journey', ROUND(s.total_days / NULLIF(s.rev_meters, 0), 2))) AS v(ord, stage, avg_days)
+        (1, 'DI to Agency', ROUND(s.di_agency / NULLIF(s.meters, 0), 2), s.meters),
+        (2, 'Agency to Supervisor', ROUND(s.agency_sup / NULLIF(s.meters, 0), 2), s.meters),
+        (3, 'Supervisor to Technician', ROUND(s.sup_tech / NULLIF(s.meters, 0), 2), s.meters),
+        (4, 'Technician to Installation', ROUND(s.tech_inst / NULLIF(s.meters, 0), 2), s.meters),
+        (5, 'Installation to SAT', ROUND(s.inst_sat / NULLIF(s.sat_meters, 0), 2), s.sat_meters),
+        (6, 'SAT to Revenue', ROUND(s.sat_rev / NULLIF(s.rev_meters, 0), 2), s.rev_meters),
+        (7, 'Total Journey', ROUND(s.total_days / NULLIF(s.rev_meters, 0), 2), s.rev_meters)) AS v(ord, stage, avg_days, meters)
       ORDER BY v.ord
 
   - q: ["how many days does each step of the meter journey take in agra zone wise", "journey levels zone wise", "journey time per stage category wise", "average days at each level by division"]
@@ -383,6 +423,30 @@ examples:
       FROM public.gold_mi_sat_invoice_snapshot
       GROUP BY ROLLUP (project)
       ORDER BY GROUPING(project) DESC, eligible_pending_sat DESC
+
+  - q: ["SAT percentage against eligible MI for Agra", "SAT % vs eligible MI", "how much of eligible MI has SAT done", "SAT progress against eligible meters"]
+    note: "% SAT vs eligible MI = ALL SAT meters (sat_stage IS NOT NULL, eligible or not) / eligible MI -- the dashboard formula, can exceed 100%. Never SAT(eligible) / eligible. Show both percentages."
+    sql: |
+      SELECT SUM(meter_count) AS total_mi,
+             COALESCE(SUM(meter_count) FILTER (WHERE is_sat_eligible), 0) AS eligible_mi,
+             COALESCE(SUM(meter_count) FILTER (WHERE sat_stage IS NOT NULL), 0) AS total_sat,
+             ROUND(COALESCE(SUM(meter_count) FILTER (WHERE sat_stage IS NOT NULL), 0) * 100.0
+                   / NULLIF(SUM(meter_count), 0), 2) AS sat_pct_vs_mi,
+             ROUND(COALESCE(SUM(meter_count) FILTER (WHERE sat_stage IS NOT NULL), 0) * 100.0
+                   / NULLIF(SUM(meter_count) FILTER (WHERE is_sat_eligible), 0), 2) AS sat_pct_vs_eligible
+      FROM public.gold_mi_sat_invoice_snapshot
+      WHERE LOWER(project) = 'agra'
+
+  - q: ["Non-SAT ageing for feeder meters", "Non-SAT ageing", "non sat ageing for consumer meters", "non-SAT ageing band wise", "eligible meters pending SAT by age"]
+    note: "The card: one row per band in order (empty bands as 0) plus Total, over the whole scope -- no project split unless asked. Filters go in the ON clause."
+    sql: |
+      SELECT b.label AS ageing_band, COALESCE(SUM(n.meter_count), 0) AS non_sat_meters
+      FROM (VALUES (1, 'age_0_30', '0-30 days'), (2, 'age_31_60', '31-60 days'), (3, 'age_61_90', '61-90 days'),
+                   (4, 'age_91_120', '91-120 days'), (5, 'age_120_plus', '120+ days'), (6, NULL, 'Total')) AS b(ord, age_key, label)
+      LEFT JOIN public.gold_non_sat_ageing_snapshot n
+        ON (n.age_key = b.age_key OR b.age_key IS NULL) AND n.category = 'FEEDER'
+      GROUP BY b.ord, b.label
+      ORDER BY b.ord
 
   - q: ["How many SAT-passed meters are still not invoiced?", "SAT done but not invoiced", "Why are SAT meters not yet invoiced?"]
     suggest: "How many SAT-passed meters are still not invoiced?"

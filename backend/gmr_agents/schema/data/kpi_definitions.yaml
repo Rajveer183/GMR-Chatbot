@@ -307,6 +307,8 @@ gold_tables:
         inventory side: 3PLTCTSM/HTCTPTSM AND sku NOT LIKE '%CON%' -> DT/FEEDER, else CONSUMER; falls back to the
         installation category
       meter_type: coalesce(inventory, installation, 'OTHER-Consumer_meter'); DT/FEEDER stock keeps raw 3PLTCTSM/HTCTPTSM
+      "warehouse / sku / oem": the meter's stock warehouse (mixed case, e.g. Agra_HW), SKU and OEM -- the card's
+        warehouse / OEM / SKU filters and comparison levels
   gold_meter_inventory_event_month_agg:
     name: gold_meter_inventory_event_month_agg
     built_by: month roll-up of gold_meter_inventory_event_day_agg
@@ -1187,7 +1189,7 @@ kpis:
       - table: gold_meter_inventory_event_day_agg / _month_agg
         columns: >-
           period_start, period_end, project, discom, zone, circle, division, sub_division, category, meter_type,
-          inventory_count, installed_count, stock_consumed_count
+          warehouse, sku, oem, inventory_count, installed_count, stock_consumed_count
       - table: gold_inventory_unutilized_stock_snapshot
         columns: project, warehouse, category, meter_type, inventory_date, stock_count (comparison section only)
     silver_tables:
@@ -1276,8 +1278,8 @@ kpis:
     gold_tables:
       - table: gold_meter_inventory_event_day_agg / _month_agg
         columns: >-
-          period_start, period_end, project, geography, category, meter_type, inventory_count, installed_count,
-          stock_consumed_count
+          period_start, period_end, project, geography, category, meter_type, warehouse, sku, oem, inventory_count,
+          installed_count, stock_consumed_count
       - table: gold_inventory_unutilized_stock_snapshot
         columns: project, warehouse, category, meter_type, stock_count (comparison)
     silver_tables:

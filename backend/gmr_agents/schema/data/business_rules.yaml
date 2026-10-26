@@ -169,7 +169,7 @@ topics:
     rules:
       - "public.gold_mi_sat_invoice_snapshot (no dates, replacements included; columns project.., category, meter_type, sat_stage, is_sat_eligible, has_lumpsum_invoice, has_pmpm_invoice, meter_count)."
       - "Total MI = SUM(meter_count); Eligible MI = FILTER (WHERE is_sat_eligible) (installed on/before the project cutoff in public.sat_eligibility_config); Total SAT = FILTER (WHERE sat_stage IS NOT NULL); SAT (eligible) = both."
-      - "% SAT vs MI = Total SAT / Total MI; % SAT vs eligible MI = Total SAT / Eligible MI (dashboard formula, can exceed 100%)."
+      - "% SAT vs MI = Total SAT / Total MI; % SAT vs eligible MI = Total SAT (ALL SAT meters, sat_stage IS NOT NULL) / Eligible MI (dashboard formula, can exceed 100%) -- never SAT(eligible) / Eligible MI. Always show eligible MI, Total SAT and the %."
       - "Lumpsum / PMPM invoiced = FILTER (WHERE has_lumpsum_invoice / has_pmpm_invoice); invoice % = invoiced / Total SAT - never / MI, never add lumpsum and PMPM. 'SAT done not invoiced' = sat_stage IS NOT NULL AND NOT has_lumpsum_invoice (or has_pmpm_invoice)."
       - "Pending: installed not SAT = sat_stage IS NULL; eligible pending = sat_stage IS NULL AND is_sat_eligible (= non-SAT total); not due yet = sat_stage IS NULL AND NOT is_sat_eligible."
       - "'SAT progress' = Total MI, Total SAT, % SAT vs MI and pending. Lagging/behind = lowest % SAT vs MI, not fewest SAT."
@@ -255,6 +255,7 @@ topics:
       - "Bands age_key: 'age_0_30','age_31_60','age_61_90','age_91_120','age_120_plus' (days since installation, frozen at refresh); order with CASE. Only band edges 30/60/90/120 are answerable: 'over 90 days' = age_91_120 + age_120_plus. An ageing question gets Total plus every band; labels 0-30 days ... 120+ days."
       - "Young bands are empty because the newest cutoff (public.sat_eligibility_config.eligibility_cutoff_date) is already months old; installs after the cutoff are not in this card."
       - "No oem, no dates. Category labels: DT -> 'DTR'."
+      - "Card answer (no breakdown asked): one row per band in order (0-30 .. 120+, empty bands as 0) plus Total, over the whole scope -- never split by project unless asked. 'X wise' adds the bands as columns per X (see example)."
       - "Revenue at risk = meters in the asked bands x lumpsum per meter (blocked) and x PMPM per meter per month (deferred); rates from the latest revenue_receivables row (see sat_invoice topic); a year = lumpsum + 12 x PMPM."
       - "Stuck why: stuck rate = eligible pending / eligible per group - category, meter_type (snapshot), replacement vs new (gold_mi_installation_day_agg is_non_sat_pending, period_start <= project cutoff). No reason field exists."
     example:
@@ -342,6 +343,7 @@ topics:
       - "'stage wise' / 'each stage' / 'revenue not realized stage wise' = ALL SIX stages from the UNION source above (both tables), one row per stage in workflow order (ORDER BY CASE current_stage ...) plus Total -- never the revenue-pending table alone (that is only the last two stages)."
       - "Circle / division / sub_division exist only for stages 5-6 (gold_meter_revenue_pending_stage_snapshot); for a circle or division question give stages 5-6 for it and say the first four stages are tracked per warehouse / zone. No dates."
       - "Not unutilized stock ageing, not Non-SAT ageing."
+      - "Consumer meters = category 'CONSUMER' with every meter_type, OTHER-Consumer_meter included -- never drop a meter type the question did not exclude."
     example:
       question: "Current stage of meters with revenue not realized, project-wise"
       sql: |
@@ -370,6 +372,7 @@ topics:
     rules:
       - "public.gold_meter_journey_stage_agg; every figure is a ratio of sums ROUND(SUM(x) / NULLIF(SUM(den), 0), 2), never AVG: DI to Agency inventory_to_agency_days_sum, Agency to Supervisor agency_to_supervisor_days_sum, Supervisor to Technician supervisor_to_technician_days_sum, Technician to Installation technician_to_installation_days_sum - all / meter_count; Installation to SAT installation_to_sat_days_sum / sat_meter_count; SAT to Revenue sat_to_revenue_realized_days_sum and Total Journey total_journey_days_sum / revenue_realized_meter_count. Total meters = SUM(meter_count)."
       - "Stages do not add up to Total Journey (different denominators) - say so when showing all."
+      - "Always include total meters (SUM(meter_count)) -- the card's Total Meters tile -- beside the stage averages (a 'Total meters' row or a total_meters column)."
       - "WORDING: 'levels' / 'stages' / 'steps' / 'across the levels' / 'stage wise' of the meter journey = the SIX stages (DI to Agency, Agency to Supervisor, Supervisor to Technician, Technician to Installation, Installation to SAT, SAT to Revenue) plus Total Journey -- one row per stage in that order, never only the total. 'for revenue realized' = the usual figures (SAT to Revenue and Total Journey are over revenue-realized meters). The journey starts at DI (receipt into stock), not at installation. Stages BY another dimension ('zone wise', 'category wise', 'by division', 'project wise'): ONE ROW PER that dimension (ROLLUP Total row) with the six stages + total_journey as COLUMNS (di_to_agency ... total_journey) -- never one row per zone x stage (35 rows the answer cannot cover)."
       - "Replacements included; add NOT is_replacement only when asked to exclude them. Only time filter: installation_year (integer)."
       - "'time to revenue realization' alone = Total Journey. Slowest/fastest = rank by the asked stage. Category label 'DT'; consumer types via meter_type."
@@ -402,11 +405,15 @@ topics:
       - "MI pace vs stock: say what each number is and its period in the first sentence -- 'stock today', 'average installs per day over <pace_period>', 'days of stock left at that pace' -- then name the category / place that runs out first. Never a bare Yes/No 'keeping pace' without the numbers behind it."
       - "Utilization rate is always cumulative (everything supplied / installed up to that date), so it never jumps above 100% for one month or one date range. For a range, the rate is as of the range's end date; the range's own supplied / installed are movement, shown beside it, never divided into a rate."
       - "Zone-wise / one-zone supplied, stock and utilization include the meters still in stock, counted in the zone of the warehouse holding them (the app maps each warehouse to its zone from the live data). Group by zone as usual. Circle / division have no stock: there, stock shows as 'Not installed yet (in stock)' -- never call that a circle / division and never answer just '0'."
+      - "A supply utilization or MI pace vs stock answer gives the card's four figures: total supplies, total installed, utilization % and remaining stock (never the rate alone). MI pace vs stock adds installs per day and days of stock left beside them."
+      - "Two or more warehouses / OEMs / SKUs / projects named: a Total row for them combined first (GROUP BY ROLLUP), then one row each."
     rules:
       - "public.gold_meter_inventory_event_day_agg (month_agg for whole months). Supplies = SUM(inventory_count); installed = SUM(installed_count); utilization % = installed / supplies; remaining stock = SUM(inventory_count) - SUM(stock_consumed_count)."
       - "Cumulative up to the period end: WHERE period_start <= end (rate and stock are always balances) -- also for 'utilization from <date> to <date>' / 'utilization summary for <period>' / 'utilization in <month>': rate = SUM(installed_count) / SUM(inventory_count) over period_start <= the END date; in-period supplied / installed may be added as SUM(...) FILTER (WHERE period_start >= start) columns. NEVER compute utilization % from one period's rows only. Exception (counts only, no rate): 'how many supplied/installed IN <period>' without till/so far/cumulative = that period only (period_start BETWEEN), plus net = supplied - installed and a keeping-pace verdict (supplies >= installs)."
       - "Trend tables (monthwise / weekly utilization): running totals SUM(x) OVER (ORDER BY bucket), with earlier history folded into the first bucket (GREATEST(date_trunc('month', period_start), start) and no lower date bound); utilization % per bucket = cumulative installed / cumulative supplied."
-      - "circle/division are NULL for meters still in stock: label them 'Not installed yet (in stock)' (zone is filled from the warehouse automatically). category by the inventory SKU rule; DT/feeder stock meter_type is raw '3PLTCTSM'/'HTCTPTSM'. No oem or warehouse here (stock_ageing topic)."
+      - "circle/division are NULL for meters still in stock: label them 'Not installed yet (in stock)' (zone is filled from the warehouse automatically). category by the inventory SKU rule; DT/feeder stock meter_type is raw '3PLTCTSM'/'HTCTPTSM'."
+      - "warehouse, sku and oem are columns of both event tables (the meter's stock warehouse / SKU / OEM): filter with LOWER(warehouse) = 'agra_hw', UPPER(oem) = 'AEW', UPPER(sku) = 'M-1PWC1060-C-CAP'. Warehouse-wise / OEM-wise / SKU-wise = GROUP BY that column over every row up to the as-of date (never only the groups active in the latest month), blank label rows left out of the breakdown but kept in the Total."
+      - "A name ending HW / ZW / SWH / Warehouse is a WAREHOUSE, never a project: 'Agra HW' = warehouse Agra_HW, not project agra. Warehouses: Agra_HW, Aligarh Warehouse, Azamgarh_ZW, BALLIA_SWH, Chandauli_SWH, GHAZIPUR_SWH, JAUNPUR_SWH, MAU_SWH, Mirzapur_ZW, Prayagraj_HW, Varanasi_HW."
       - "Reconciliation 'supplied - installed vs stock': supplied - MI-progress installs - replacement installs (gold_mi_installation_day_agg is_replacement; they leave stock but are not MI progress) +/- net adjustment (installs with no stock record less scrapped stock) = stock. Separate queries per table."
     example:
       question: "Supply utilization category-wise as of today"
@@ -434,6 +441,7 @@ topics:
       - "Age = GREATEST(CURRENT_DATE - inventory_date, 0); bands <= 30, 31-60, 61-90, > 90 days; any custom threshold works. An ageing question gets Total plus every band."
       - "Dimensions: project, warehouse (mixed case, e.g. 'Agra_HW' - compare UPPER(warehouse)), oem (UPPER), sku, current_stage ('warehouse','agency','supervisor','technician'), category, meter_type. No zone/circle/division, no date range (as of today)."
       - "'Less than N days of stock' is the stock_cover topic, not age."
+      - "A name ending HW / ZW / SWH / Warehouse is a WAREHOUSE filter (LOWER(warehouse) = 'agra_hw'), never a project: 'Agra HW' is warehouse Agra_HW, not project agra."
     example:
       question: "Unused stock ageing warehouse-wise"
       sql: |
