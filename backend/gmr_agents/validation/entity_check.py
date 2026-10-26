@@ -123,6 +123,11 @@ _AGEING_RE = re.compile(r"\b(age|ageing|aging|aged|old|older|band|bands|days?|si
 _CONSUMER_RE = re.compile(r"\bconsumers?\b(?!\s*(number|no\b|id\b|name|account|code))", re.I)
 _TYPE_WISE_RE = re.compile(r"\btype[- ]?wise\b|\bby (meter )?types?\b|\btypes? wise\b|\beach type\b", re.I)
 _PLACE_LEVELS = {"circle", "division", "sub_division"}
+_TREND_CUBE = "gold_mi_productivity_trend_month_agg"
+# Words that name the Monthly Productivity trend card (KPI 3); the cube's own measure may also be asked by name.
+# The card is monthly only: a 'daily / weekly productivity trend' is KPI 2's.
+_KPI3_CARD_RE = re.compile(r"(?<!daily )(?<!weekly )\bproductivity trend\b|\bmonthly (?:mi )?productivity\b|\bkpi[- ]?3\b", re.I)
+_KPI3_RE = re.compile(_KPI3_CARD_RE.pattern + r"|\b(?:average|avg\.?) active technicians\b", re.I)
 
 
 def check(question: str, sql_texts: list[str], columns: set[str] | None = None) -> list[str]:
@@ -254,10 +259,21 @@ def check(question: str, sql_texts: list[str], columns: set[str] | None = None) 
 
     # active_days is 1 per technician-day row: SUM(active_days) counts rows (Chunar, Sep 2026:
     # 270 'active days' in a 30-day month). Active days = distinct calendar days with an install.
-    if re.search(r"\bsum\s*\(\s*(?:\w+\.)?active_days\s*\)", low):
+    # The KPI 3 cube is the exception: its active_days is already a distinct day count per month row.
+    if re.search(r"\bsum\s*\(\s*(?:\w+\.)?active_days\s*\)", low) and _TREND_CUBE not in low:
         problems.append("SUM(active_days) counts technician rows, not days -- active days = COUNT(DISTINCT period_start) "
                         "on the *_day_agg table (calendar days with an install); technician-days = "
                         "SUM(technician_day_count)")
+
+    # KPI 2 vs KPI 3: the cards count technician-days differently (Jan 2026: 5.56 vs 5.80), so the table follows the
+    # question's words. Live 26 Oct: 'productivity circle wise in Kashi' was answered from the KPI 3 cube (3.23 vs 2.91).
+    if _TREND_CUBE in low and not _KPI3_RE.search(question):
+        problems.append("the question does not name the Monthly Productivity trend card, so MI productivity reads "
+                        "gold_mi_technician_productivity_day_agg / _month_agg (the MI-Productivity per team card) -- "
+                        "not gold_mi_productivity_trend_month_agg")
+    elif _KPI3_CARD_RE.search(question) and "gold_mi_technician_productivity" in low and _TREND_CUBE not in low:
+        problems.append("the question names the Monthly Productivity trend card (KPI 3): read "
+                        "gold_mi_productivity_trend_month_agg (its own technician-day count), not the technician table")
 
     # Stock has no zone / circle / division (a meter gets its place when installed): a stock
     # balance filtered to one zone is always 0 ('stock left in Prayagraj II' -> '0 meters').

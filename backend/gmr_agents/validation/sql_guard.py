@@ -220,10 +220,18 @@ def _check_rollup_level(root: exp.Expression) -> str | None:
             continue
         # The trend cube holds project = 'ALL' rows beside every real project's rows: without a project filter both
         # are summed (live 26 Oct: discom-wise Sep 2026 = 135,306 installs, twice the real 67,653).
-        if "gold_mi_productivity_trend_month_agg" in own and not re.search(r"\bproject\)?\s*(?:=|in\b)", text):
-            return ("gold_mi_productivity_trend_month_agg needs project = 'ALL' (program-wide) or LOWER(project) = 'x': "
-                    "it holds both, so without the filter every install counts twice. For MI-Productivity per team "
-                    "questions use gold_mi_technician_productivity_day_agg / _month_agg instead.")
+        if "gold_mi_productivity_trend_month_agg" in own:
+            if not re.search(r"\bproject\)?\s*(?:=|in\b)", text):
+                return ("gold_mi_productivity_trend_month_agg needs project = 'ALL' (program-wide, also with a zone / "
+                        "circle / division scope) or LOWER(project) = 'x': it holds both, so without the filter every "
+                        "install counts twice.")
+            # Each install sits once per (filter scope x aggregate scope) pair: without both filters it is summed up
+            # to 35 times (live 26 Oct: 'circle wise in Azamgarh zone' drafts left filter_level out).
+            missing = [c for c in ("aggregate_level", "filter_level") if not re.search(rf"\b{c}\)?\s*(?:=|in\b)", text)]
+            if missing:
+                return (f"gold_mi_productivity_trend_month_agg needs {' and '.join(missing)}: every install is repeated "
+                        "per scope. Program-wide = aggregate_level = 'all' AND filter_level = 'all'; inside a place = "
+                        "filter_level = 'zone' AND filter_label = 'NAME'; 'X wise' = aggregate_level = 'x' GROUP BY label.")
         cat_all = re.search(r"\bcategory\)?\s*=\s*'all'", text)
         mt_all = re.search(r"\bmeter_type\)?\s*=\s*'all'", text)
         group = sel.args.get("group")

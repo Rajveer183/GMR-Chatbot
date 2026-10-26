@@ -17,3 +17,17 @@ rejected:
   - {trace_id: c900eed6, question: "only DT", reason: "join fan-out on defects"}
   - {trace_id: b6049d2d, question: "How many meters installed sub division wise in EDD Chunar division in August 2026", reason: "installs read from the inventory table (incl. replacements)"}
   - {trace_id: 87acfc89, question: "How many DTR meters installed sub division wise in EDD Ballia Nagar division in August 2026", reason: "installs read from the inventory table (incl. replacements)"}
+  - {trace_id: 94698a9d, question: "What is the overall productivity per technician per day and active technicians on the monthly productivity trend card?", reason: "KPI 3 card summary answered with the latest month only"}
+  - {trace_id: 77d094b1, question: "Monthly productivity trend zone wise for Kashi in 2026", reason: "KPI 3 zone comparison split per month, not whole window"}
+  - {trace_id: 917dbe06, question: "Monthly productivity trend project wise from July 2026 to September 2026", reason: "KPI 3 read from the KPI 2 month table (technician-days differ)"}
+  - {trace_id: dde01d01, question: "Monthly productivity trend category wise for August 2026", reason: "KPI 3 category wise read from the KPI 2 month table"}
+  - {trace_id: 2f985848, question: "Monthly productivity trend consumer meter type wise from January 2026 to June 2026", reason: "KPI 3 consumer type breakdown split per month, not whole window"}
+  - {trace_id: 594e3838, question: "Average active technicians per month in the monthly productivity trend for 2026", reason: "avg active technicians summed, not tech-days / active days"}
+  - {trace_id: 73c23880, question: "Monthly productivity trend for EDC Pratapgarh circle from May 2026 to September 2026", reason: "KPI 3 circle trend read from the KPI 2 month table"}
+  - {trace_id: 082fbeea, question: "Monthly productivity trend circle wise in Azamgarh zone for September 2026", reason: "trend cube without project filter (rejected), no answer"}
+  - {trace_id: 5d80dd3a, question: "Monthly productivity trend for EDD Kaushambi division in 2026", reason: "KPI 3 division trend read from the KPI 2 month table"}
+  - {trace_id: 9db1d146, question: "Show the Meter Replacement card", reason: "Meter Replacement card total mis-added (52,226 vs 53,126)"}
+  - {trace_id: bdf70446, question: "Meter replacement for consumer meters by meter type", reason: "meter replacement read from replacement installs, not the defect table"}
+  - {trace_id: 0cc95136, question: "Meter replacement circle wise in Azamgarh zone", reason: "meter replacement read from replacement installs, not the defect table"}
+  - {trace_id: 54f6b227, question: "Meter replacement and defect rate for feeder meters in 2026", reason: "defect rate per OEM only, no blended Total row"}
+  - {trace_id: 10fcef47, question: "Meter replacement last month", reason: "meter replacement total without burnt / faulty / others"}

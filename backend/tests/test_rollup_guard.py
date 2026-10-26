@@ -71,6 +71,19 @@ def test_trend_cube_needs_a_project_filter():
     assert check(f"SELECT label, SUM(total_installations) FROM {cube} WHERE project = 'ALL' AND aggregate_level = 'discom' AND filter_level = 'all' AND category = 'ALL' GROUP BY label") is None
 
 
+def test_trend_cube_needs_both_scope_filters():
+    cube = "public.gold_mi_productivity_trend_month_agg"
+    # circle wise inside a zone without filter_level (26 Oct draft): repeated per filter scope
+    assert "filter_level" in check(f"SELECT label, SUM(total_installations) FROM {cube} WHERE project = 'ALL' "
+                                   "AND aggregate_level = 'circle' AND filter_label = 'AZAMGARH' AND category = 'ALL' GROUP BY label")
+    assert "aggregate_level" in check(f"SELECT SUM(total_installations) FROM {cube} WHERE project = 'ALL' "
+                                      "AND filter_level = 'all' AND category = 'ALL'")
+    assert check(f"SELECT label, SUM(total_installations) FROM {cube} WHERE project = 'ALL' AND aggregate_level = 'circle' "
+                 "AND filter_level = 'zone' AND filter_label = 'AZAMGARH' AND category = 'ALL' GROUP BY label") is None
+    assert check(f"SELECT category, SUM(total_installations) FROM {cube} WHERE aggregate_level = 'all' AND category <> 'ALL' "
+                 "AND meter_type = 'ALL' AND LOWER(project) = 'kashi' AND filter_level = 'all' GROUP BY category") is None
+
+
 def test_summing_per_category_rollups_is_rejected():
     assert "two technician-days" in check(f"SELECT SUM(installation_count) FROM {T} WHERE category <> 'ALL' AND meter_type = 'ALL' AND LOWER(division) = 'x'")
     assert check(f"SELECT category, SUM(installation_count) FROM {T} WHERE category <> 'ALL' AND meter_type = 'ALL' GROUP BY category") is None

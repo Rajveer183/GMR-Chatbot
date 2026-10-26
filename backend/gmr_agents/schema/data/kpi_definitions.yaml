@@ -1021,10 +1021,20 @@ kpis:
         formula: number of trend months
     caveats:
       - >-
-          total_active_technicians is SUMMED across months (and categories when category=all), so it over-counts.
+          Since gmr-backend 26a7263 + gmr-etl cb13e5d (11 Oct 2026) the card reads ONE roll-up row per selection
+          (category 'ALL' / category X with meter_type 'ALL' / the meter-type row) instead of adding finer rows, so
+          days and technicians are no longer inflated across categories.
       - >-
-          With category=all, trend active_days / tech-days are summed across category rows (inflated); the correct
-          distinct values are on category='ALL' rows.
+          total_active_technicians is still SUMMED across months (a technician active in 3 months counts 3 times).
+      - >-
+          Productivity differs from KPI 2 (MI-Productivity per team) for the same month: the cube counts each
+          technician-day once at its scope, KPI 2 once per place row (Jan 2026: 5.80 here vs 5.56 there).
+      - >-
+          DT rows carry meter_type 'LTCT-Consumer_meter' and FEEDER rows 'HTCT-Consumer_meter', so a bare LTCT / HTCT
+          selection includes DT / FEEDER rows (the same as KPI 1's bare meter-type rule).
+      - >-
+          Card defaults: duration monthly only; from = yesterday - 12 months, to = yesterday; months overlapping the
+          range count whole. Comparison level 'discom' with all projects becomes 'project'.
       - A discom filter is ignored (no discom filter level in the cube).
       - Row-level-security-scoped users get empty data (every filter has no db column -> AND 1=0).
     sql_recipe: >-
@@ -1033,9 +1043,10 @@ kpis:
       category = 'ALL' (a real project: project = 'kashi' etc.; one category: category = 'CONSUMER' AND meter_type =
       'ALL'; one meter type: category <> 'ALL' AND meter_type = '1PH-Consumer_meter'). Per month:
       SUM(total_installations), ROUND(SUM(total_installations)::numeric / NULLIF(SUM(technician_day_count),0), 2) AS
-      productivity, SUM(active_technicians), SUM(active_days), GROUP BY month_start. For a zone/circle/division
-      scope use filter_level + filter_label; for a per-zone comparison use aggregate_level = 'zone' and GROUP BY
-      label.
+      productivity, SUM(active_technicians), ROUND(SUM(technician_day_count)::numeric / NULLIF(SUM(active_days),0), 2)
+      AS avg_active_technicians, GROUP BY month_start. For a zone/circle/division scope use filter_level +
+      filter_label (UPPER name); for a per-zone comparison use aggregate_level = 'zone' and GROUP BY label over the
+      whole window. The card summary, comparison and category breakdown are whole-window figures, not per month.
     followups:
       - Show the monthly installation productivity trend
       - Explain the MI-Progress KPI
@@ -1123,8 +1134,18 @@ kpis:
     caveats:
       - Counts complaint rows (count(*)), not distinct old serials.
       - >-
-          Tampered / Stop / Bypass count in total_defective but in none of burnt/faulty/others, so those three can
-          sum to less than the total.
+          Tampered / Stop / Bypass count in total_defective but in none of burnt/faulty/others. On the data loaded
+          26 Oct 2026 no row is classified so: Burnt + Faulty + Others = Total exactly.
+      - >-
+          The card's Others reason list misses two reasons present in the data ('METER TAMPERING DETECTED OR METER OR
+          BOX BROKEN', 'METER STOLEN/DAMAGE'): with Defect Type = Others its reason bars add up to less than Total
+          Others (dashboard bug; answer from the data).
+      - >-
+          Since gmr-etl c086e23 (21 Oct 2026) inventory rows with a blank meter_type get their SKU's usual type, so a
+          few defective consumer meters moved between 1PH / 3PH / LTCT / HTCT.
+      - >-
+          Card defaults: 'as on latest date' = all time unless a range is picked; comparison by project / the chosen
+          level; Defect Rate % = SUM over OEMs of Meter Faulty / SUM of installed (OEMs that have defects).
       - No period breakdown in the response -- the card's 'Trend' label has no time series behind it.
       - The denominator ignores the discom filter and row-level-security scope (the numerator applies both).
     sql_recipe: >-

@@ -699,6 +699,17 @@ examples:
       GROUP BY ROLLUP (project)
       ORDER BY GROUPING(project) DESC, productivity_per_tech_day DESC
 
+  - q: ["MI productivity zone wise in July 2026", "productivity circle wise in a month", "zone wise productivity per technician per day"]
+    note: "MI-Productivity per team (KPI 2) by place: the technician table, category = 'ALL', one row per place plus the Total row (GROUP BY ROLLUP) -- the card's overall figure. Rows with no place name are left out, as on the card."
+    sql: |
+      SELECT CASE WHEN GROUPING(zone) = 1 THEN 'Total' ELSE UPPER(zone) END AS zone,
+             ROUND(SUM(installation_count)::numeric / NULLIF(SUM(technician_day_count), 0), 2) AS productivity_per_tech_day,
+             SUM(installation_count) AS installations, COUNT(DISTINCT technician_name) AS active_technicians
+      FROM public.gold_mi_technician_productivity_month_agg
+      WHERE category = 'ALL' AND period_start = DATE '2026-07-01' AND zone IS NOT NULL AND TRIM(zone) <> ''
+      GROUP BY ROLLUP (zone)
+      ORDER BY GROUPING(zone) DESC, productivity_per_tech_day DESC
+
   - q: ["Who is the top performer?", "best technician", "top performing technicians", "Who is the top performing technician in August 2026 as on the MI productivity dashboard"]
     note: "The dashboard card's Top Performer: MI technicians by productivity over the range (no period = CURRENT_DATE - 31 .. CURRENT_DATE - 1), NO minimum-days filter, ties by installations then name -- the first row is the card's pick. Mention its active days (a one- or two-day spike often tops the list)."
     sql: |
@@ -820,7 +831,7 @@ examples:
         AND period_start BETWEEN CURRENT_DATE - 7 AND CURRENT_DATE - 1
 
   - q: ["Show the Monthly Productivity trend card (KPI 3)", "monthly productivity trend card", "KPI 3 monthly productivity trend"]
-    note: "KPI 3 card only. Every other month-wise / discom-wise productivity question uses gold_mi_technician_productivity_month_agg (KPI 2). Always project = 'ALL' or a project here, never both kinds of rows."
+    note: "KPI 3 card (any question naming the monthly productivity trend / productivity trend): gold_mi_productivity_trend_month_agg. Plain month-wise MI productivity per team questions use gold_mi_technician_productivity_month_agg (KPI 2) -- the two count technician-days differently. Always project = 'ALL' or a project here, never both kinds of rows."
     sql: |
       SELECT month_start AS month,
              ROUND(SUM(total_installations)::numeric / NULLIF(SUM(technician_day_count), 0), 2) AS productivity,
@@ -830,6 +841,117 @@ examples:
         AND month_start >= (date_trunc('month', CURRENT_DATE) - INTERVAL '12 months')::date
       GROUP BY month_start
       ORDER BY month_start
+
+  - q: ["Overall productivity and active technicians on the Monthly Productivity trend card", "monthly productivity trend card summary", "KPI 3 overall productivity", "total active technicians on the monthly productivity trend"]
+    note: "KPI 3 card summary = ONE row over the whole window, not the latest month. No dates = the card's default: months overlapping CURRENT_DATE - 1 - 12 months .. CURRENT_DATE - 1 (13 months, each month whole). active_technicians is the card's SUM over months (not distinct people) -- say so."
+    sql: |
+      SELECT SUM(total_installations) AS installations,
+             ROUND(SUM(total_installations)::numeric / NULLIF(SUM(technician_day_count), 0), 2) AS productivity_per_tech_day,
+             SUM(active_technicians) AS active_technicians, COUNT(DISTINCT month_start) AS active_months
+      FROM public.gold_mi_productivity_trend_month_agg
+      WHERE aggregate_level = 'all' AND category = 'ALL' AND project = 'ALL' AND filter_level = 'all'
+        AND month_end >= (CURRENT_DATE - 1 - INTERVAL '12 months')::date AND month_start <= CURRENT_DATE - 1
+
+  - q: ["Monthly productivity trend for Agra from February 2026 to July 2026", "Show the monthly productivity trend for a project", "kashi monthly productivity trend", "KPI 3 trend for a project"]
+    note: "KPI 3 trend: one row per month; months overlapping the range count whole. avg_active_technicians = technician-days / active days. A project = LOWER(project) = 'x'; program-wide = project = 'ALL'."
+    sql: |
+      SELECT month_start AS month, SUM(total_installations) AS installations,
+             ROUND(SUM(total_installations)::numeric / NULLIF(SUM(technician_day_count), 0), 2) AS productivity_per_tech_day,
+             SUM(active_technicians) AS active_technicians, SUM(active_days) AS active_days,
+             ROUND(SUM(technician_day_count)::numeric / NULLIF(SUM(active_days), 0), 2) AS avg_active_technicians
+      FROM public.gold_mi_productivity_trend_month_agg
+      WHERE aggregate_level = 'all' AND category = 'ALL' AND LOWER(project) = 'agra' AND filter_level = 'all'
+        AND month_end >= DATE '2026-02-01' AND month_start <= DATE '2026-07-31'
+      GROUP BY month_start
+      ORDER BY month_start
+
+  - q: ["Monthly productivity trend for EDC Ghazipur circle in 2026", "monthly productivity trend for a zone / circle / division / sub-division", "productivity trend in Varanasi II zone", "average active technicians per month in a division"]
+    note: "A place scope on the KPI 3 cube = filter_level ('zone'/'circle'/'division'/'sub_division') + filter_label (UPPER name) with aggregate_level = 'all' and project = 'ALL' -- never LOWER(circle) (no such column)."
+    sql: |
+      SELECT month_start AS month, SUM(total_installations) AS installations,
+             ROUND(SUM(total_installations)::numeric / NULLIF(SUM(technician_day_count), 0), 2) AS productivity_per_tech_day,
+             SUM(active_technicians) AS active_technicians,
+             ROUND(SUM(technician_day_count)::numeric / NULLIF(SUM(active_days), 0), 2) AS avg_active_technicians
+      FROM public.gold_mi_productivity_trend_month_agg
+      WHERE aggregate_level = 'all' AND category = 'ALL' AND project = 'ALL'
+        AND filter_level = 'circle' AND filter_label = 'EDC GHAZIPUR'
+        AND month_end >= DATE '2026-01-01' AND month_start <= DATE '2026-12-31'
+      GROUP BY month_start
+      ORDER BY month_start
+
+  - q: ["Monthly productivity trend discom wise from April 2026 to June 2026", "discom wise monthly productivity trend", "KPI 3 discom comparison"]
+    note: "Total row = the cube's aggregate_level = 'all' row (never a SUM of the place rows). KPI 3 comparison = one row per place over the WHOLE window (not per month): aggregate_level = the level, label = the place."
+    sql: |
+      SELECT CASE WHEN aggregate_level = 'all' THEN 'Total' ELSE label END AS discom, SUM(total_installations) AS installations,
+             ROUND(SUM(total_installations)::numeric / NULLIF(SUM(technician_day_count), 0), 2) AS productivity_per_tech_day,
+             SUM(active_technicians) AS active_technicians
+      FROM public.gold_mi_productivity_trend_month_agg
+      WHERE aggregate_level IN ('discom', 'all') AND category = 'ALL' AND project = 'ALL' AND filter_level = 'all'
+        AND month_end >= DATE '2026-04-01' AND month_start <= DATE '2026-06-30'
+      GROUP BY aggregate_level, label
+      ORDER BY aggregate_level = 'all' DESC, productivity_per_tech_day DESC
+
+  - q: ["Monthly productivity trend project wise for the last 3 months", "project wise monthly productivity trend", "KPI 3 comparison by project", "which project has the best monthly productivity trend"]
+    note: "Total row = the cube's aggregate_level = 'all' row (never a SUM of the place rows). KPI 3 comparison by project: aggregate_level = 'project' AND project = 'ALL', one row per project over the whole window. 'last N months' ends yesterday."
+    sql: |
+      SELECT CASE WHEN aggregate_level = 'all' THEN 'Total' ELSE label END AS project, SUM(total_installations) AS installations,
+             ROUND(SUM(total_installations)::numeric / NULLIF(SUM(technician_day_count), 0), 2) AS productivity_per_tech_day,
+             SUM(active_technicians) AS active_technicians
+      FROM public.gold_mi_productivity_trend_month_agg
+      WHERE aggregate_level IN ('project', 'all') AND category = 'ALL' AND project = 'ALL' AND filter_level = 'all'
+        AND month_end >= (CURRENT_DATE - 1 - INTERVAL '3 months')::date AND month_start <= CURRENT_DATE - 1
+      GROUP BY aggregate_level, label
+      ORDER BY aggregate_level = 'all' DESC, productivity_per_tech_day DESC
+
+  - q: ["Monthly productivity trend division wise in EDC Fatehpur circle for August 2026", "monthly productivity trend circle wise in a zone", "KPI 3 sub-division wise in a division", "productivity trend zone wise in a project"]
+    note: "Total row = the cube's aggregate_level = 'all' row (never a SUM of the place rows). Comparison inside a place: aggregate_level = the finer level, filter_level / filter_label = the place it sits in, project = 'ALL' (or LOWER(project) = 'x' when a project is named and no place)."
+    sql: |
+      SELECT CASE WHEN aggregate_level = 'all' THEN 'Total' ELSE label END AS division, SUM(total_installations) AS installations,
+             ROUND(SUM(total_installations)::numeric / NULLIF(SUM(technician_day_count), 0), 2) AS productivity_per_tech_day,
+             SUM(active_technicians) AS active_technicians
+      FROM public.gold_mi_productivity_trend_month_agg
+      WHERE aggregate_level IN ('division', 'all') AND category = 'ALL' AND project = 'ALL'
+        AND filter_level = 'circle' AND filter_label = 'EDC FATEHPUR'
+        AND month_end >= DATE '2026-08-01' AND month_start <= DATE '2026-08-31'
+      GROUP BY aggregate_level, label
+      ORDER BY aggregate_level = 'all' DESC, productivity_per_tech_day DESC
+
+  - q: ["Monthly productivity trend zone wise for Triveni from March 2026 to August 2026", "monthly productivity trend zone wise in a project", "KPI 3 comparison by zone"]
+    note: "Total row = the cube's aggregate_level = 'all' row (never a SUM of the place rows). KPI 3 comparison by zone inside a project: aggregate_level = 'zone' AND LOWER(project) = 'x', category = 'ALL' (no meter_type filter) -- one row per zone over the whole window. One category instead = category = 'X' AND meter_type = 'ALL'."
+    sql: |
+      SELECT CASE WHEN aggregate_level = 'all' THEN 'Total' ELSE label END AS zone, SUM(total_installations) AS installations,
+             ROUND(SUM(total_installations)::numeric / NULLIF(SUM(technician_day_count), 0), 2) AS productivity_per_tech_day,
+             SUM(active_technicians) AS active_technicians
+      FROM public.gold_mi_productivity_trend_month_agg
+      WHERE aggregate_level IN ('zone', 'all') AND category = 'ALL' AND LOWER(project) = 'triveni'
+        AND filter_level = 'all' AND month_end >= DATE '2026-03-01' AND month_start <= DATE '2026-08-31'
+      GROUP BY aggregate_level, label
+      ORDER BY aggregate_level = 'all' DESC, productivity_per_tech_day DESC
+
+  - q: ["Monthly productivity trend category wise for Kashi from May 2026 to September 2026", "monthly productivity trend category wise", "KPI 3 category breakdown", "consumer vs DT vs feeder productivity trend"]
+    note: "KPI 3 category breakdown = ONE row per category over the whole window (never also GROUP BY month_start): category <> 'ALL' AND meter_type = 'ALL' GROUP BY category."
+    sql: |
+      SELECT category, SUM(total_installations) AS installations,
+             ROUND(SUM(total_installations)::numeric / NULLIF(SUM(technician_day_count), 0), 2) AS productivity_per_tech_day,
+             SUM(active_technicians) AS active_technicians
+      FROM public.gold_mi_productivity_trend_month_agg
+      WHERE aggregate_level = 'all' AND category <> 'ALL' AND meter_type = 'ALL' AND LOWER(project) = 'kashi'
+        AND filter_level = 'all' AND month_end >= DATE '2026-05-01' AND month_start <= DATE '2026-09-30'
+      GROUP BY category
+      ORDER BY installations DESC
+
+  - q: ["Monthly productivity trend consumer meter type wise in the last 6 months", "monthly productivity trend 1 phase vs 3 phase", "KPI 3 consumer meter type breakdown"]
+    note: "KPI 3 consumer meter-type breakdown: ONE row per meter type over the whole window (the card's breakdown) -- GROUP BY meter_type only, never GROUP BY month_start too, even when the question says 'monthly productivity trend ... type wise'. category = 'CONSUMER' AND meter_type <> 'ALL'."
+    sql: |
+      SELECT meter_type, SUM(total_installations) AS installations,
+             ROUND(SUM(total_installations)::numeric / NULLIF(SUM(technician_day_count), 0), 2) AS productivity_per_tech_day,
+             SUM(active_technicians) AS active_technicians
+      FROM public.gold_mi_productivity_trend_month_agg
+      WHERE aggregate_level = 'all' AND category = 'CONSUMER' AND meter_type <> 'ALL' AND project = 'ALL'
+        AND filter_level = 'all'
+        AND month_end >= (CURRENT_DATE - 1 - INTERVAL '6 months')::date AND month_start <= CURRENT_DATE - 1
+      GROUP BY meter_type
+      ORDER BY installations DESC
 
   - q: ["Which SAT stage has the highest and lowest count?", "SAT stage-wise meters", "Switch the SAT chart from bar to line", "SAT batch wise"]
     sql: |
@@ -1016,6 +1138,91 @@ examples:
       WHERE NOT is_replacement AND has_meter_serial AND oem IS NOT NULL
         AND UPPER(COALESCE(NULLIF(TRIM(oem), ''), 'Unknown')) IN (
           SELECT DISTINCT UPPER(COALESCE(NULLIF(TRIM(oem), ''), 'Unknown')) FROM public.gold_meter_defect_event_day_agg)
+
+  - q: ["Show the Meter Replacement card", "Meter Replacement card", "How many meters were replaced?", "total meter replacements burnt faulty others", "meter replacement summary"]
+    note: "Meter Replacement (KPI 4) = defective OLD meters from gold_meter_defect_event_day_agg, not the new replacement installs. The card shows Total / Burnt / Faulty / Others, installed meters and defect rate (Meter Faulty / installed of OEMs that have defects). No dates = all time ('as on latest date')."
+    sql: |
+      SELECT SUM(defect_count) AS total_defective,
+             COALESCE(SUM(defect_count) FILTER (WHERE defective_type = 'Meter Burnt'), 0) AS meter_burnt,
+             COALESCE(SUM(defect_count) FILTER (WHERE defective_type = 'Meter Faulty'), 0) AS meter_faulty,
+             COALESCE(SUM(defect_count) FILTER (WHERE defective_type = 'Others'), 0) AS others,
+             (SELECT SUM(meter_count) FROM public.gold_mi_installation_month_agg
+              WHERE NOT is_replacement AND has_meter_serial AND oem IS NOT NULL
+                AND UPPER(COALESCE(NULLIF(TRIM(oem), ''), 'Unknown')) IN (
+                  SELECT DISTINCT UPPER(COALESCE(NULLIF(TRIM(oem), ''), 'Unknown')) FROM public.gold_meter_defect_event_day_agg)) AS installed_meters,
+             ROUND(SUM(defect_rate_numerator_count) * 100.0 / NULLIF((SELECT SUM(meter_count) FROM public.gold_mi_installation_month_agg
+              WHERE NOT is_replacement AND has_meter_serial AND oem IS NOT NULL
+                AND UPPER(COALESCE(NULLIF(TRIM(oem), ''), 'Unknown')) IN (
+                  SELECT DISTINCT UPPER(COALESCE(NULLIF(TRIM(oem), ''), 'Unknown')) FROM public.gold_meter_defect_event_day_agg)), 0), 2) AS defect_rate_pct
+      FROM public.gold_meter_defect_event_day_agg
+
+  - q: ["Meter replacement in Triveni in July 2026", "meter replacement last month", "meter replacement in a period", "how many meters were replaced in a project in a month"]
+    note: "Same date and place filters on both sides; installs from the month table for whole months (day table for partial months). Always show Total, Burnt, Faulty, Others."
+    sql: |
+      SELECT SUM(u.defects) AS total_defective, SUM(u.burnt) AS meter_burnt, SUM(u.faulty) AS meter_faulty,
+             SUM(u.others) AS others, SUM(u.installed) AS installed_meters,
+             ROUND(SUM(u.faulty) * 100.0 / NULLIF(SUM(u.installed), 0), 2) AS defect_rate_pct
+      FROM (SELECT defect_count AS defects,
+                   CASE WHEN defective_type = 'Meter Burnt' THEN defect_count ELSE 0 END AS burnt,
+                   defect_rate_numerator_count AS faulty,
+                   CASE WHEN defective_type = 'Others' THEN defect_count ELSE 0 END AS others, 0 AS installed
+            FROM public.gold_meter_defect_event_day_agg
+            WHERE LOWER(project) = 'triveni' AND period_start BETWEEN DATE '2026-07-01' AND DATE '2026-07-31'
+            UNION ALL
+            SELECT 0, 0, 0, 0, meter_count
+            FROM public.gold_mi_installation_month_agg
+            WHERE NOT is_replacement AND has_meter_serial AND oem IS NOT NULL AND LOWER(project) = 'triveni'
+              AND period_start >= DATE '2026-07-01' AND period_end <= DATE '2026-07-31'
+              AND UPPER(COALESCE(NULLIF(TRIM(oem), ''), 'Unknown')) IN (
+                SELECT DISTINCT UPPER(COALESCE(NULLIF(TRIM(oem), ''), 'Unknown')) FROM public.gold_meter_defect_event_day_agg
+                WHERE LOWER(project) = 'triveni' AND period_start BETWEEN DATE '2026-07-01' AND DATE '2026-07-31')) u
+
+  - q: ["Meter replacement for consumer meters in Agra by meter type", "meter replacement by meter type", "consumer meter replacements 1 phase 3 phase", "how many 1 phase meters were replaced"]
+    note: "Meter type of the defective meter is on consumer rows only (meter_type); DT / FEEDER rows have meter_type NULL."
+    sql: |
+      SELECT CASE WHEN GROUPING(meter_type) = 1 THEN 'Total' ELSE meter_type END AS meter_type,
+             SUM(defect_count) AS total_defective,
+             COALESCE(SUM(defect_count) FILTER (WHERE defective_type = 'Meter Burnt'), 0) AS meter_burnt,
+             COALESCE(SUM(defect_count) FILTER (WHERE defective_type = 'Meter Faulty'), 0) AS meter_faulty,
+             COALESCE(SUM(defect_count) FILTER (WHERE defective_type = 'Others'), 0) AS others
+      FROM public.gold_meter_defect_event_day_agg
+      WHERE category = 'CONSUMER' AND LOWER(project) = 'agra'
+      GROUP BY ROLLUP (meter_type)
+      ORDER BY GROUPING(meter_type) DESC, total_defective DESC
+
+  - q: ["Meter replacement division wise in EDC Ghazipur circle", "meter replacement circle wise", "meter replacement zone wise in a project", "replacements per division"]
+    note: "Place-wise meter replacement reads the defect table (GROUP BY its zone / circle / division), never gold_mi_installation_* WHERE is_replacement."
+    sql: |
+      SELECT CASE WHEN GROUPING(division) = 1 THEN 'Total' ELSE UPPER(division) END AS division,
+             SUM(defect_count) AS total_defective,
+             COALESCE(SUM(defect_count) FILTER (WHERE defective_type = 'Meter Burnt'), 0) AS meter_burnt,
+             COALESCE(SUM(defect_count) FILTER (WHERE defective_type = 'Meter Faulty'), 0) AS meter_faulty,
+             COALESCE(SUM(defect_count) FILTER (WHERE defective_type = 'Others'), 0) AS others
+      FROM public.gold_meter_defect_event_day_agg
+      WHERE LOWER(circle) = 'edc ghazipur'
+      GROUP BY ROLLUP (division)
+      ORDER BY GROUPING(division) DESC, total_defective DESC
+
+  - q: ["Defect rate for DT meters in Kashi OEM wise", "defect rate for feeder meters", "defect rate by OEM for one category", "overall defect rate in a period with OEM split"]
+    note: "Keep a Total row: its rate is the card's blended Defect Rate % (all faulty / all installed), not an average of OEM rates. Installs: same project / place / date filters; category via progress_category or inventory_category."
+    sql: |
+      SELECT CASE WHEN GROUPING(u.oem) = 1 THEN 'Total' ELSE u.oem END AS oem,
+             SUM(u.defects) AS total_defective, SUM(u.faulty) AS meter_faulty, SUM(u.installed) AS installed_meters,
+             ROUND(SUM(u.faulty) * 100.0 / NULLIF(SUM(u.installed), 0), 2) AS defect_rate_pct
+      FROM (SELECT UPPER(COALESCE(NULLIF(TRIM(oem), ''), 'Unknown')) AS oem, defect_count AS defects,
+                   defect_rate_numerator_count AS faulty, 0 AS installed
+            FROM public.gold_meter_defect_event_day_agg
+            WHERE category = 'DT' AND LOWER(project) = 'kashi'
+            UNION ALL
+            SELECT UPPER(COALESCE(NULLIF(TRIM(oem), ''), 'Unknown')), 0, 0, meter_count
+            FROM public.gold_mi_installation_month_agg
+            WHERE NOT is_replacement AND has_meter_serial AND oem IS NOT NULL AND LOWER(project) = 'kashi'
+              AND (progress_category = 'DT' OR inventory_category = 'DT')
+              AND UPPER(COALESCE(NULLIF(TRIM(oem), ''), 'Unknown')) IN (
+                SELECT DISTINCT UPPER(COALESCE(NULLIF(TRIM(oem), ''), 'Unknown')) FROM public.gold_meter_defect_event_day_agg
+                WHERE category = 'DT' AND LOWER(project) = 'kashi')) u
+      GROUP BY ROLLUP (u.oem)
+      ORDER BY GROUPING(u.oem) DESC, defect_rate_pct DESC
 
   - q: ["Show the burnt vs faulty split for AEW.", "burnt meters by OEM", "Which filter shows only burnt meters for SEIPL in Triveni?"]
     suggest: "Show the burnt vs faulty split for AEW."
