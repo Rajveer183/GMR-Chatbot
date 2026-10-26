@@ -65,3 +65,20 @@ rejected:
   - {trace_id: dadefd75, question: "Revenue not realized ageing project wise", reason: "read the current-stage table (1,019,165 instead of 157,979)"}
   - {trace_id: 0dc52eec, question: "Revenue not realized ageing for Agra", reason: "'data unavailable' instead of 0 meters"}
   - {trace_id: ea70d387, question: "Revenue not realized ageing for Agra", reason: "meter counts reported as Rs crore"}
+  - {trace_id: 8e7c635d, question: "Open ticket ageing for AUTO and MANUAL complaint sources", reason: "no combined Total, no SAT Done / Pending"}
+  - {trace_id: 3830b8e1, question: "Unassigned non-comm tickets for DT meters", reason: "wrong table / no non-comm type filter (56,361 instead of 74,583)"}
+  - {trace_id: 08b420c6, question: "Unassigned non-comm tickets for DT meters", reason: "no NEVER COMM / NOT IN COMMUNICATION filter (75,436 instead of 74,583)"}
+  - {trace_id: c368c755, question: "Pending discom escalations zone wise in Agra", reason: "said escalation data not available"}
+  - {trace_id: fe32ef73, question: "Pending discom escalations zone wise in Agra", reason: "SUM(escalation_count) instead of ticket_count"}
+  - {trace_id: 4afcd9a5, question: "Escalations with technician remark TEMPORARILY DISCONNECTED/ TD FROM POLE by discom decision", reason: "remark split / wrong table"}
+  - {trace_id: a6473ff4, question: "Escalations with technician remark TEMPORARILY DISCONNECTED/ TD FROM POLE by discom decision", reason: "'decision' read as December 2026 (zero rows)"}
+  - {trace_id: 340ec052, question: "Escalations with technician remark TEMPORARILY DISCONNECTED/ TD FROM POLE by discom decision", reason: "'decision' read as December 2026, remark split in two"}
+  - {trace_id: 3658fa94, question: "Total complaint meters, SAT done meters and non-SAT meters with their complaints", reason: "whole meter table, not the closed-ticket window (542,098 instead of 515,514)"}
+  - {trace_id: da0e0262, question: "Total complaint meters, SAT done meters and non-SAT meters with their complaints", reason: "blank places filled (515,555 instead of 515,514)"}
+  - {trace_id: e68d40c3, question: "O&M productivity per team", reason: "SUM(technician_day_count) (2.42 instead of 2.77)"}
+  - {trace_id: 4a1fb6da, question: "O&M productivity for consumer meters in Kashi in September 2026", reason: "SUM(technician_day_count) (2.86 instead of 3.49)"}
+  - {trace_id: c3e8ad82, question: "O&M productivity for consumer meters in Kashi in September 2026", reason: "month table with distinct days (20.36 per day)"}
+  - {trace_id: bd0d017d, question: "Never comm tickets ageing in Agra", reason: "both non-comm types counted for 'never comm'"}
+  - {trace_id: 11a15ad8, question: "Which meters had the most complaints in August 2026?", reason: "refused: said complaints are not tracked by month"}
+  - {trace_id: 03a92c7d, question: "O&M tickets closed per technician per day in Triveni last month", reason: "per-technician list, not the team figure 1.94"}
+  - {trace_id: 5bac2688, question: "O&M tickets closed per technician per day in Triveni last month", reason: "per technician-day rows averaged (1.67), not the team figure 1.94"}

@@ -78,3 +78,10 @@ def test_discom_on_receivables_becomes_its_projects():
     assert [p for p in check("Lumpsum within timeline for PUVVNL", [ALL_PROJECTS]) if "no discom column" in p]
     assert not [p for p in check("Lumpsum within timeline for PUVVNL", [PUVVNL])
                 if "no discom column" in p or "does not mention" in p]
+
+
+def test_om_ticket_sat_status_is_not_a_pending_sat_count():
+    sql = "SELECT zone, SUM(ticket_count) FROM public.gold_om_open_ageing_snapshot WHERE sat_status = 'SAT PENDING' GROUP BY zone"
+    assert not [p for p in check("Open O&M tickets of SAT pending meters zone wise", [sql]) if "without / pending SAT" in p]
+    assert [p for p in check("How many meters are pending SAT?", ["SELECT SUM(meter_count) FROM public.gold_non_sat_ageing_snapshot"])
+            if "without / pending SAT" in p]

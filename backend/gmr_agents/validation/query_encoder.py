@@ -22,7 +22,11 @@ from gmr_agents.validation.entity_check import _CATEGORIES, _NUM_WORDS, _OEMS, _
 
 _MONTHS = ["january", "february", "march", "april", "may", "june", "july", "august", "september", "october",
            "november", "december"]
-_MONTH_RE = re.compile(r"\b(jan|feb|mar|apr|may|jun|jul|aug|sep|sept|oct|nov|dec)[a-z]*\b", re.IGNORECASE)
+# Whole month names or their abbreviations only: '[a-z]*' read 'discom decision' as December (the query then
+# filtered December 2026), 'marching' as March and 'augment' as August.
+_MONTH_WORDS = (r"jan(?:uary)?|feb(?:ruary)?|mar(?:ch)?|apr(?:il)?|may|june?|july?|aug(?:ust)?|"
+                r"sep(?:t(?:ember)?)?|oct(?:ober)?|nov(?:ember)?|dec(?:ember)?")
+_MONTH_RE = re.compile(rf"\b({_MONTH_WORDS})\b", re.IGNORECASE)
 _RELATIVE = ["today", "yesterday", "last week", "this week", "last month", "this month", "last year", "this year",
              "last 7 days", "last 30 days", "last 3 months", "last 6 months", "last 12 months", "so far", "till date",
              "kal", "aaj"]
@@ -64,7 +68,7 @@ def encode(question: str) -> dict:
             months.append(full)
     if months:
         out["months"] = months
-    dates = re.findall(r"\b\d{4}-\d{2}-\d{2}\b|\b\d{1,2}(?:st|nd|rd|th)?\s+(?:jan|feb|mar|apr|may|jun|jul|aug|sep|oct|nov|dec)[a-z]*\b",
+    dates = re.findall(rf"\b\d{{4}}-\d{{2}}-\d{{2}}\b|\b\d{{1,2}}(?:st|nd|rd|th)?\s+(?:{_MONTH_WORDS})\b",
                        q, re.IGNORECASE)
     if dates:
         out["dates"] = dates

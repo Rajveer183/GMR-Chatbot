@@ -144,6 +144,10 @@ wfm_postgres_tables:
   # dashboard KPI code in the local WFM repo as of 2026-09-24).
   - gold_om_closed_tickets_day_agg
   - gold_om_meter_complaints_agg
+  # O&M cards added to the dashboard Oct 2026 (Never / Non-comm, Escalated to Discom, HHU Reading Trend).
+  - gold_om_open_ticket_detail_snapshot
+  - gold_om_discom_escalation_snapshot
+  - gold_om_hhu_reading_day_agg
 
 # A column name + real values (or a role) doesn't always self-evidently
 # connect to how a real question would phrase the same concept -- verified
@@ -867,6 +871,15 @@ table_descriptions:
   gold_om_closed_tickets_day_agg: >-
     O&M tickets closed per day (closed_date) by place, feeder, dtr, complaint_type -- FEEDER and DT meters only
     (no consumer closures); SUM(closed_tickets). Place values lower-case.
+  gold_om_open_ticket_detail_snapshot: >-
+    Open O&M tickets in detail (Never / Non-comm card): complaint type, status, is_escalated, technician remark
+    (remark_bucket), age band, SAT status, is_sm_replaced (meter already replaced SM to SM), repeat_ticket_count.
+  gold_om_discom_escalation_snapshot: >-
+    Tickets escalated to the discom (SmartEMS DISESC): technician remark, complaint received, escalation_status
+    PENDING / APPROVED / REJECTED, days since escalation (age_key), attended_count / attend_days_sum.
+  gold_om_hhu_reading_day_agg: >-
+    O&M tickets with a handheld-unit (HHU) meter-data upload per day: hhu_status OK / FAILED / OTHER, ticket_count,
+    upload_count, technician_name.
   gold_om_meter_complaints_agg: >-
     One row per meter (meter_serial_number) with its O&M complaint counts (total/open/closed_complaints) and SAT status
     (sat_status 'SAT Done'/'Non-SAT', sat_number). Place values UPPER-case. CONSUMER rows carry only open complaints,

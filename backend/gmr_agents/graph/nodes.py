@@ -226,7 +226,8 @@ def validate_node(state: AgentState, config: RunnableConfig) -> dict[str, Any]:
     if settings.VERIFY_ENTITIES and not state.get("entities_checked") and not limits.retries_exhausted(state["attempt"]):
         extra_sql = [str(e.get("sql") or "") for e in ctx.raw_plan.get("extra_queries") or [] if isinstance(e, dict)]
         mismatch = sql_validator.check_entities(triage["question"], [ctx.plan["sql"], *extra_sql],
-                                                columns=P._table_columns(ctx.plan["tables"], catalog))
+                                                columns=P._table_columns(ctx.plan["tables"], catalog),
+                                                asked=state.get("question"))
         update["entities_checked"] = True
         if mismatch:
             err = {**mismatch, "sql": ctx.plan["sql"]}

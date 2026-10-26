@@ -45,6 +45,10 @@ log = logging.getLogger(__name__)
 # (parent, child): a blank parent is filled from the child
 _LEVELS = [("zone", "circle"), ("circle", "division"), ("division", "sub_division")]
 _REFRESH_SECONDS = 3600
+# (b) below is off: the WFM dashboard reports places exactly as stored, and the user chose exact dashboard
+# parity on 2026-10-26 (HHU circle-wise in Azamgarh: EDC BALLIA 37 with the fill, 34 on the dashboard).
+# Stock -> zone placement (a) stays on: the dashboard's supply / stock cards place stock the same way.
+FILL_ORPHAN_PARENTS = False
 _STATE: dict = {"map": {}, "stock_zones": [], "places": {}, "at": 0.0, "running": False}
 _EVENT_TABLES = {"gold_meter_inventory_event_day_agg", "gold_meter_inventory_event_month_agg"}
 _WAREHOUSE_SUFFIX_RE = re.compile(r"[\s_-]*(?:hw|zw|swh|wh|warehouse|store)$", re.I)
@@ -241,9 +245,13 @@ def rewrite(sql: str, mapping: dict | None = None, stock_zones: list[tuple] | No
     uses `zone`, and (b) blank parent levels filled from the orphan map; unchanged when
     there is nothing to do. (b) touches only columns of a SELECT that reads a gold table
     directly (an outer query over a subquery has no child column to read)."""
-    mapping = _STATE["map"] if mapping is None else mapping
+    mapping = (_STATE["map"] if FILL_ORPHAN_PARENTS else {}) if mapping is None else mapping
     stock_zones = _STATE["stock_zones"] if stock_zones is None else stock_zones
     low = sql.lower()
+    # The dashboard's complaint-meter tab matches meters to closed-ticket areas on the stored place
+    # values as they are; filling blank parents there added 41 meters (515,555 instead of 515,514).
+    if "gold_om_meter_complaints_agg" in low:
+        return sql
     # The stage table has no zone / discom of its own: any use of them needs the rewrite.
     stage_place = _STAGE_TABLE in low and re.search(r"\b(zone|discom)\b", low)
     if not re.search(r"\b(zone|circle|division)\b", low) and not stage_place:

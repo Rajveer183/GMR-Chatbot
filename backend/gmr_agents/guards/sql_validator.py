@@ -28,10 +28,12 @@ def validate_sql(sql: str, catalog) -> dict[str, Any]:
     return {"ok": True, "normalized_sql": guard["normalized_sql"], "data_engine": guard["data_engine"], "guard": guard}
 
 
-def check_entities(question: str, sqls: list[str], columns: set[str] | None = None) -> dict[str, Any] | None:
+def check_entities(question: str, sqls: list[str], columns: set[str] | None = None,
+                   asked: str | None = None) -> dict[str, Any] | None:
     """A structured error when the SQL misses an entity the question names, else None.
-    `columns` (the SQL's tables' columns) skips checks those tables cannot satisfy."""
-    problems = entity_check.check(question, sqls, columns=columns)
+    `columns` (the SQL's tables' columns) skips checks those tables cannot satisfy; `asked` is the
+    user's own wording, for checks the resolved question can blur."""
+    problems = entity_check.check(question, sqls, columns=columns, asked=asked)
     if not problems:
         return None
     return {"kind": "entity_mismatch", "message": "The SQL does not match the question: " + "; ".join(problems),

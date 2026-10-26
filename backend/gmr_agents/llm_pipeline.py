@@ -869,7 +869,9 @@ def _blocks(plan: dict, result: dict) -> dict:
     built = _build_chart(plan, df)
     charts = [built] if built else []
     tables = []
-    if display.get("table") or (not kpis and not charts):
+    # A one-row answer with more columns than cards (the Never / Non-comm card has ten figures) keeps
+    # its table too, or the figures past the fourth card are never shown.
+    if display.get("table") or (not kpis and not charts) or (len(df) == 1 and len(df.columns) > len(kpis)):
         shown = df.head(_TABLE_ROWS)
         cols = [_label(plan, c) for c in shown.columns]
         raw = raw_cols(shown.columns)

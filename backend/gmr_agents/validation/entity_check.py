@@ -139,7 +139,89 @@ _WAREHOUSE_RE = re.compile(r"\b(?!(?:a|an|the|each|every|per|by|any|one|this|tha
                            r"(?:hw|zw|swh|warehouse)\b", re.I)
 
 
-def check(question: str, sql_texts: list[str], columns: set[str] | None = None) -> list[str]:
+_NON_COMM_TYPES = ("'never comm'", "'meter not in communication'")
+_NEVER_COMM_RE = re.compile(r"\bnever[- ]?comm", re.I)
+_NOT_IN_COMM_RE = re.compile(r"\bnot in communication\b", re.I)
+_OM_AGEING_RE = re.compile(r"\b(ageing|aging|age bands?|age wise|by age)\b", re.I)
+
+
+def _om_problems(question: str, low: str, asked: str | None = None) -> list[str]:
+    """O&M card mistakes seen live on 26 Oct 2026 (each against the WFM dashboard's own SQL). `asked` is the
+    user's own wording: triage once widened 'Never comm tickets ageing' to both non-comm types."""
+    asked = asked or question
+    problems: list[str] = []
+    # Technician-days are distinct (technician, day) pairs: the per-category rows are split by meter type, so
+    # SUM(technician_day_count) counted a technician twice (2.42 instead of the card's 2.77); the month table's
+    # period_start is the month, so COUNT(DISTINCT period_start) there gave '1 active day' (20.36 per day).
+    if "gold_om_technician_productivity_" in low:
+        if re.search(r"\bsum\s*\(\s*(?:\w+\.)?technician_day_count\s*\)", low):
+            problems.append("O&M technician-days = COUNT(DISTINCT (technician_name, period_start)) on "
+                            "gold_om_technician_productivity_day_agg, never SUM(technician_day_count)")
+        if "gold_om_technician_productivity_month_agg" in low and re.search(r"productiv|per day|per technician",
+                                                                            question, re.I):
+            problems.append("O&M productivity reads gold_om_technician_productivity_day_agg (day rows), not the "
+                            "month table -- its period_start is the month, so days and technician-days are lost")
+    # escalation_count counts escalation events; the card counts tickets (Agra pending 3,896 instead of 3,895).
+    if "gold_om_discom_escalation_snapshot" in low and "escalation_count" in low:
+        problems.append("escalated tickets = SUM(ticket_count) (escalation_count counts repeat escalations of one "
+                        "ticket) -- the card counts tickets")
+    # The escalations card's summary includes the discom's average days to decide (sum / sum).
+    if ("gold_om_discom_escalation_snapshot" in low and not re.search(r"\bgroup\s+by\b", low)
+            and "attend_days_sum" not in low):
+        problems.append("the escalations summary also gives the discom's average days to attend: "
+                        "ROUND(SUM(attend_days_sum)::numeric / NULLIF(SUM(attended_count), 0), 2)")
+    # The detail snapshot holds every open ticket; the Never / Non-comm card is its two communication types.
+    if "gold_om_open_ticket_detail_snapshot" in low:
+        if not any(t in low for t in _NON_COMM_TYPES):
+            problems.append("Never / Non-comm reads gold_om_open_ticket_detail_snapshot WHERE complaint_type IN "
+                            "('NEVER COMM', 'METER NOT IN COMMUNICATION') -- the table holds every open ticket")
+        elif not _grouped_by(low, "complaint_type"):
+            one_type = not re.search(r"\bnon[- ]?comm|communication fail", asked, re.I)
+            if one_type and _NEVER_COMM_RE.search(asked) and not _NOT_IN_COMM_RE.search(asked) and _NON_COMM_TYPES[1] in low:
+                problems.append("the question asks about NEVER COMM tickets only -- complaint_type = 'NEVER COMM'")
+            elif one_type and _NOT_IN_COMM_RE.search(asked) and not _NEVER_COMM_RE.search(asked) and _NON_COMM_TYPES[0] in low:
+                problems.append("the question asks about METER NOT IN COMMUNICATION tickets only -- complaint_type = "
+                                "'METER NOT IN COMMUNICATION'")
+            elif (all(t in low for t in _NON_COMM_TYPES)
+                  and not re.search(r"filter\s*\(\s*where\s+complaint_type", low)):
+                # Live 26 Oct: 'communication failure tickets in Prayagraj II' gave 95,418 with no split.
+                problems.append("a non-comm count also gives its split, like the card: SUM(ticket_count) FILTER "
+                                "(WHERE complaint_type = 'NEVER COMM') AS never_comm and ... 'METER NOT IN "
+                                "COMMUNICATION' AS not_in_communication")
+    # HHU rows exist for today (partial uploads) but the card's window ends yesterday. Live 26 Oct: 'HHU readings
+    # circle wise in Azamgarh zone in 2026' ran to '2026-12-31' -- EDC-MAU 68 instead of the card's 55.
+    if "gold_om_hhu_reading_day_agg" in low:
+        import datetime as _dt
+        today = _dt.date.today().isoformat()
+        late = [d for d in re.findall(r"'(\d{4}-\d{2}-\d{2})'", low) if d >= today]
+        if late or not re.search(r"current_date\s*-\s*1\b|current_date\s*-\s*interval\s*'1 day'|'\d{4}-\d{2}-\d{2}'",
+                                 low):
+            problems.append("HHU windows end yesterday (period_start <= CURRENT_DATE - 1): the table holds today's "
+                            "partial uploads, which the card never shows")
+    # 'Tickets closed per technician per day' for a place is the team figure. Live 26 Oct: Triveni came back as
+    # one row per technician-day, averaged to 1.67 instead of the card's 1.94.
+    if ("gold_om_technician_productivity_" in low and _grouped_by(low, "technician_name")
+            and not re.search(r"\b(top|best|worst|lowest|highest|bottom|each technician|technician[- ]?wise|"
+                              r"by technician|per technician (?:list|wise)|technicians|named|support|performer)\b",
+                              asked, re.I)):
+        problems.append("O&M productivity for a place is the team figure: one row (or one per place) of SUM(complaint_count) "
+                        "/ COUNT(DISTINCT (technician_name, period_start)) -- not one row per technician")
+    # Complaint meters by SAT status = the tab's tiles (counts), not a meter list. Live 26 Oct: 'Complaint meters SAT
+    # status for Triveni in September 2026' listed meters.
+    if ("gold_om_meter_complaints_agg" in low and re.search(r"\bsat (?:status|done)\b|\bnon[- ]?sat\b", asked, re.I)
+            and not re.search(r"\b(top|most|which meters|list|worst)\b", asked, re.I) and "count(" not in low):
+        problems.append("complaint meters by SAT status = the tab's tiles: COUNT(*) meters, SAT Done / Non-SAT meters and "
+                        "%, total complaints and per SAT status -- not a list of meters")
+    # Active ticket ageing card: every answer carries SAT Done / SAT Pending beside the bands.
+    if ("gold_om_open_ageing_snapshot" in low and "age_key" in low and "sat_status" not in low
+            and _OM_AGEING_RE.search(question)):
+        problems.append("the O&M Active Ticket Ageing card shows SAT Done and SAT Pending beside the bands: add "
+                        "SUM(ticket_count) FILTER (WHERE sat_status = 'SAT DONE') AS sat_done and ... 'SAT PENDING' "
+                        "AS sat_pending")
+    return problems
+
+
+def check(question: str, sql_texts: list[str], columns: set[str] | None = None, asked: str | None = None) -> list[str]:
     """Problems found (empty = consistent). `columns` = the column names of the SQL's
     tables (None = unknown: every check runs). A check those tables cannot satisfy is
     skipped -- a year on a snapshot table with no date column ('as of 20 Sep 2026'),
@@ -192,7 +274,9 @@ def check(question: str, sql_texts: list[str], columns: set[str] | None = None) 
 
     # 'without SAT' / 'pending SAT' counts: the total AND its split. The same question once
     # came back as 705 (all installed-not-SAT) and once as 364 (eligible only, the ageing card).
+    # (O&M ticket questions filter tickets by their meter's SAT status -- 'open tickets of SAT pending meters'.)
     if (_WITHOUT_SAT_RE.search(question) and not _AGEING_RE.search(question)
+            and not re.search(r"\b(tickets?|complaints?|escalat\w*|o&m|non[- ]?comm)\b", question, re.I)
             and not re.search(r"\b[A-Za-z]{1,4}\d{6,10}\b", question)
             and not ("sat_stage is null" in low and "is_sat_eligible" in low)):
         problems.append("a count of meters without / pending SAT needs the total AND its split from "
@@ -319,6 +403,8 @@ def check(question: str, sql_texts: list[str], columns: set[str] | None = None) 
                 problems.append(f"{discom.upper()} = project(s) {', '.join(projects)} -- revenue_receivables has no "
                                 f"discom column, so filter LOWER(project) IN ({', '.join(repr(p) for p in projects)})")
 
+    problems += _om_problems(question, low, asked)
+
     # A meter-type exclusion nobody asked for. Live 26 Oct: 'invoice funnel zone wise in Triveni' added
     # meter_type <> 'OTHER-Consumer_meter' AND meter_type IS NOT NULL and lost 44 meters.
     # (On the productivity cubes meter_type IS NOT NULL picks the roll-up level, not an exclusion.)
@@ -366,7 +452,7 @@ def check(question: str, sql_texts: list[str], columns: set[str] | None = None) 
 
     asked = encode(question)
     if not any(asked.get(k) for k in ("years", "months", "dates", "relative_period", "as_of")):
-        dated = re.findall(r"(?:period_start|date|_at|_date|day)\w*\s*(?:=|>=|<=|>|<|between)\s*(?:date\s*)?'(\d{4}-\d{2}-\d{2})'", low)
+        dated = re.findall(r"(?:period_start|date|_at|_date|day|_month)\w*\s*(?:=|>=|<=|>|<|between)\s*(?:date\s*)?'(\d{4}-\d{2}-\d{2})'", low)
         if dated:
             problems.append(f"the SQL filters on the date {dated[0]} but the question names no period -- "
                             "no date means all time; remove that date filter")

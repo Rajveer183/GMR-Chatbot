@@ -506,6 +506,7 @@ topics:
       - "Open tickets per technician: also say how many open tickets have no technician assigned (out of all open), when that figure is in the results -- they sit with no one."
     rules:
       - "public.gold_om_open_ageing_snapshot: SUM(ticket_count); age_key 'age_0_7','age_8_15','age_16_30','age_31_60','age_60_plus' (days since raised, frozen at refresh), order with CASE; thresholds only at 7/15/30/60. Default answer = Total plus every band."
+      - "Card answer (O&M Active Ticket Ageing): Total open, SAT Done (sat_status = 'SAT DONE'), SAT Pending (sat_status = 'SAT PENDING') and every age band, for the asked filters (source / status / complaint type / SAT status / category / place). Several values of one filter (AUTO and MANUAL, two statuses): a Total row for them combined first (GROUP BY ROLLUP), then one row each."
       - "Includes every active-feed row, RESOLVED too - say so unless a status is filtered. complaint_status upper-case ('UNASSIGNED','ASSIGNED','CAN NOT ATTEND','ESCALATED TO DISCOM','WORK IN PROGRESS','RESOLVED','ACCEPTED','ON HOLD'); complaint_source '1912','AUTO','MANUAL'; complaint_type upper-case (e.g. 'METER NOT IN COMMUNICATION','NEVER COMM'); category label 'DT'. 'meter type wise' = meter_type, not complaint_type."
       - "Ticket lists, one ticket, technician/supervisor/agency backlog (Athena): gmr_wfm_silver.unified_active_complaints, age = date_diff('day', CAST(complaint_created_date AS DATE), current_date) (as of today); columns complaint_no, ticket_id, complaint_status, complaint_type, complaint_by, old_meter_serial_number, consumer_number, technician_name, supervisor, agency, project, zone, division. Status there is mixed case: compare UPPER(TRIM(complaint_status)). Require a filter; LIMIT 200."
       - "Open tickets per technician: ONLY gmr_wfm_silver.unified_active_complaints (the one table with a technician per ticket): COUNT(*) per technician_name WHERE UPPER(TRIM(complaint_status)) <> 'RESOLVED' AND NULLIF(TRIM(technician_name), '') IS NOT NULL, plus a separate count of open tickets with no technician (unassigned). Never join the ageing snapshot (or any place-level count) to technician / productivity tables on place columns: every ticket is repeated per technician-day row and the counts are inflated many times."
@@ -559,6 +560,7 @@ topics:
       - "public.gold_om_meter_complaints_agg: one row per meter_serial_number; total_complaints, open_complaints, closed_complaints; sat_status 'SAT Done' / 'Non-SAT', sat_number 'SAT-1'..'SAT-13'; category CONSUMER/DT/FEEDER."
       - "Place columns are UPPER-case here (zone 'AGRA', discom 'DVVNL'/'PuVVNL'), project lower-case: compare with UPPER(col) = 'AGRA' / LOWER(project) = 'agra'."
       - "Repeat-complaint meter = total_complaints > 1. Meters = COUNT(*); complaints = SUM(total_complaints)."
+      - "Dashboard 'Top 50 Meters & SAT Status' (O&M Ticket Closed Analysis tab): meters only in areas (discom, zone, circle, division, sub_division) with a ticket CLOSED in the asked window of public.gold_om_closed_tickets_day_agg (closed_date; no period = last 30 days ending yesterday, say so) -- join on COALESCE(LOWER(col), '') for all five; project / category / place filters on both tables. Tiles: complaint meters = COUNT(*), SAT Done / Non-SAT meters (sat_status) and their %, total complaints and per SAT status. Top 50 = ORDER BY total_complaints DESC LIMIT 50 with serial, place, category, total / open / closed complaints, SAT status and number. The answer changes with the window."
       - "CONSUMER rows hold only OPEN complaints (closed_complaints is always 0) and DT/FEEDER rows only CLOSED ones -- never report consumer closed = 0 as a real figure; say which kind each category counts."
     example:
       question: "Repeat-complaint meters by zone and SAT status"
@@ -571,6 +573,84 @@ topics:
         GROUP BY zone, sat_status
         ORDER BY repeat_meters DESC
 
+  om_non_comm:
+    domain: wfm
+    title: "Never / Non-comm status (open communication-failure tickets)"
+    description: "Open NEVER COMM and METER NOT IN COMMUNICATION tickets: total, never comm vs not in communication, distinct meters, repeat tickets, assigned / unassigned, escalated to discom, meter already replaced SM to SM, SAT pending; by status, technician remark, age band, place, category."
+    keywords: [never comm, non comm, non-comm, non communication, not in communication, meter not communicating, communication failure, sm to sm, already replaced, repeat tickets, distinct meters, remark, technician remark, door closed, consumer refusal, unassigned non comm]
+    tables: [gold_om_open_ticket_detail_snapshot]
+    answer_notes:
+      - "Open the answer with total non-comm tickets split into Never Comm and Not in Communication, then the asked breakdown."
+    rules:
+      - "public.gold_om_open_ticket_detail_snapshot WHERE complaint_type IN ('NEVER COMM', 'METER NOT IN COMMUNICATION'): SUM(ticket_count). Columns project, discom, zone, circle, division, sub_division (lower-case), category, complaint_type, complaint_status (upper-case, e.g. 'UNASSIGNED'), is_escalated, remark_bucket (technician remark, upper-case; 'NO REMARK' = not attended yet), age_key ('age_0_7'..'age_60_plus'), raised_month, sat_status ('SAT DONE'/'SAT PENDING'), is_sm_replaced, ticket_count, repeat_ticket_count."
+      - "Card tiles: total = SUM(ticket_count); never comm = FILTER (complaint_type = 'NEVER COMM'); not in communication = FILTER (complaint_type = 'METER NOT IN COMMUNICATION'); repeat tickets = SUM(repeat_ticket_count); distinct meters = total - repeat; unassigned = FILTER (complaint_status = 'UNASSIGNED'); assigned = total - unassigned; escalated to discom = FILTER (is_escalated); meter replaced SM to SM = FILTER (is_sm_replaced); SAT pending = FILTER (sat_status = 'SAT PENDING')."
+      - "Status / remark / age wise: GROUP BY that column (age in band order 0-7, 8-15, 16-30, 31-60, 60+), with never comm and not in communication columns. A remark filter: remark_bucket = UPPER('<remark>')."
+    example:
+      question: "Never / non-comm status"
+      sql: |
+        SELECT SUM(ticket_count) AS total_tickets,
+               SUM(ticket_count) FILTER (WHERE complaint_type = 'NEVER COMM') AS never_comm,
+               SUM(ticket_count) FILTER (WHERE complaint_type = 'METER NOT IN COMMUNICATION') AS not_in_communication,
+               SUM(ticket_count) - SUM(repeat_ticket_count) AS distinct_meters,
+               SUM(repeat_ticket_count) AS repeat_tickets,
+               SUM(ticket_count) FILTER (WHERE complaint_status <> 'UNASSIGNED') AS assigned,
+               SUM(ticket_count) FILTER (WHERE complaint_status = 'UNASSIGNED') AS unassigned,
+               SUM(ticket_count) FILTER (WHERE is_escalated) AS escalated_to_discom,
+               SUM(ticket_count) FILTER (WHERE is_sm_replaced) AS meter_replaced_sm_to_sm,
+               SUM(ticket_count) FILTER (WHERE sat_status = 'SAT PENDING') AS sat_pending
+        FROM public.gold_om_open_ticket_detail_snapshot
+        WHERE complaint_type IN ('NEVER COMM', 'METER NOT IN COMMUNICATION')
+
+  om_escalations:
+    domain: wfm
+    title: "O&M tickets escalated to the discom (SmartEMS DISESC)"
+    description: "Tickets the field team escalated to the discom: total, older than 30 days, non-comm, discom decision pending / approved / rejected, average days the discom took to decide; by technician remark, complaint received, age since escalation, place."
+    keywords: [escalated to discom, escalation, escalations, disesc, discom escalation, discom approved, discom rejected, pending with discom, discom decision, days to attend, technician remark escalation]
+    tables: [gold_om_discom_escalation_snapshot]
+    rules:
+      - "public.gold_om_discom_escalation_snapshot: SUM(ticket_count). Columns project..sub_division (lower-case), category (CONSUMER only -- DT / feeder escalations are 0), complaint_type (complaint received), technician_remark, escalation_status ('PENDING','APPROVED','REJECTED'), age_key (days since escalation, 'age_0_7'..'age_60_plus'), ticket_count, attended_count, attend_days_sum."
+      - "Card tiles: escalated = SUM(ticket_count); older than 30 days = FILTER (age_key IN ('age_31_60','age_60_plus')); non-comm = FILTER (complaint_type IN ('NEVER COMM','METER NOT IN COMMUNICATION')); pending / approved / rejected = FILTER (escalation_status = ...); discom average days to attend = ROUND(SUM(attend_days_sum)::numeric / NULLIF(SUM(attended_count), 0), 2) (never AVG of avg_days_to_attend)."
+      - "Remark / complaint / age / status wise: GROUP BY technician_remark / complaint_type / age_key / escalation_status, largest first (ages in band order). A remark filter: technician_remark = UPPER('<remark>') -- the WHOLE remark as one value, '/' included ('TEMPORARILY DISCONNECTED/ TD FROM POLE' is one remark, never split into two)."
+      - "Not the open-ticket status 'ESCALATED TO DISCOM' (om_open_tickets) -- this table keeps approved / rejected tickets too."
+    example:
+      question: "O&M tickets escalated to discom"
+      sql: |
+        SELECT SUM(ticket_count) AS escalated_tickets,
+               SUM(ticket_count) FILTER (WHERE age_key IN ('age_31_60', 'age_60_plus')) AS older_than_30_days,
+               SUM(ticket_count) FILTER (WHERE complaint_type IN ('NEVER COMM', 'METER NOT IN COMMUNICATION')) AS non_comm_tickets,
+               SUM(ticket_count) FILTER (WHERE escalation_status = 'PENDING') AS discom_pending,
+               SUM(ticket_count) FILTER (WHERE escalation_status = 'APPROVED') AS discom_approved,
+               SUM(ticket_count) FILTER (WHERE escalation_status = 'REJECTED') AS discom_rejected,
+               ROUND(SUM(attend_days_sum)::numeric / NULLIF(SUM(attended_count), 0), 2) AS discom_avg_days_to_attend
+        FROM public.gold_om_discom_escalation_snapshot
+
+  hhu_reading:
+    domain: wfm
+    title: "HHU reading trend (handheld-unit meter-data uploads)"
+    description: "O&M tickets with an HHU meter-data upload per day / week / month: tickets, upload OK / failed / other, success rate, upload attempts, technicians; by place."
+    keywords: [hhu, hhu reading, handheld, hand held unit, hhu upload, meter data upload, upload failed, upload success, hhu trend, hhu done]
+    tables: [gold_om_hhu_reading_day_agg]
+    rules:
+      - "public.gold_om_hhu_reading_day_agg: period_start = day of the ticket's latest upload; columns project..sub_division (lower-case), technician_name, category (CONSUMER only), hhu_status ('OK','FAILED','OTHER'), ticket_count, upload_count."
+      - "Tickets with HHU upload = SUM(ticket_count); OK / failed / other = FILTER (hhu_status = ...); success rate = ROUND(OK * 100.0 / NULLIF(tickets, 0), 2); upload attempts = SUM(upload_count); technicians = COUNT(DISTINCT technician_name). Always give tickets, OK, failed and the success rate."
+      - "Every window ends yesterday at the latest (period_start <= CURRENT_DATE - 1): the table already holds today's partial uploads and the card never shows today -- 'in 2026' = 2026-01-01 .. CURRENT_DATE - 1."
+      - "No period given = the card's default: the last 12 months ending yesterday (period_start BETWEEN (CURRENT_DATE - 1) - INTERVAL '12 months' AND CURRENT_DATE - 1); say so. Trend: daily = period_start; weekly = the month's 7-day blocks (date_trunc('month', period_start)::date + ((EXTRACT(DAY FROM period_start)::int - 1) / 7) * 7); monthly = date_trunc('month', period_start)."
+    example:
+      question: "HHU reading trend month wise in 2026"
+      sql: |
+        SELECT CASE WHEN GROUPING(date_trunc('month', period_start)) = 1 THEN 'Total'
+                    ELSE to_char(date_trunc('month', period_start), 'Mon YYYY') END AS month,
+               SUM(ticket_count) AS tickets_with_hhu_upload,
+               COALESCE(SUM(ticket_count) FILTER (WHERE hhu_status = 'OK'), 0) AS upload_ok,
+               COALESCE(SUM(ticket_count) FILTER (WHERE hhu_status = 'FAILED'), 0) AS upload_failed,
+               COALESCE(SUM(ticket_count) FILTER (WHERE hhu_status = 'OTHER'), 0) AS upload_other,
+               ROUND(SUM(ticket_count) FILTER (WHERE hhu_status = 'OK') * 100.0 / NULLIF(SUM(ticket_count), 0), 2) AS success_rate_pct,
+               SUM(upload_count) AS upload_attempts
+        FROM public.gold_om_hhu_reading_day_agg
+        WHERE period_start BETWEEN DATE '2026-01-01' AND CURRENT_DATE - 1
+        GROUP BY ROLLUP (date_trunc('month', period_start))
+        ORDER BY GROUPING(date_trunc('month', period_start)) DESC, date_trunc('month', period_start)
+
   om_productivity:
     domain: wfm
     title: "O&M productivity per team"
@@ -580,9 +660,10 @@ topics:
     answer_notes:
       - "A named technician: when several stored names match, say how many match and give each one's project and productivity; the grouping is project (not zone) unless the result has a zone column."
     rules:
-      - "public.gold_om_technician_productivity_day_agg, ALWAYS category <> 'ALL' (sum per-category rows); one category = category = 'X'. period_start = closing (work completed) date."
-      - "Closed tickets = SUM(complaint_count); active technicians = COUNT(DISTINCT technician_name); productivity per technician per day = ROUND(SUM(complaint_count)::numeric / NULLIF(SUM(technician_day_count), 0), 2); active days = COUNT(DISTINCT period_start); active months = COUNT(DISTINCT date_trunc('month', period_start))."
+      - "public.gold_om_technician_productivity_day_agg: all categories = category = 'ALL' rows (each ticket once); one category = category = 'X' (its rows are split by meter type) or a consumer type = meter_type = 'X'. period_start = closing (work completed) date."
+      - "Closed tickets = SUM(complaint_count); active technicians = COUNT(DISTINCT technician_name); technician-days = COUNT(DISTINCT (technician_name, period_start)); productivity per technician per day = ROUND(SUM(complaint_count)::numeric / NULLIF(COUNT(DISTINCT (technician_name, period_start)), 0), 2) -- never SUM(technician_day_count) (a technician fixing two meter types in a day counts twice: 2.42 instead of the card's 2.77); active days = COUNT(DISTINCT period_start); active months = COUNT(DISTINCT date_trunc('month', period_start)). The card shows closed tickets, active technicians, active days and productivity."
       - "No date given = last 30 days ending yesterday (period_start BETWEEN CURRENT_DATE - 31 AND CURRENT_DATE - 1); the monthly trend card defaults to the last 13 months (from the 1st). Say the default was used; 'all time' removes it."
+      - "'Tickets closed per technician per day' for a place = that place's team figure (one number, card style), not a per-technician list."
       - "'O&M productivity' / 'per team' = the team measure (pooled closed tickets / pooled technician-days), per project with a ROLLUP 'Total' row -- never one row per technician. Per-technician rows only when technicians, top / bottom performers or a named technician are asked."
       - "A named technician: technician_name ILIKE '%<name>%' (stored names carry prefixes / suffixes / IDs), no place filter unless the question states one; GROUP BY project, technician_name so every matching technician is listed with closed tickets, technician-days and productivity."
       - "Top performer / requires support: GROUP BY technician_name ORDER BY productivity DESC (ASC), closed tickets DESC (ASC), name; default 10."
@@ -592,11 +673,11 @@ topics:
       question: "Top 10 O&M technicians in Agra last month"
       sql: |
         SELECT technician_name AS technician,
-               ROUND(SUM(complaint_count)::numeric / NULLIF(SUM(technician_day_count), 0), 2) AS productivity,
+               ROUND(SUM(complaint_count)::numeric / NULLIF(COUNT(DISTINCT period_start), 0), 2) AS productivity,
                SUM(complaint_count) AS closed_tickets,
-               SUM(technician_day_count) AS technician_days
+               COUNT(DISTINCT period_start) AS technician_days
         FROM public.gold_om_technician_productivity_day_agg
-        WHERE category <> 'ALL' AND LOWER(project) = 'agra'
+        WHERE category = 'ALL' AND LOWER(project) = 'agra'
           AND period_start >= (date_trunc('month', CURRENT_DATE) - INTERVAL '1 month')::date
           AND period_start < date_trunc('month', CURRENT_DATE)::date
         GROUP BY technician_name

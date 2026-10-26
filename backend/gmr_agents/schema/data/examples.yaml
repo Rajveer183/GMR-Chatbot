@@ -247,6 +247,158 @@ examples:
       FROM public.gold_inventory_unutilized_stock_snapshot
       WHERE LOWER(warehouse) = 'agra_hw'
 
+  - q: ["Top performing O&M technician in the last 30 days", "O&M top performer", "lowest O&M technician", "O&M technicians requiring support"]
+    note: "Per technician on the category = 'ALL' rows: productivity = closed tickets / distinct days worked; rank by productivity, then closed tickets, then name (ASC for lowest). No minimum days, like the card."
+    sql: |
+      SELECT technician_name AS technician, UPPER(MIN(project)) AS project,
+             ROUND(SUM(complaint_count)::numeric / NULLIF(COUNT(DISTINCT period_start), 0), 2) AS productivity_per_tech_day,
+             SUM(complaint_count) AS closed_tickets, COUNT(DISTINCT period_start) AS active_days
+      FROM public.gold_om_technician_productivity_day_agg
+      WHERE category = 'ALL' AND period_start BETWEEN CURRENT_DATE - 31 AND CURRENT_DATE - 1
+      GROUP BY technician_name
+      ORDER BY productivity_per_tech_day DESC, closed_tickets DESC, technician_name
+      LIMIT 10
+
+  - q: ["O&M productivity category wise in September 2026", "O&M productivity for consumer meters", "complaint productivity DT vs feeder"]
+    note: "One category = its own rows (split by meter type), technician-days = distinct (technician, day) pairs."
+    sql: |
+      SELECT category,
+             ROUND(SUM(complaint_count)::numeric / NULLIF(COUNT(DISTINCT (technician_name, period_start)), 0), 2) AS productivity_per_tech_day,
+             SUM(complaint_count) AS closed_tickets,
+             COUNT(DISTINCT technician_name) AS active_technicians
+      FROM public.gold_om_technician_productivity_day_agg
+      WHERE category <> 'ALL' AND period_start BETWEEN DATE '2026-09-01' AND DATE '2026-09-30'
+      GROUP BY category
+      ORDER BY closed_tickets DESC
+
+  - q: ["Open ticket ageing for AUTO and MANUAL complaint sources", "O&M active ticket ageing", "open tickets ageing SAT done vs pending", "unassigned open tickets ageing"]
+    note: "The card: total open, SAT Done, SAT Pending and every band. Several values of a filter: Total of them first (ROLLUP), then each. One value or none: drop the ROLLUP column."
+    sql: |
+      SELECT CASE WHEN GROUPING(complaint_source) = 1 THEN 'Total' ELSE complaint_source END AS source,
+             SUM(ticket_count) AS total_open_tickets,
+             COALESCE(SUM(ticket_count) FILTER (WHERE sat_status = 'SAT DONE'), 0) AS sat_done,
+             COALESCE(SUM(ticket_count) FILTER (WHERE sat_status = 'SAT PENDING'), 0) AS sat_pending,
+             COALESCE(SUM(ticket_count) FILTER (WHERE age_key = 'age_0_7'), 0) AS days_0_7,
+             COALESCE(SUM(ticket_count) FILTER (WHERE age_key = 'age_8_15'), 0) AS days_8_15,
+             COALESCE(SUM(ticket_count) FILTER (WHERE age_key = 'age_16_30'), 0) AS days_16_30,
+             COALESCE(SUM(ticket_count) FILTER (WHERE age_key = 'age_31_60'), 0) AS days_31_60,
+             COALESCE(SUM(ticket_count) FILTER (WHERE age_key = 'age_60_plus'), 0) AS days_60_plus
+      FROM public.gold_om_open_ageing_snapshot
+      WHERE complaint_source IN ('AUTO', 'MANUAL')
+      GROUP BY ROLLUP (complaint_source)
+      ORDER BY GROUPING(complaint_source) DESC, total_open_tickets DESC
+
+  - q: ["Total complaint meters, SAT done meters and non-SAT meters with their complaints", "complaint meters by SAT status", "SAT done vs non-SAT complaint meters", "complaint meters SAT status for a project in a month"]
+    note: "Closed Analysis 'Top 50 Meters & SAT Status' tab: only meters in areas with tickets closed in the window (default last 30 days ending yesterday -- say so); a project / zone filter goes in both the areas CTE and the meter query."
+    sql: |
+      WITH areas AS (
+        SELECT DISTINCT COALESCE(LOWER(discom), '') AS discom, COALESCE(LOWER(zone), '') AS zone,
+               COALESCE(LOWER(circle), '') AS circle, COALESCE(LOWER(division), '') AS division,
+               COALESCE(LOWER(sub_division), '') AS sub_division
+        FROM public.gold_om_closed_tickets_day_agg
+        WHERE closed_date BETWEEN CURRENT_DATE - 31 AND CURRENT_DATE - 1),
+      m AS (
+        SELECT c.* FROM public.gold_om_meter_complaints_agg c
+        JOIN areas a ON a.discom = COALESCE(LOWER(c.discom), '') AND a.zone = COALESCE(LOWER(c.zone), '')
+                    AND a.circle = COALESCE(LOWER(c.circle), '') AND a.division = COALESCE(LOWER(c.division), '')
+                    AND a.sub_division = COALESCE(LOWER(c.sub_division), ''))
+      SELECT COUNT(*) AS complaint_meters,
+             COUNT(*) FILTER (WHERE sat_status = 'SAT Done') AS sat_done_meters,
+             ROUND(COUNT(*) FILTER (WHERE sat_status = 'SAT Done') * 100.0 / NULLIF(COUNT(*), 0), 2) AS sat_done_pct,
+             COUNT(*) FILTER (WHERE sat_status = 'Non-SAT') AS non_sat_meters,
+             SUM(total_complaints) AS total_complaints,
+             SUM(total_complaints) FILTER (WHERE sat_status = 'SAT Done') AS sat_done_complaints,
+             ROUND(SUM(total_complaints) FILTER (WHERE sat_status = 'SAT Done') * 100.0 / NULLIF(SUM(total_complaints), 0), 2) AS sat_done_complaints_pct,
+             SUM(total_complaints) FILTER (WHERE sat_status = 'Non-SAT') AS non_sat_complaints,
+             MAX(total_complaints) AS max_complaints_one_meter
+      FROM m
+
+  - q: ["Top 50 complaint meters in Kashi", "Top 50 meters by number of complaints", "meters with most complaints", "repeat complaint meters top 50", "which meters had the most complaints in a month"]
+    note: "Same window scoping as the SAT-status tiles: areas with a ticket closed in the window (default last 30 days). A month / date range named = that closed_date window -- answerable, never refuse it; total_complaints itself is the meter's all-time count."
+    sql: |
+      WITH areas AS (
+        SELECT DISTINCT COALESCE(LOWER(discom), '') AS discom, COALESCE(LOWER(zone), '') AS zone,
+               COALESCE(LOWER(circle), '') AS circle, COALESCE(LOWER(division), '') AS division,
+               COALESCE(LOWER(sub_division), '') AS sub_division
+        FROM public.gold_om_closed_tickets_day_agg
+        WHERE closed_date BETWEEN CURRENT_DATE - 31 AND CURRENT_DATE - 1 AND LOWER(project) = 'kashi')
+      SELECT c.meter_serial_number, UPPER(c.project) AS project, c.zone, c.category, c.total_complaints,
+             c.open_complaints, c.closed_complaints, c.sat_status, c.sat_number
+      FROM public.gold_om_meter_complaints_agg c
+      JOIN areas a ON a.discom = COALESCE(LOWER(c.discom), '') AND a.zone = COALESCE(LOWER(c.zone), '')
+                  AND a.circle = COALESCE(LOWER(c.circle), '') AND a.division = COALESCE(LOWER(c.division), '')
+                  AND a.sub_division = COALESCE(LOWER(c.sub_division), '')
+      WHERE LOWER(c.project) = 'kashi'
+      ORDER BY c.total_complaints DESC
+      LIMIT 50
+
+  - q: ["Never / non-comm status", "non comm tickets summary", "never comm and not in communication tickets", "how many non-comm tickets are unassigned or escalated"]
+    note: "Always complaint_type IN ('NEVER COMM', 'METER NOT IN COMMUNICATION') -- the table holds every open ticket. The card's ten figures; a filter (project / zone / category / status / remark) goes in the WHERE."
+    sql: |
+      SELECT SUM(ticket_count) AS total_tickets,
+             SUM(ticket_count) FILTER (WHERE complaint_type = 'NEVER COMM') AS never_comm,
+             SUM(ticket_count) FILTER (WHERE complaint_type = 'METER NOT IN COMMUNICATION') AS not_in_communication,
+             SUM(ticket_count) - SUM(repeat_ticket_count) AS distinct_meters,
+             SUM(repeat_ticket_count) AS repeat_tickets,
+             SUM(ticket_count) FILTER (WHERE complaint_status <> 'UNASSIGNED') AS assigned,
+             SUM(ticket_count) FILTER (WHERE complaint_status = 'UNASSIGNED') AS unassigned,
+             SUM(ticket_count) FILTER (WHERE is_escalated) AS escalated_to_discom,
+             SUM(ticket_count) FILTER (WHERE is_sm_replaced) AS meter_replaced_sm_to_sm,
+             SUM(ticket_count) FILTER (WHERE sat_status = 'SAT PENDING') AS sat_pending
+      FROM public.gold_om_open_ticket_detail_snapshot
+      WHERE complaint_type IN ('NEVER COMM', 'METER NOT IN COMMUNICATION')
+
+  - q: ["Never comm tickets status wise", "never comm tickets technician remark wise", "never comm tickets by status"]
+    note: "One non-comm type named = that type only (complaint_type = 'NEVER COMM'); 'non-comm' = both. Swap complaint_status for remark_bucket (technician remark) or age_key."
+    sql: |
+      SELECT CASE WHEN GROUPING(complaint_status) = 1 THEN 'Total' ELSE complaint_status END AS status,
+             SUM(ticket_count) AS tickets
+      FROM public.gold_om_open_ticket_detail_snapshot
+      WHERE complaint_type = 'NEVER COMM'
+      GROUP BY ROLLUP (complaint_status)
+      ORDER BY GROUPING(complaint_status) DESC, tickets DESC
+
+  - q: ["O&M tickets escalated to discom", "escalated to discom summary", "discom approved rejected pending escalations", "average days discom takes to attend escalations"]
+    note: "Tickets = SUM(ticket_count), never escalation_count. Average days = SUM(attend_days_sum) / SUM(attended_count)."
+    sql: |
+      SELECT SUM(ticket_count) AS escalated_tickets,
+             SUM(ticket_count) FILTER (WHERE age_key IN ('age_31_60', 'age_60_plus')) AS older_than_30_days,
+             SUM(ticket_count) FILTER (WHERE complaint_type IN ('NEVER COMM', 'METER NOT IN COMMUNICATION')) AS non_comm_tickets,
+             SUM(ticket_count) FILTER (WHERE escalation_status = 'PENDING') AS discom_pending,
+             SUM(ticket_count) FILTER (WHERE escalation_status = 'APPROVED') AS discom_approved,
+             SUM(ticket_count) FILTER (WHERE escalation_status = 'REJECTED') AS discom_rejected,
+             ROUND(SUM(attend_days_sum)::numeric / NULLIF(SUM(attended_count), 0), 2) AS discom_avg_days_to_attend
+      FROM public.gold_om_discom_escalation_snapshot
+
+  - q: ["Pending discom escalations zone wise in Agra", "escalations to discom project wise", "escalated tickets circle wise"]
+    note: "Per place with a Total row; a status asked (pending) = escalation_status = 'PENDING' in the WHERE instead of the three columns."
+    sql: |
+      SELECT CASE WHEN GROUPING(zone) = 1 THEN 'Total' ELSE UPPER(zone) END AS zone,
+             SUM(ticket_count) AS escalated_tickets,
+             COALESCE(SUM(ticket_count) FILTER (WHERE escalation_status = 'PENDING'), 0) AS discom_pending,
+             COALESCE(SUM(ticket_count) FILTER (WHERE escalation_status = 'APPROVED'), 0) AS discom_approved,
+             COALESCE(SUM(ticket_count) FILTER (WHERE escalation_status = 'REJECTED'), 0) AS discom_rejected
+      FROM public.gold_om_discom_escalation_snapshot
+      WHERE LOWER(project) = 'agra'
+      GROUP BY ROLLUP (zone)
+      ORDER BY GROUPING(zone) DESC, escalated_tickets DESC
+
+  - q: ["HHU reading trend month wise in 2026", "HHU uploads month wise in a year", "HHU upload success rate month by month"]
+    note: "Total row first, then one row per month (weekly / daily: swap the bucket). No period = the card's last 12 months ending yesterday; say so."
+    sql: |
+      SELECT CASE WHEN GROUPING(date_trunc('month', period_start)) = 1 THEN 'Total'
+                  ELSE to_char(date_trunc('month', period_start), 'Mon YYYY') END AS month,
+             SUM(ticket_count) AS tickets_with_hhu_upload,
+             SUM(ticket_count) FILTER (WHERE hhu_status = 'OK') AS upload_ok,
+             SUM(ticket_count) FILTER (WHERE hhu_status = 'FAILED') AS upload_failed,
+             SUM(ticket_count) FILTER (WHERE hhu_status = 'OTHER') AS upload_other,
+             ROUND(SUM(ticket_count) FILTER (WHERE hhu_status = 'OK') * 100.0 / NULLIF(SUM(ticket_count), 0), 2) AS success_rate_pct,
+             SUM(upload_count) AS upload_attempts
+      FROM public.gold_om_hhu_reading_day_agg
+      WHERE period_start BETWEEN DATE '2026-01-01' AND CURRENT_DATE - 1
+      GROUP BY ROLLUP (date_trunc('month', period_start))
+      ORDER BY GROUPING(date_trunc('month', period_start)) DESC, date_trunc('month', period_start)
+
   - q: ["Invoice vs revenue released", "receivables summary delay analysis", "how much is overdue", "overdue amount lumpsum and cable", "invoice amount net vs realised"]
     note: "Dashboard card per stream: Realised + Within Timeline (unpaid, not yet due) + Overdue = Invoice Amount (Net); Overdue = invoiced - realised - within_timeline. Latest row per project, summed. A negative overdue = the operator's figures do not add up -- say so."
     sql: |
@@ -761,16 +913,17 @@ examples:
           GROUP BY ROLLUP(category)
           ORDER BY GROUPING(category) DESC, category
 
-  - q: ["O&M productivity per team","O&M productivity per team by project", "complaint productivity project wise", "tickets per technician per day by project"]
-    note: "Team measure: pooled closed tickets / pooled technician-days per project plus Total -- not per technician. No period given = last 30 days ending yesterday; say so."
+  - q: ["O&M productivity per team","O&M productivity per team by project", "complaint productivity project wise", "tickets per technician per day by project", "O&M tickets closed per technician per day in a project"]
+    note: "Team measure on the category = 'ALL' rows: closed tickets / distinct (technician, day) pairs per project plus Total -- not per technician, never SUM(technician_day_count). No period given = last 30 days ending yesterday; say so."
     sql: |
       SELECT CASE WHEN GROUPING(project) = 1 THEN 'Total' ELSE UPPER(project) END AS project,
-             ROUND(SUM(complaint_count)::numeric / NULLIF(SUM(technician_day_count), 0), 2) AS productivity_per_tech_day,
+             ROUND(SUM(complaint_count)::numeric / NULLIF(COUNT(DISTINCT (technician_name, period_start)), 0), 2) AS productivity_per_tech_day,
              SUM(complaint_count) AS closed_tickets,
              COUNT(DISTINCT technician_name) AS active_technicians,
-             SUM(technician_day_count) AS technician_days
+             COUNT(DISTINCT (technician_name, period_start)) AS technician_days,
+             COUNT(DISTINCT period_start) AS active_days
       FROM public.gold_om_technician_productivity_day_agg
-      WHERE category <> 'ALL' AND period_start BETWEEN CURRENT_DATE - 31 AND CURRENT_DATE - 1
+      WHERE category = 'ALL' AND period_start BETWEEN CURRENT_DATE - 31 AND CURRENT_DATE - 1
       GROUP BY ROLLUP(project)
       ORDER BY GROUPING(project) DESC, productivity_per_tech_day DESC
 
