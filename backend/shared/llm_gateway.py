@@ -247,12 +247,21 @@ def _park(model: str, seconds: float, reason: str, st: _ModelState | None = None
     log.info("LLM %s parked for %.0f min: %s", model, seconds / 60, reason[:120])
 
 
+def _key(provider: str, model: str) -> str:
+    """Rate-limit state is per provider AND model: the same model id served by two providers
+    ('openai/gpt-oss-20b' on Groq and NVIDIA) has two separate quotas -- one shared state let a
+    Groq daily-quota park bench the NVIDIA copy too."""
+    return f"{provider}:{model}"
+
+
 def _state(model: str) -> _ModelState:
+    """`model` is the _key(provider, model) string."""
     with _STATE_LOCK:
         st = _STATE.get(model)
         if st is None:
             st = _STATE[model] = _ModelState()
-            parked = _PARKED.get(model)
+            # A rest saved before state was keyed per provider is filed under the bare model id.
+            parked = _PARKED.get(model) or _PARKED.get(model.split(":", 1)[-1])
             if parked and parked.get("until", 0) > time.time():
                 st.cooldown_until = time.monotonic() + (parked["until"] - time.time())
         return st
@@ -298,7 +307,7 @@ def model_status() -> list[dict]:
     now = time.monotonic()
     out = []
     for provider, model in dict.fromkeys(config.LLM_MODELS_TRIAGE + config.LLM_MODELS_SQL + config.LLM_MODELS_ANSWER + config.LLM_MODELS_EXPLAIN):
-        st = _state(model)
+        st = _state(_key(provider, model))
         out.append({
             "provider": provider, "model": model, "enabled": _provider_enabled(provider),
             "tokens_per_minute": st.limit_tokens if provider == "groq" else None,
@@ -386,7 +395,7 @@ def _send(provider: str, model: str, payload: dict, timeout: float) -> tuple[dic
                          headers={"Authorization": f"Bearer {key}", "Content-Type": "application/json"},
                          json=payload, timeout=timeout)
     if provider == "groq":
-        _update_from_headers(model, resp.headers)
+        _update_from_headers(_key(provider, model), resp.headers)
     return resp.status_code, resp
 
 
@@ -419,7 +428,7 @@ def _record(task: str, provider: str, model: str, status: str, ms: float, *, pro
     if prompt_tokens or completion_tokens:
         rec["cost_usd"] = estimate_cost(provider, model, prompt_tokens or 0, completion_tokens or 0)
     if status.startswith("ok"):
-        st = _state(model)
+        st = _state(_key(provider, model))
         st.consecutive_429 = st.consecutive_timeouts = 0
     if prompt_tokens or completion_tokens:
         # Replace the limiter's estimate with what the provider actually counted.
@@ -441,7 +450,7 @@ def _try_model(task: str, provider: str, model: str, system: str, prompt: str, m
         status, resp = _send(provider, model, payload, timeout)
     except (requests.exceptions.Timeout, requests.exceptions.ConnectionError) as exc:
         ms = (time.perf_counter() - t0) * 1000
-        _timed_out(model, st)
+        _timed_out(_key(provider, model), st)
         _record(task, provider, model, "timeout", ms, error=str(exc))
         raise _Skip("timeout")
     ms = (time.perf_counter() - t0) * 1000
@@ -478,6 +487,7 @@ def _fail_status(task, provider, model, st, status, resp, ms, system, prompt, ma
     """Record a non-200 reply, cool the model down when it should rest, raise _Skip
     (or return a recovered LLMResult for Groq's json_validate_failed)."""
     text = resp.text[:600]
+    key = _key(provider, model)
     if status == 429:
         full = resp.text or ""
         # Groq sends Retry-After; Gemini puts "retryDelay": "17s" in the body.
@@ -497,9 +507,9 @@ def _fail_status(task, provider, model, st, status, resp, ms, system, prompt, ma
         daily = "per day" in full.lower() or "perday" in full.lower()
         _record(task, provider, model, "rate_limited", ms, error=text)
         if daily:
-            _park(model, max(retry_after, config.LLM_MAX_DAILY_LIMIT_COOLDOWN), "daily quota spent", st)
+            _park(key, max(retry_after, config.LLM_MAX_DAILY_LIMIT_COOLDOWN), "daily quota spent", st)
         elif st.consecutive_429 >= _REPEATED_429:
-            _park(model, max(retry_after, _REPEATED_429_PARK), f"{st.consecutive_429} rate limits in a row", st)
+            _park(key, max(retry_after, _REPEATED_429_PARK), f"{st.consecutive_429} rate limits in a row", st)
         else:
             st.cooldown_until = time.monotonic() + min(retry_after, config.LLM_MAX_RATE_LIMIT_COOLDOWN)
         raise _Skip("rate limited")
@@ -532,14 +542,14 @@ def _fail_status(task, provider, model, st, status, resp, ms, system, prompt, ma
     if status in (404, 410):
         # Model retired / unknown to the provider ("reached its end of life"): it will not come
         # back within minutes -- measured 51 wasted attempts in one hour before this.
-        _park(model, config.LLM_MAX_DAILY_LIMIT_COOLDOWN, f"HTTP {status}: model gone / not found", st)
+        _park(key, config.LLM_MAX_DAILY_LIMIT_COOLDOWN, f"HTTP {status}: model gone / not found", st)
     raise _Skip(f"HTTP {status}")
 
 
 def _admit(provider: str, model: str, system: str, prompt: str, max_tokens: int) -> tuple[_ModelState, float, int]:
     """Can this model take the request now? Returns (state, timeout, max_tokens) or raises _Skip."""
     now = time.monotonic()
-    st = _state(model)
+    st = _state(_key(provider, model))
     left = remaining_seconds()
     if left is not None and left < _MIN_CALL_SECONDS:
         raise _Skip("question time budget spent")
@@ -605,6 +615,27 @@ def _admit(provider: str, model: str, system: str, prompt: str, max_tokens: int)
     return st, timeout, max_tokens
 
 
+def _wait_for_model(task: str, order: list[tuple[str, str]]) -> bool:
+    """Every model was skipped. When the soonest cooling model frees up within
+    LLM_BUSY_WAIT_SECONDS (and the question's deadline allows it), sleep until then
+    and return True so the caller tries the list once more -- instead of telling the
+    user "all models busy" while a model is seconds away (measured: the one working
+    model was cooling 6-46s after a timeout, every other one parked for hours)."""
+    if config.LLM_BUSY_WAIT_SECONDS <= 0:
+        return False
+    now = time.monotonic()
+    waits = [_state(_key(p, m)).cooldown_until - now for p, m in order if _provider_enabled(p)]
+    wait = min((w for w in waits if w > 0), default=None)
+    if wait is None or wait > config.LLM_BUSY_WAIT_SECONDS:
+        return False
+    left = remaining_seconds()
+    if left is not None and left - wait < _MIN_CALL_SECONDS + 2:
+        return False
+    log.info("LLM %s: every model cooling -- waiting %.1fs for the first to free up", task, wait)
+    time.sleep(wait + 0.2)
+    return True
+
+
 def chat_json(task: str, prompt: str, *, system: str, models: list[tuple[str, str]] | None = None,
               max_tokens: int = 800, temperature: float | None = None, effort: str = "low") -> LLMResult | None:
     """Ask the first model that can take this request now; on any failure move
@@ -616,17 +647,20 @@ def chat_json(task: str, prompt: str, *, system: str, models: list[tuple[str, st
                        "triage": config.LLM_MODELS_TRIAGE, "explain": config.LLM_MODELS_EXPLAIN,
                        }.get(task, config.LLM_MODELS_ANSWER)
     skipped: list[str] = []
-    for provider, model in order:
-        if not _provider_enabled(provider):
-            continue
-        try:
-            return _try_model(task, provider, model, system, prompt, max_tokens, temp, effort, top_p, top_k)
-        except _Skip as why:
-            skipped.append(f"{model}: {why}")
-            continue
-        except Exception as exc:  # never let one model's bug kill the question
-            log.warning("LLM %s on %s failed unexpectedly: %s", task, model, exc, exc_info=True)
-            skipped.append(f"{model}: {exc}")
+    for round_ in range(2):
+        for provider, model in order:
+            if not _provider_enabled(provider):
+                continue
+            try:
+                return _try_model(task, provider, model, system, prompt, max_tokens, temp, effort, top_p, top_k)
+            except _Skip as why:
+                skipped.append(f"{model}: {why}")
+                continue
+            except Exception as exc:  # never let one model's bug kill the question
+                log.warning("LLM %s on %s failed unexpectedly: %s", task, model, exc, exc_info=True)
+                skipped.append(f"{model}: {exc}")
+        if round_ or limit_hit() or not _wait_for_model(task, order):
+            break
     log.warning("LLM %s: no model could answer -- %s", task, "; ".join(skipped))
     return None
 
@@ -701,7 +735,7 @@ def _try_model_stream(task, provider, model, system, prompt, max_tokens, tempera
         with requests.post(url, headers={"Authorization": f"Bearer {key}", "Content-Type": "application/json"},
                            json=payload, timeout=timeout, stream=True) as resp:
             if provider == "groq":
-                _update_from_headers(model, resp.headers)
+                _update_from_headers(_key(provider, model), resp.headers)
             if resp.status_code != 200:
                 ms = (time.perf_counter() - t0) * 1000
                 return _fail_status(task, provider, model, st, resp.status_code, resp, ms, system, prompt, max_tokens)
@@ -725,7 +759,7 @@ def _try_model_stream(task, provider, model, system, prompt, max_tokens, tempera
                         sent_any = sent_any or stream.pos != before
     except (requests.exceptions.Timeout, requests.exceptions.ConnectionError) as exc:
         ms = (time.perf_counter() - t0) * 1000
-        _timed_out(model, st)
+        _timed_out(_key(provider, model), st)
         _record(task, provider, model, "timeout", ms, error=str(exc))
         if sent_any:
             raise _StreamBroken("timeout after text was sent")
@@ -756,18 +790,21 @@ def chat_json_stream(task: str, prompt: str, *, system: str, on_text, models: li
     temp = temp if temperature is None else temperature
     order = models or config.LLM_MODELS_ANSWER
     skipped: list[str] = []
-    for provider, model in order:
-        if not _provider_enabled(provider):
-            continue
-        try:
-            return _try_model_stream(task, provider, model, system, prompt, max_tokens, temp, effort, on_text, top_p, top_k)
-        except _Skip as why:
-            skipped.append(f"{model}: {why}")
-        except _StreamBroken as why:
-            log.warning("LLM %s stream on %s broke: %s", task, model, why)
-            return None
-        except Exception as exc:
-            log.warning("LLM %s stream on %s failed unexpectedly: %s", task, model, exc, exc_info=True)
-            skipped.append(f"{model}: {exc}")
+    for round_ in range(2):
+        for provider, model in order:
+            if not _provider_enabled(provider):
+                continue
+            try:
+                return _try_model_stream(task, provider, model, system, prompt, max_tokens, temp, effort, on_text, top_p, top_k)
+            except _Skip as why:
+                skipped.append(f"{model}: {why}")
+            except _StreamBroken as why:
+                log.warning("LLM %s stream on %s broke: %s", task, model, why)
+                return None
+            except Exception as exc:
+                log.warning("LLM %s stream on %s failed unexpectedly: %s", task, model, exc, exc_info=True)
+                skipped.append(f"{model}: {exc}")
+        if round_ or limit_hit() or not _wait_for_model(task, order):
+            break
     log.warning("LLM %s: no model could stream -- %s", task, "; ".join(skipped))
     return None

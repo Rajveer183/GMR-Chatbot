@@ -1020,6 +1020,66 @@ def _short_weeks(df: pd.DataFrame | None) -> tuple[str | None, dict[str, int]]:
     return None, {}
 
 
+_DATE_COLS = {"period_start", "mi_date"}
+
+
+def _date_window(plan: dict, df: pd.DataFrame | None) -> str:
+    """The date range the SQL really covered -- its period_start bounds evaluated by Postgres -- plus the
+    row grain. The answer only sees the first rows of RESULT: live, 23 Oct, 'meters installed in last 3
+    months' returned 92 day rows newest-first, and the answer called the window '22 Aug to 22 Oct'
+    (it was 22 Jul .. 22 Oct) and a day 'the peak month'."""
+    sql = plan.get("sql") or ""
+    if plan.get("data_engine") != "postgres" or not sql:
+        return ""
+    try:
+        import sqlglot
+        from sqlglot import exp
+
+        root = sqlglot.parse_one(sql, read="postgres")
+        lows, highs = [], []
+        for node in root.find_all(exp.Between, exp.GTE, exp.GT, exp.LTE, exp.LT, exp.EQ):
+            col = node.this
+            if not isinstance(col, exp.Column) or col.name.lower() not in _DATE_COLS:
+                continue
+            if isinstance(node, exp.Between):
+                lo, hi = node.args.get("low"), node.args.get("high")
+            elif isinstance(node, exp.EQ):
+                lo = hi = node.expression
+            else:
+                lo, hi = (node.expression, None) if isinstance(node, (exp.GTE, exp.GT)) else (None, node.expression)
+            for bound, bucket, shift in ((lo, lows, " + 1" if isinstance(node, exp.GT) else ""),
+                                         (hi, highs, " - 1" if isinstance(node, exp.LT) else "")):
+                if bound is not None and not bound.find(exp.Column, exp.Select):
+                    bucket.append(f"CAST({bound.sql(dialect='postgres')} AS date){shift}")
+        if not lows and not highs and any(t.name.lower().endswith(("_day_agg", "_month_agg"))
+                                          for t in root.find_all(exp.Table)):
+            # No date asked = all time here, while the dashboard card defaults to the last 30 days.
+            return ("DATE WINDOW (checked by code): no date filter -- the figure is ALL TIME to date. Say 'so far' / "
+                    "'all time' in the answer; the dashboard card shows the last 30 days by default, so the user "
+                    "may see a smaller number there.")
+        if not lows or not highs:
+            return ""
+        hi = f"GREATEST({', '.join(highs)})"
+        if any(t.name.lower().endswith("_month_agg") for t in root.find_all(exp.Table)):
+            hi = f"(DATE_TRUNC('month', {hi}) + INTERVAL '1 month - 1 day')::date"  # a month row covers its month
+        row = executor._run_postgres(f"SELECT LEAST({', '.join(lows)}) AS lo, {hi} AS hi").iloc[0]
+        window = f"{pd.Timestamp(row['lo']):%d %b %Y} .. {pd.Timestamp(row['hi']):%d %b %Y}"
+    except Exception:  # a hint only -- never fail the answer over it
+        log.debug("date window: could not evaluate", exc_info=True)
+        return ""
+    grain = ""
+    if isinstance(df, pd.DataFrame) and len(df) >= 2:
+        for c in df.columns:
+            vals = pd.to_datetime(df[c].astype(str).str[:10], format="%Y-%m-%d", errors="coerce").dropna()
+            if len(vals) >= 2:
+                grain = (" Rows are per MONTH." if (vals.dt.day == 1).all() else
+                         " Rows are per WEEK (month-anchored)." if vals.dt.day.isin([1, 8, 15, 22, 29]).all() else
+                         " Rows are per DAY -- call a row a day, never a month, whatever the column is named.")
+                break
+    return (f"DATE WINDOW (evaluated by code from the SQL): {window}.{grain} State exactly this period; RESULT "
+            "may show only the first rows, so never infer the start or end date from the rows you see.")
+
+
 def _result_facts(df: pd.DataFrame | None, max_cols: int = 4) -> str:
     """Highest / lowest item per numeric column, Total row excluded -- so 'which is lagging'
     never depends on the model reading the middle of a table (or mistaking Total for a row).
@@ -1160,6 +1220,9 @@ def _write_answer(state: dict, triage: dict, plan: dict, result: dict, extras: l
     periods = _partial_periods(result.get("result"))[2]
     if periods:
         parts.append(periods)
+    window = _date_window(plan, result.get("result"))
+    if window:
+        parts.append(window)
     short = _short_weeks(result.get("result"))[1]
     if short:
         parts.append("SHORT WEEKS (checked by code): " + ", ".join(f"{k} has only {v} day(s)" for k, v in short.items())
@@ -1552,6 +1615,17 @@ def fix_question(state: dict, triage: dict, prior_turns: list[dict] | None) -> b
         # 'consumer stock ageing type wise' was resolved without 'consumer' (every type shown).
         triage["question"] = re.sub(r"[\s?]*$", "", triage["question"]) + " (consumer meters only)?"
         changed = True
+    if triage["kind"] == "data":
+        # 'make wise installation in Kashi last month' was resolved as 'Show the meter installations in
+        # Kashi for September 2026' (26 Oct) -- the breakdown the user asked for was dropped, one total came back.
+        asked = query_encoder.encode(state["question"]).get("breakdown_by") or []
+        kept = set(query_encoder.encode(triage["question"]).get("breakdown_by") or [])
+        lost = [lvl for lvl in asked if lvl not in kept]
+        if lost:
+            names = ", ".join("OEM" if lvl == "oem" else lvl.replace("_", " ") for lvl in lost)
+            triage["question"] = re.sub(r"[\s?.]*$", "", triage["question"]) + f", broken down {names} wise?"
+            _step(state, "breakdown", time.perf_counter(), restored=lost)
+            changed = True
     m = _PROJECT_LEVEL_WISE_RE.search(triage["question"])
     if triage["kind"] == "data" and m:
         # 'in agra zone wise' = the Agra PROJECT broken down by zone; Agra is also a zone name, and

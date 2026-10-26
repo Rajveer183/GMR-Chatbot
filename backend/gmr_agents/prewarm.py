@@ -11,6 +11,15 @@ It runs one question at a time with a pause (PREWARM_PAUSE) so real users keep
 most of NVIDIA's free-tier request rate. Bank chains (multi-turn) run in order
 in their own session, so their follow-ups are cached with the right context.
 Warm-up sessions go to a separate store, not the user's chat list.
+
+Free-tier budget. One warmed answer costs 3-5 LLM calls, and warming the whole
+bank (~470 questions) after every YAML edit used ~2,000 calls a run -- every
+Groq / Gemini daily quota, leaving real users "all AI models are busy"
+(measured 23 Oct: 971 of 1,093 questions that day were warm-ups). So: the bank
+is warmed only with PREWARM_BANK=1, a run answers at most PREWARM_MAX_QUESTIONS,
+a new version must stay unchanged PREWARM_SETTLE_SECONDS (a burst of edits warms
+once), and a run stops at the first "AI busy" answer -- it resumes on the next
+check, skipping what is already cached.
 """
 
 from __future__ import annotations
@@ -31,7 +40,7 @@ from gmr_agents import answer_cache
 log = logging.getLogger(__name__)
 
 _STORE_PATH = os.path.join(config.OUTPUT_DIR, "prewarm_sessions.json")
-_STATE = {"warmed_version": None, "running": False, "last": {}}
+_STATE = {"warmed_version": None, "running": False, "last": {}, "seen_version": None, "seen_at": 0.0}
 
 
 def _bank_groups() -> list[list[str]]:
@@ -87,37 +96,58 @@ def _top_history(n: int) -> list[str]:
     return [first[k] for k, _ in counts.most_common(n)]
 
 
+def _busy(resp: dict) -> bool:
+    return "AI busy" in str(resp.get("source") or (resp.get("debug") or {}).get("source") or "") or \
+        "busy right now" in str(resp.get("summary") or "")
+
+
 def warm(answer_fn) -> dict:
-    """Answer every warm-up question once (skipping ones already cached for
-    this version). answer_fn(question, session_id, store=...) -> response."""
+    """Answer the warm-up questions once (skipping ones already cached for this
+    version). answer_fn(question, session_id, store=...) -> response. Returns the
+    run's stats; stats["complete"] is False when it stopped because the models were
+    busy, so the caller warms the same version again on its next check."""
     if _STATE["running"]:
         return _STATE["last"]
     _STATE["running"] = True
     t0 = time.perf_counter()
-    stats = {"asked": 0, "already_cached": 0, "failed": 0}
+    stats = {"asked": 0, "already_cached": 0, "failed": 0, "complete": True}
     try:
         if os.path.exists(_STORE_PATH):
             os.remove(_STORE_PATH)  # warm-up conversations are throwaway
         store = SessionStore(_STORE_PATH)
-        groups = _bank_groups()
+        groups = _bank_groups() if config.PREWARM_BANK else []
         bank = {q.lower() for g in groups for q in g}
-        groups += [[q] for q in _top_history(config.PREWARM_TOP_N) if q.lower() not in bank]
+        # Most-asked first: they are what users actually repeat.
+        groups = [[q] for q in _top_history(config.PREWARM_TOP_N) if q.lower() not in bank] + groups
+        stop = None
         for group in groups:
+            if stop:
+                break
             session_id = None
             for q in group:
                 if session_id is None and answer_cache.get(q, None) is not None:
                     stats["already_cached"] += 1
                     if len(group) == 1:
                         continue
+                if config.PREWARM_MAX_QUESTIONS and stats["asked"] >= config.PREWARM_MAX_QUESTIONS:
+                    stop = f"run cap of {config.PREWARM_MAX_QUESTIONS} questions reached"
+                    break
                 try:
                     resp = answer_fn(q, session_id, store=store)
                     session_id = resp.get("session_id")
                     stats["asked"] += 0 if (resp.get("debug") or {}).get("cached") else 1
                     stats["failed"] += bool(resp.get("refused"))
+                    if _busy(resp):
+                        stop = "AI models busy -- leaving the free-tier quota to users"
+                        break
                 except Exception:
                     stats["failed"] += 1
                     log.warning("prewarm: %r failed", q, exc_info=True)
                 time.sleep(config.PREWARM_PAUSE)
+        if stop:
+            # Busy: resume later. The cap is this version's whole allowance: done.
+            stats["complete"] = not stop.startswith("AI models busy")
+            log.info("prewarm: stopped early -- %s", stop)
     finally:
         _STATE["running"] = False
     stats["seconds"] = round(time.perf_counter() - t0)
@@ -127,11 +157,18 @@ def warm(answer_fn) -> dict:
 
 
 def due() -> str | None:
-    """The cache version to warm for, when it differs from the last warmed one."""
+    """The cache version to warm for, when it differs from the last warmed one and
+    has stayed unchanged PREWARM_SETTLE_SECONDS (editing the YAML several times in a
+    row warms once, for the final version)."""
     version = answer_cache.current_version()
-    if version and version != _STATE["warmed_version"] and not _STATE["running"]:
-        return version
-    return None
+    if not version or version == _STATE["warmed_version"] or _STATE["running"]:
+        return None
+    now = time.monotonic()
+    if version != _STATE["seen_version"]:
+        _STATE.update(seen_version=version, seen_at=now)
+    if now - _STATE["seen_at"] < config.PREWARM_SETTLE_SECONDS:
+        return None
+    return version
 
 
 def mark_warmed(version: str) -> None:

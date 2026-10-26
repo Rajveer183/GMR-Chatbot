@@ -216,15 +216,17 @@ gold_tables:
     sources:
       - gmr_wfm_silver.unified_installations via the MI-only `installations` view (NO replacements)
     grain: >-
-      one row per date x project x geography x technician_name x category x meter_type, plus rows with
-      category='ALL' (no category split); rows need mi_date, a serial and a technician_name
+      three roll-up levels per date x project x geography x technician_name: category x meter_type rows,
+      per-category roll-ups (meter_type = 'ALL', since gmr-etl cb13e5d, 11 Oct 2026) and category = 'ALL' rows
+      (meter_type NULL). Each level is complete on its own -- adding two levels double counts. Rows need mi_date,
+      a serial and a technician_name
     used_by:
       - 2
       - 3
     columns:
       technician_name: trimmed Silver technician_name -- the unit productivity is measured on
-      category: 'from new_meter_type: 3PLTCTSM->DT, HTCTPTSM->FEEDER, else CONSUMER; ''ALL'' = rollup rows'
-      meter_type: extended meter-type map (1PH/3PH/LTCT/HTCT-Consumer_meter)
+      category: 'from new_meter_type: 3PLTCTSM->DT, HTCTPTSM->FEEDER, else CONSUMER; ''ALL'' = all-category rollup rows'
+      meter_type: 'extended meter-type map (1PH/3PH/LTCT/HTCT-Consumer_meter); ''ALL'' = that category''s rollup row; NULL on category ''ALL'' rows'
       installation_count: count(*) of installations
       technician_day_count: '1 on every day row (month table: number of day rows)'
       active_days: '1 on every day row (month table: number of day rows)'
@@ -763,7 +765,16 @@ kpis:
       - >-
           A range that starts on the 1st and ends mid-month in the SAME month (e.g. 2026-09-01 -> 2026-09-15)
           matches none of the 4 date legs and returns no rows.
-      - '''to'' is inclusive; the dashboard default range is 2024-06-01 to 2026-06-01 when no dates are sent.'
+      - '''to'' is inclusive; the API default range is 2024-06-01 to 2026-06-01 when no dates are sent.'
+      - >-
+          The dashboard UI always sends dates: by default it ends yesterday and starts 30 days back (Daily), 3 months
+          back (Weekly) or 12 months back (Monthly). For a custom range it picks duration itself: up to 45 days ->
+          daily, up to 150 days -> weekly, longer -> monthly. To reproduce "what the dashboard shows", use the same
+          window and grain.
+      - >-
+          The dashboard card's formula text ("COUNT(DISTINCT new_meter_serial_number)") and its "% of target" stat are
+          frontend placeholders. The API sums pre-aggregated row counts and has NO MI target -- never report a target
+          or achievement % for MI progress.
       - If one serial appears with two different mi_date values, or in two reports, it is counted twice.
       - Numbers change only after the ETL gold refresh, which recomputes everything.
       - >-
@@ -799,16 +810,18 @@ kpis:
         values: agra, kashi, triveni, All Project
         effect: n.project IN (...)
       - filter: category
-        values: all, consumer, feeder, dt, 1ph/3ph/ltct/htct-consumer_meter
+        values: >-
+          all, consumer, feeder, dt, 1ph/3ph/ltct/htct-consumer_meter, other-consumer_meter (the API accepts it but
+          it always returns 0 and the UI never sends it -- there is no 'Other' consumer meter type)
         effect: LOWER(progress_category) IN (...) OR LOWER(progress_meter_type) IN (...)
-      - filter: discom / zone / circle / division / sub_division
-        values: any name
+      - filter: discom / zone / circle / division / sub_division (alias subdivision)
+        values: any name, single value
         effect: LOWER(col) = LOWER(value)
       - filter: oem
         values: any
         effect: LOWER(n.oem) = LOWER(value)
       - filter: level
-        values: discom (default), zone, circle, division, sub_division, oem
+        values: discom (default), zone, circle, division, sub_division (alias subdivision), oem
         effect: Picks the comparison dimension
       - filter: row-level security
         values: automatic
@@ -898,13 +911,16 @@ kpis:
       - step: Day grain
         detail: >-
           GROUP BY date, project, geography, technician_name, category, meter_type: installation_count = count(*),
-          technician_day_count = 1; plus category='ALL' rollup rows.
+          technician_day_count = 1; plus per-category rollup rows (meter_type = 'ALL') and category = 'ALL' rows.
       - step: Month table
         detail: installation_count summed; technician_day_count = number of day rows.
       - step: Backend
         detail: >-
-          Per technician: inst = SUM(installation_count), tech_days = SUM(technician_day_count); category=all uses
-          the per-category rows (category <> 'ALL').
+          Reads ONE roll-up level per selection (gmr-backend 26a7263): category=all -> category = 'ALL' rows;
+          consumer/dt/feeder -> category = X AND meter_type = 'ALL'; a meter type -> category <> 'ALL' AND
+          meter_type <> 'ALL' AND meter_type = X. Category breakdown from the meter_type = 'ALL' rows, consumer
+          breakdown from the CONSUMER meter-type rows. Per technician: inst = SUM(installation_count), tech_days =
+          SUM(technician_day_count).
     formulas:
       - output: productivity_per_technician_per_day
         formula: ROUND(SUM(installation_count) / SUM(technician_day_count), 2)
@@ -924,12 +940,23 @@ kpis:
           Tech-days are over-counted: a technician installing two meter types (or in two sub-divisions) on one day
           counts as 2 tech-days, which lowers productivity.
       - total_active_days counts buckets, so for weekly/monthly it is weeks/months, not days.
+      - >-
+          A range that starts on the 1st and ends mid-month in the SAME month (e.g. 2026-08-01 -> 2026-08-07, or
+          1-22 Oct) returns all zeros on the dashboard (none of its date legs matches) -- a dashboard bug; the
+          chatbot gives the real figure.
+      - >-
+          Insights: Top Performer / Requires Support have no minimum-days filter, so a one-day technician often tops
+          the list; Requires Support is usually one of many technicians tied at 1.00 (ties: fewer installs, then name).
+      - >-
+          gmr-backend main (26 Sep) still sums category <> 'ALL' and doubles every figure on the current gold data;
+          the roll-up reading is on origin/vapt-rbac-remediation (26a7263) -- the dashboard is right only with it.
     sql_recipe: >-
       MI-Productivity per team (dashboard KPI 2): FROM public.gold_mi_technician_productivity_day_agg (or
       _month_agg). Productivity = ROUND(SUM(installation_count)::numeric / NULLIF(SUM(technician_day_count),0), 2).
-      For an all-categories figure the dashboard uses the per-category rows: WHERE category <> 'ALL'; for one
-      category filter category = 'CONSUMER'/'FEEDER'/'DT'. Per technician = GROUP BY technician_name. Active
-      technicians = COUNT(DISTINCT technician_name).
+      Read ONE roll-up level: all categories = WHERE category = 'ALL'; one category = category = 'CONSUMER'/'FEEDER'/
+      'DT' AND meter_type = 'ALL'; one meter type = category <> 'ALL' AND meter_type = '1PH-Consumer_meter'. NEVER
+      category <> 'ALL' alone (counts every install twice). Per technician = GROUP BY technician_name. Active
+      technicians = COUNT(DISTINCT technician_name). No dates = CURRENT_DATE - 31 .. CURRENT_DATE - 1.
     followups:
       - Which technician has the highest installation productivity?
       - Explain the Monthly Productivity trend KPI
@@ -1003,7 +1030,8 @@ kpis:
     sql_recipe: >-
       Monthly Productivity trend (dashboard KPI 3): FROM public.gold_mi_productivity_trend_month_agg. For the
       program-wide monthly series use WHERE project = 'ALL' AND filter_level = 'all' AND aggregate_level = 'all' AND
-      category = 'ALL' (a real project: project = 'kashi' etc.; one category: category = 'CONSUMER'). Per month:
+      category = 'ALL' (a real project: project = 'kashi' etc.; one category: category = 'CONSUMER' AND meter_type =
+      'ALL'; one meter type: category <> 'ALL' AND meter_type = '1PH-Consumer_meter'). Per month:
       SUM(total_installations), ROUND(SUM(total_installations)::numeric / NULLIF(SUM(technician_day_count),0), 2) AS
       productivity, SUM(active_technicians), SUM(active_days), GROUP BY month_start. For a zone/circle/division
       scope use filter_level + filter_label; for a per-zone comparison use aggregate_level = 'zone' and GROUP BY

@@ -149,7 +149,8 @@ class GatewayTests(unittest.TestCase):
     def tearDown(self):
         llm_gateway.append_jsonl = self._append
         llm_gateway._PARKED_PATH = self._parked_path
-        llm_gateway._PARKED.pop("test-model", None)
+        for key in ("test-model", "gemini:test-model", "nvidia:test-model"):
+            llm_gateway._PARKED.pop(key, None)
 
     def _fail(self, resp):
         with self.assertRaises(llm_gateway._Skip):
@@ -175,7 +176,7 @@ class GatewayTests(unittest.TestCase):
         for _ in range(llm_gateway._REPEATED_429 - 1):
             self._fail(_Resp())
         self.assertGreaterEqual(self._fail(_Resp()), llm_gateway._REPEATED_429_PARK - 1)
-        self.assertIn("test-model", llm_gateway._PARKED)
+        self.assertIn("gemini:test-model", llm_gateway._PARKED)
 
     def test_daily_quota_parks_past_a_short_retry_delay(self):
         # Gemini: retryDelay "30s" on a spent daily quota -- still parked for the daily cap.
@@ -208,7 +209,7 @@ class GatewayTests(unittest.TestCase):
         self.assertEqual(rate_limiter.backoff_seconds(1, 10, 120, 1.0), 12.5)  # max jitter
 
     def test_cooling_model_is_skipped_before_limiter(self):
-        st = llm_gateway._state("cooling-model")
+        st = llm_gateway._state(llm_gateway._key("gemini", "cooling-model"))
         st.cooldown_until = time.monotonic() + 30
         with self.assertRaises(llm_gateway._Skip):
             llm_gateway._admit("gemini", "cooling-model", "", "hi", 10)

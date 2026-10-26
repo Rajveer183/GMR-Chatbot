@@ -168,6 +168,10 @@ def question_items() -> list[tuple[str, list[str]]]:
     import yaml
 
     seen: dict[str, dict] = {}
+    # Reviewed wrong answers (schema/data/rejected_answers.yaml): never offered as a past answer again.
+    rejected_path = os.path.join(os.path.dirname(business_rules.PATH), "rejected_answers.yaml")
+    rejected = {str(r.get("trace_id")) for r in (business_rules._load(rejected_path).get("rejected") or [])
+                if isinstance(r, dict) and r.get("trace_id")} if os.path.exists(rejected_path) else set()
     path = os.path.join(config.LOG_DIR, "questions.jsonl")
     try:
         with open(path, encoding="utf-8") as fh:
@@ -181,6 +185,8 @@ def question_items() -> list[tuple[str, list[str]]]:
             continue
         q = str(r.get("question") or "").strip()
         if not q or r.get("refused") or r.get("error") or not r.get("sql") or not r.get("rows"):
+            continue
+        if str(r.get("trace_id")) in rejected:
             continue
         seen[re.sub(r"\s+", " ", q.lower())] = {"question": q, "resolved": r.get("resolved_question") or "",
                                                 "sql": r["sql"], "extra": r.get("extra_sql") or []}
@@ -294,7 +300,10 @@ def schema_hints(question: str, tables: list[str] | None = None) -> str:
         lines.append(f"- {table}.{column}{(' -> ' + _whole_values(values[8:], 192)) if values else ''}")
     values = value_hints(question, config.VALUE_HINTS)
     if values:
-        lines.append("stored values matching the question: " + " || ".join(values))
+        # Reference spellings only: a combination row like 'oem=HPL, progress_category=FEEDER' matched on
+        # 'oem' once turned 'oem wise meters installed' into a FEEDER-only query.
+        lines.append("stored value spellings (reference only -- filter on a value ONLY if the question names it): "
+                     + " || ".join(values))
     return "\n".join(lines)
 
 

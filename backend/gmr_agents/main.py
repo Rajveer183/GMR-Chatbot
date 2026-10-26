@@ -185,8 +185,9 @@ async def _keep_cache_warm() -> None:
             version = await asyncio.to_thread(prewarm.due)
             if version:
                 log.info("prewarm: cache version changed -- warming common questions")
-                await asyncio.to_thread(prewarm.warm, answer_question)
-                prewarm.mark_warmed(version)
+                stats = await asyncio.to_thread(prewarm.warm, answer_question)
+                if stats.get("complete", True):  # stopped on "AI busy": try this version again later
+                    prewarm.mark_warmed(version)
         except Exception:
             log.exception("prewarm cycle failed -- will retry")
         await asyncio.sleep(config.PREWARM_CHECK_SECONDS)

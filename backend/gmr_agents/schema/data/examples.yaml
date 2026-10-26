@@ -687,29 +687,41 @@ examples:
 
   - q: ["What is the MI productivity per team by project for the last 30 days?", "triveni ki productivity", "productivity project-wise"]
     suggest: "What is the MI productivity per team by project for the last 30 days?"
-    note: "No period given = last 30 complete days (CURRENT_DATE - 30 .. CURRENT_DATE - 1); say so."
+    note: "No period given = the dashboard's default window, CURRENT_DATE - 31 .. CURRENT_DATE - 1 (31 days ending yesterday); say so. category = 'ALL' is the all-category roll-up row -- never sum category <> 'ALL' (double counts)."
     sql: |
       SELECT CASE WHEN GROUPING(project) = 1 THEN 'Total' ELSE UPPER(project) END AS project,
              ROUND(SUM(installation_count)::numeric / NULLIF(SUM(technician_day_count), 0), 2) AS productivity_per_tech_day,
              COUNT(DISTINCT technician_name) AS active_technicians,
-             ROUND(SUM(technician_day_count) / 30.0, 1) AS technicians_per_day,
+             ROUND(SUM(technician_day_count) / 31.0, 1) AS technicians_per_day,
              SUM(installation_count) AS installations
       FROM public.gold_mi_technician_productivity_day_agg
-      WHERE category <> 'ALL' AND period_start BETWEEN CURRENT_DATE - 30 AND CURRENT_DATE - 1
+      WHERE category = 'ALL' AND period_start BETWEEN CURRENT_DATE - 31 AND CURRENT_DATE - 1
       GROUP BY ROLLUP (project)
       ORDER BY GROUPING(project) DESC, productivity_per_tech_day DESC
 
-  - q: ["Who is the top performer?", "best technician", "top performing technicians"]
-    note: "Ambiguous: default = MI technicians by productivity over the last 30 complete days, only technicians with >= 10 active days (one-day spikes are noise). State the assumption."
+  - q: ["Who is the top performer?", "best technician", "top performing technicians", "Who is the top performing technician in August 2026 as on the MI productivity dashboard"]
+    note: "The dashboard card's Top Performer: MI technicians by productivity over the range (no period = CURRENT_DATE - 31 .. CURRENT_DATE - 1), NO minimum-days filter, ties by installations then name -- the first row is the card's pick. Mention its active days (a one- or two-day spike often tops the list)."
     sql: |
       SELECT technician_name AS technician, UPPER(MAX(project)) AS project,
              ROUND(SUM(installation_count)::numeric / NULLIF(SUM(technician_day_count), 0), 2) AS productivity,
              SUM(installation_count) AS installations, COUNT(DISTINCT period_start) AS active_days
       FROM public.gold_mi_technician_productivity_day_agg
-      WHERE category <> 'ALL' AND period_start BETWEEN CURRENT_DATE - 30 AND CURRENT_DATE - 1
+      WHERE category = 'ALL' AND period_start BETWEEN CURRENT_DATE - 31 AND CURRENT_DATE - 1
       GROUP BY technician_name
-      HAVING COUNT(DISTINCT period_start) >= 10
-      ORDER BY productivity DESC, installations DESC
+      ORDER BY productivity DESC, installations DESC, technician_name
+      LIMIT 10
+
+  - q: ["Which technician requires support (lowest productivity) in Kashi in August 2026", "lowest performing technician", "requires support technician"]
+    note: "The dashboard card's Requires Support: lowest productivity, ties by FEWER installations then name -- the first row is the card's pick. Many technicians tie at 1.00; when all 10 rows share it, say 'at least 10 technicians tie at 1.00'."
+    sql: |
+      SELECT technician_name AS technician,
+             ROUND(SUM(installation_count)::numeric / NULLIF(SUM(technician_day_count), 0), 2) AS productivity,
+             SUM(installation_count) AS installations, COUNT(DISTINCT period_start) AS active_days
+      FROM public.gold_mi_technician_productivity_day_agg
+      WHERE category = 'ALL' AND LOWER(project) = 'kashi'
+        AND period_start BETWEEN DATE '2026-08-01' AND DATE '2026-08-31'
+      GROUP BY technician_name
+      ORDER BY productivity, installations, technician_name
       LIMIT 10
 
   - q: ["Which project installed the most meters in the last 30 days?", "project-wise installs last 30 days"]
@@ -719,7 +731,7 @@ examples:
              SUM(meter_count) AS meters_installed
       FROM public.gold_mi_installation_day_agg
       WHERE has_meter_serial AND progress_category IS NOT NULL AND NOT is_replacement
-        AND period_start BETWEEN CURRENT_DATE - 29 AND CURRENT_DATE
+        AND period_start BETWEEN CURRENT_DATE - 30 AND CURRENT_DATE - 1
       GROUP BY ROLLUP (project)
       ORDER BY GROUPING(project) DESC, meters_installed DESC
 
@@ -733,7 +745,7 @@ examples:
             WHERE has_meter_serial AND progress_category IS NOT NULL AND NOT is_replacement
               AND period_start BETWEEN CURRENT_DATE - 90 AND CURRENT_DATE - 1 GROUP BY 1) i
       LEFT JOIN (SELECT period_start, COUNT(DISTINCT technician_name) AS techs FROM public.gold_mi_technician_productivity_day_agg
-                 WHERE category <> 'ALL' AND period_start BETWEEN CURRENT_DATE - 90 AND CURRENT_DATE - 1 GROUP BY 1) t
+                 WHERE category = 'ALL' AND period_start BETWEEN CURRENT_DATE - 90 AND CURRENT_DATE - 1 GROUP BY 1) t
         ON t.period_start = i.period_start
       GROUP BY 1, 2
       ORDER BY 2
@@ -748,7 +760,7 @@ examples:
             WHERE has_meter_serial AND progress_category IS NOT NULL AND NOT is_replacement
               AND period_start BETWEEN DATE '2026-09-07' AND DATE '2026-09-29' GROUP BY 1) d
       LEFT JOIN (SELECT period_start, COUNT(DISTINCT technician_name) AS technicians FROM public.gold_mi_technician_productivity_day_agg
-                 WHERE category <> 'ALL' AND period_start BETWEEN DATE '2026-09-07' AND DATE '2026-09-29' GROUP BY 1) t
+                 WHERE category = 'ALL' AND period_start BETWEEN DATE '2026-09-07' AND DATE '2026-09-29' GROUP BY 1) t
         ON t.period_start = d.period_start
       WHERE EXTRACT(ISODOW FROM d.period_start) IN (1, 2)
       ORDER BY d.period_start
@@ -761,7 +773,7 @@ examples:
              SUM(installation_count) AS installations,
              ROUND(SUM(installation_count)::numeric / NULLIF(SUM(technician_day_count), 0), 2) AS productivity
       FROM public.gold_mi_technician_productivity_day_agg
-      WHERE category <> 'ALL' AND period_start = CURRENT_DATE - 1
+      WHERE category = 'ALL' AND period_start = CURRENT_DATE - 1
       GROUP BY ROLLUP (project)
       ORDER BY GROUPING(project) DESC, active_technicians DESC
 
@@ -773,24 +785,29 @@ examples:
              ROUND((3.0 - 2.7) * SUM(technician_day_count) / 30.0) AS extra_meters_per_day,
              ROUND((3.0 - 2.7) * SUM(technician_day_count) / 30.0 * 30) AS extra_meters_per_month
       FROM public.gold_mi_technician_productivity_day_agg
-      WHERE category <> 'ALL' AND LOWER(project) = 'triveni'
+      WHERE category = 'ALL' AND LOWER(project) = 'triveni'
         AND period_start BETWEEN CURRENT_DATE - 30 AND CURRENT_DATE - 1
 
   - q: ["Which zone or circle has the lowest productivity, and why?", "least productive zone and reason", "Which technician is responsible for Triveni's low productivity?"]
     suggest: "Which zone or circle has the lowest productivity, and why?"
-    note: "Last 30 complete days; drop units with < 2% of technician-days; low-output days = technician-days with <= 1 install. Never blame a person."
+    note: "Last 30 complete days; drop units with < 2% of technician-days; low-output days = technician-days with <= 1 install. Never blame a person. Totals come from the category = 'ALL' roll-up rows, the DT/feeder share from the per-category roll-ups (meter_type = 'ALL') -- each measure FILTERs to its own level."
     sql: |
       SELECT UPPER(zone) AS zone, UPPER(project) AS project,
-             ROUND(SUM(installation_count)::numeric / NULLIF(SUM(technician_day_count), 0), 2) AS productivity,
-             SUM(technician_day_count) AS technician_days,
-             ROUND(SUM(technician_day_count) FILTER (WHERE installation_count <= 1) * 100.0 / NULLIF(SUM(technician_day_count), 0), 1) AS pct_low_output_days,
-             ROUND(SUM(technician_day_count)::numeric / NULLIF(COUNT(DISTINCT technician_name), 0), 1) AS days_per_technician,
-             ROUND(SUM(installation_count) FILTER (WHERE category <> 'CONSUMER') * 100.0 / NULLIF(SUM(installation_count), 0), 1) AS pct_dt_feeder
+             ROUND(SUM(installation_count) FILTER (WHERE category = 'ALL')::numeric
+                   / NULLIF(SUM(technician_day_count) FILTER (WHERE category = 'ALL'), 0), 2) AS productivity,
+             SUM(technician_day_count) FILTER (WHERE category = 'ALL') AS technician_days,
+             ROUND(SUM(technician_day_count) FILTER (WHERE category = 'ALL' AND installation_count <= 1) * 100.0
+                   / NULLIF(SUM(technician_day_count) FILTER (WHERE category = 'ALL'), 0), 1) AS pct_low_output_days,
+             ROUND(SUM(technician_day_count) FILTER (WHERE category = 'ALL')::numeric
+                   / NULLIF(COUNT(DISTINCT technician_name), 0), 1) AS days_per_technician,
+             ROUND(SUM(installation_count) FILTER (WHERE category IN ('DT', 'FEEDER')) * 100.0
+                   / NULLIF(SUM(installation_count) FILTER (WHERE category = 'ALL'), 0), 1) AS pct_dt_feeder
       FROM public.gold_mi_technician_productivity_day_agg
-      WHERE category <> 'ALL' AND period_start BETWEEN CURRENT_DATE - 30 AND CURRENT_DATE - 1 AND zone IS NOT NULL
+      WHERE (category = 'ALL' OR meter_type = 'ALL')
+        AND period_start BETWEEN CURRENT_DATE - 30 AND CURRENT_DATE - 1 AND zone IS NOT NULL
       GROUP BY zone, project
       HAVING SUM(technician_day_count) >= 0.02 * (SELECT SUM(technician_day_count) FROM public.gold_mi_technician_productivity_day_agg
-                                                 WHERE category <> 'ALL' AND period_start BETWEEN CURRENT_DATE - 30 AND CURRENT_DATE - 1)
+                                                 WHERE category = 'ALL' AND period_start BETWEEN CURRENT_DATE - 30 AND CURRENT_DATE - 1)
       ORDER BY productivity
 
   - q: ["Show productivity for Consumer meters only in Kashi for last week.", "consumer productivity kashi last 7 days"]
@@ -799,16 +816,17 @@ examples:
              COUNT(DISTINCT technician_name) AS active_technicians, COUNT(DISTINCT period_start) AS active_days,
              SUM(installation_count) AS installations
       FROM public.gold_mi_technician_productivity_day_agg
-      WHERE category = 'CONSUMER' AND LOWER(project) = 'kashi'
-        AND period_start BETWEEN CURRENT_DATE - 6 AND CURRENT_DATE
+      WHERE category = 'CONSUMER' AND meter_type = 'ALL' AND LOWER(project) = 'kashi'
+        AND period_start BETWEEN CURRENT_DATE - 7 AND CURRENT_DATE - 1
 
-  - q: ["Change duration to Monthly on the productivity page.", "monthly productivity trend", "productivity month-wise"]
+  - q: ["Show the Monthly Productivity trend card (KPI 3)", "monthly productivity trend card", "KPI 3 monthly productivity trend"]
+    note: "KPI 3 card only. Every other month-wise / discom-wise productivity question uses gold_mi_technician_productivity_month_agg (KPI 2). Always project = 'ALL' or a project here, never both kinds of rows."
     sql: |
       SELECT month_start AS month,
              ROUND(SUM(total_installations)::numeric / NULLIF(SUM(technician_day_count), 0), 2) AS productivity,
              SUM(active_technicians) AS active_technicians, SUM(total_installations) AS installations
       FROM public.gold_mi_productivity_trend_month_agg
-      WHERE aggregate_level = 'all' AND category <> 'ALL' AND project = 'ALL' AND filter_level = 'all'
+      WHERE aggregate_level = 'all' AND category = 'ALL' AND project = 'ALL' AND filter_level = 'all'
         AND month_start >= (date_trunc('month', CURRENT_DATE) - INTERVAL '12 months')::date
       GROUP BY month_start
       ORDER BY month_start
@@ -1224,7 +1242,7 @@ examples:
              SUM(meter_count) AS meters_installed
       FROM public.gold_mi_installation_day_agg
       WHERE has_meter_serial AND progress_category IS NOT NULL AND NOT is_replacement
-        AND LOWER(project) = 'kashi' AND period_start BETWEEN CURRENT_DATE - 6 AND CURRENT_DATE
+        AND LOWER(project) = 'kashi' AND period_start BETWEEN CURRENT_DATE - 7 AND CURRENT_DATE - 1
       GROUP BY ROLLUP (period_start)
       ORDER BY GROUPING(period_start) DESC, period_start
 
@@ -1361,7 +1379,7 @@ examples:
       FROM public.gold_mi_installation_day_agg
       WHERE has_meter_serial AND progress_category IS NOT NULL AND NOT is_replacement
         AND NULLIF(TRIM(division), '') IS NOT NULL
-        AND period_start BETWEEN CURRENT_DATE - 29 AND CURRENT_DATE
+        AND period_start BETWEEN CURRENT_DATE - 30 AND CURRENT_DATE - 1
       GROUP BY project, division
       ORDER BY installed DESC
       LIMIT 5
@@ -1447,7 +1465,7 @@ examples:
              COUNT(DISTINCT technician_name) AS active_technicians,
              SUM(installation_count) AS installations
       FROM public.gold_mi_technician_productivity_day_agg
-      WHERE category <> 'ALL' AND LOWER(division) = 'edd chunar'
+      WHERE category = 'ALL' AND LOWER(division) = 'edd chunar'
         AND period_start >= (date_trunc('month', CURRENT_DATE) - INTERVAL '1 month')::date
         AND period_start < date_trunc('month', CURRENT_DATE)::date
 
@@ -1462,7 +1480,7 @@ examples:
              SUM(installation_count) AS installations
       FROM (SELECT *, date_trunc('month', period_start)::date + ((EXTRACT(DAY FROM period_start)::int - 1) / 7) * 7 AS week_start
             FROM public.gold_mi_technician_productivity_day_agg
-            WHERE category <> 'ALL' AND LOWER(project) = 'kashi'
+            WHERE category = 'ALL' AND LOWER(project) = 'kashi'
               AND period_start >= DATE '2026-08-01' AND period_start <= DATE '2026-08-31') d
       GROUP BY ROLLUP (week_start)
       ORDER BY GROUPING(week_start) DESC, week_start
@@ -1497,3 +1515,293 @@ examples:
       FROM public.gold_meter_inventory_event_day_agg
       WHERE period_start <= CURRENT_DATE AND LOWER(zone) = 'prayagraj ii'
       GROUP BY zone
+  - q: ["How many meters installed weekly from 1 June 2026 to 15 August 2026", "Show MI progress from 1 June 2026 to 15 August 2026 the way the dashboard shows it", "week wise installs between two dates", "MI progress weekly as on dashboard", "dashboard style weekly installs by category"]
+    note: "Dashboard grain: up to 45 days daily, 46-150 days weekly, longer monthly. Weeks are month-anchored (1-7, 8-14, 15-21, 22-28, 29-end). Read ONLY the day table for a range with a partial month - never mix in month rows."
+    sql: |
+      SELECT CASE WHEN GROUPING(wk) = 1 THEN 'Total' ELSE to_char(wk, 'DD-MM-YY') END AS week_start,
+             COALESCE(SUM(meter_count) FILTER (WHERE progress_category = 'CONSUMER'), 0) AS consumer,
+             COALESCE(SUM(meter_count) FILTER (WHERE progress_category = 'DT'), 0) AS dtr,
+             COALESCE(SUM(meter_count) FILTER (WHERE progress_category = 'FEEDER'), 0) AS feeder,
+             SUM(meter_count) AS total
+      FROM (SELECT date_trunc('month', period_start)::date + ((EXTRACT(DAY FROM period_start)::int - 1) / 7) * 7 AS wk,
+                   progress_category, meter_count
+            FROM public.gold_mi_installation_day_agg
+            WHERE has_meter_serial AND progress_category IS NOT NULL AND NOT is_replacement
+              AND period_start BETWEEN DATE '2026-06-01' AND DATE '2026-08-15') t
+      GROUP BY ROLLUP (wk)
+      ORDER BY GROUPING(wk) DESC, wk
+
+  - q: ["How many consumer meters installed type wise in June 2026", "consumer meter type wise installs", "1PH 3PH LTCT HTCT installed in a month"]
+    note: "Consumer meter type = inventory_meter_type (never progress_meter_type): the four types add up to the consumer total, no 'Other' / 'Unmapped'."
+    sql: |
+      SELECT CASE WHEN GROUPING(inventory_meter_type) = 1 THEN 'Total' ELSE inventory_meter_type END AS meter_type,
+             SUM(meter_count) AS meters_installed
+      FROM public.gold_mi_installation_month_agg
+      WHERE has_meter_serial AND progress_category = 'CONSUMER' AND NOT is_replacement
+        AND period_start = DATE '2026-06-01'
+      GROUP BY ROLLUP (inventory_meter_type)
+      ORDER BY GROUPING(inventory_meter_type) DESC, meters_installed DESC
+
+  - q: ["How many meters installed, how many SAT done, how many defects found OEM wise", "OEM wise installs SAT and defects", "installed vs SAT vs defective by make"]
+    note: "Combine tables with UNION ALL + one GROUP BY (never JOIN the raw gold rows - that multiplies counts). Add the same project / category filter to EVERY leg (DT = progress_category 'DT' in installs, category 'DT' in defects)."
+    sql: |
+      SELECT u.oem, SUM(u.installed) AS installed_meters, SUM(u.sat_done) AS sat_done, SUM(u.defects) AS defects_found
+      FROM (SELECT UPPER(COALESCE(NULLIF(TRIM(oem), ''), 'Unknown')) AS oem, meter_count AS installed,
+                   CASE WHEN has_sat_number THEN meter_count ELSE 0 END AS sat_done, 0 AS defects
+            FROM public.gold_mi_installation_month_agg
+            WHERE has_meter_serial AND progress_category IS NOT NULL AND NOT is_replacement
+            UNION ALL
+            SELECT UPPER(COALESCE(NULLIF(TRIM(oem), ''), 'Unknown')), 0, 0, defect_count
+            FROM public.gold_meter_defect_event_day_agg) u
+      GROUP BY u.oem
+      ORDER BY installed_meters DESC
+  - q: ["oem wise meter installed in last month", "OEM wise meters installed last month", "make wise installs in a month"]
+    note: "'last month' = the previous full calendar month. OEM-wise = GROUP BY oem over ALL categories - add a category filter only when the question names one."
+    sql: |
+      SELECT CASE WHEN GROUPING(oem) = 1 THEN 'Total' ELSE UPPER(oem) END AS oem, SUM(meter_count) AS meters_installed
+      FROM public.gold_mi_installation_month_agg
+      WHERE has_meter_serial AND progress_category IS NOT NULL AND NOT is_replacement
+        AND period_start = (date_trunc('month', CURRENT_DATE) - INTERVAL '1 month')::date
+      GROUP BY ROLLUP (oem)
+      ORDER BY GROUPING(oem) DESC, meters_installed DESC
+
+  # ---- MI-Productivity per team (dashboard KPI 2): one roll-up level per query ----
+  - q: ["How many active technicians in Varanasi I zone in July 2026", "active technicians zone wise in a month", "how many technicians worked in a zone"]
+    note: "Installation (MI) technicians, not O&M: O&M only when the question names O&M, complaints or tickets. category = 'ALL' rows; active technicians = COUNT(DISTINCT technician_name)."
+    sql: |
+      SELECT COUNT(DISTINCT technician_name) AS active_technicians,
+             SUM(installation_count) AS installations,
+             SUM(technician_day_count) AS technician_days,
+             ROUND(SUM(installation_count)::numeric / NULLIF(SUM(technician_day_count), 0), 2) AS productivity_per_tech_day
+      FROM public.gold_mi_technician_productivity_day_agg
+      WHERE category = 'ALL' AND LOWER(zone) = 'varanasi i'
+        AND period_start BETWEEN DATE '2026-07-01' AND DATE '2026-07-31'
+
+  - q: ["Productivity per technician per day for Agra for last 7 days", "What is the productivity per technician per day in Kashi in August 2026", "MI productivity of a project in a period"]
+    note: "Plain 'productivity per technician per day' = MI installations (not O&M). One summary row from the category = 'ALL' roll-up -- not a per-technician list unless technicians are asked. 'last 7 days' = CURRENT_DATE - 7 .. CURRENT_DATE - 1 (7 full days ending yesterday)."
+    sql: |
+      SELECT ROUND(SUM(installation_count)::numeric / NULLIF(SUM(technician_day_count), 0), 2) AS productivity_per_tech_day,
+             SUM(installation_count) AS installations,
+             COUNT(DISTINCT technician_name) AS active_technicians,
+             COUNT(DISTINCT period_start) AS active_days,
+             SUM(technician_day_count) AS technician_days
+      FROM public.gold_mi_technician_productivity_day_agg
+      WHERE category = 'ALL' AND LOWER(project) = 'agra'
+        AND period_start BETWEEN CURRENT_DATE - 7 AND CURRENT_DATE - 1
+
+  - q: ["Show MI productivity per team as on the dashboard", "MI productivity per team", "productivity per team dashboard numbers"]
+    note: "The card's default window: CURRENT_DATE - 31 .. CURRENT_DATE - 1 (31 days ending yesterday), all projects, category = 'ALL'. Give the four card tiles: installations, active technicians, active days, productivity; say the window."
+    sql: |
+      SELECT SUM(installation_count) AS total_installations,
+             COUNT(DISTINCT technician_name) AS active_technicians,
+             COUNT(DISTINCT period_start) AS active_days,
+             ROUND(SUM(installation_count)::numeric / NULLIF(SUM(technician_day_count), 0), 2) AS productivity_per_tech_day
+      FROM public.gold_mi_technician_productivity_day_agg
+      WHERE category = 'ALL' AND period_start BETWEEN CURRENT_DATE - 31 AND CURRENT_DATE - 1
+
+  - q: ["Productivity category wise in August 2026", "consumer DT feeder productivity", "category wise MI productivity"]
+    note: "Per-category roll-up rows: category <> 'ALL' AND meter_type = 'ALL'. The 'ALL' row is the total (a technician in two categories is one technician-day there), so read it as its own row, never a ROLLUP of the categories."
+    sql: |
+      SELECT CASE WHEN category = 'ALL' THEN 'Total' ELSE category END AS category,
+             ROUND(SUM(installation_count)::numeric / NULLIF(SUM(technician_day_count), 0), 2) AS productivity_per_tech_day,
+             COUNT(DISTINCT technician_name) AS active_technicians,
+             SUM(installation_count) AS installations
+      FROM public.gold_mi_technician_productivity_month_agg
+      WHERE (category = 'ALL' OR meter_type = 'ALL') AND period_start = DATE '2026-08-01'
+      GROUP BY category
+      ORDER BY (category = 'ALL') DESC, installations DESC
+
+  - q: ["Consumer productivity type wise in August 2026", "1PH 3PH LTCT HTCT productivity", "consumer meter type wise productivity"]
+    note: "Consumer meter-type rows: category = 'CONSUMER' AND meter_type <> 'ALL'; the consumer total is the CONSUMER / meter_type = 'ALL' roll-up row (never the sum of the types -- a technician fitting 1PH and 3PH on one day is one technician-day)."
+    sql: |
+      SELECT CASE WHEN meter_type = 'ALL' THEN 'Consumer total' ELSE meter_type END AS meter_type,
+             ROUND(SUM(installation_count)::numeric / NULLIF(SUM(technician_day_count), 0), 2) AS productivity_per_tech_day,
+             COUNT(DISTINCT technician_name) AS active_technicians,
+             SUM(installation_count) AS installations
+      FROM public.gold_mi_technician_productivity_month_agg
+      WHERE category = 'CONSUMER' AND meter_type IS NOT NULL AND period_start = DATE '2026-08-01'
+      GROUP BY meter_type
+      ORDER BY (meter_type = 'ALL') DESC, installations DESC
+
+  - q: ["Feeder productivity from 1 October 2026 to 22 October 2026", "DTR productivity in Kashi in August 2026", "DT productivity", "feeder meter installation productivity"]
+    note: "FEEDER / DT / CONSUMER are MI meter categories (installations), not MDM feeders. One category = category = 'X' AND meter_type = 'ALL' ('DTR' = 'DT')."
+    sql: |
+      SELECT ROUND(SUM(installation_count)::numeric / NULLIF(SUM(technician_day_count), 0), 2) AS productivity_per_tech_day,
+             SUM(installation_count) AS installations,
+             COUNT(DISTINCT technician_name) AS active_technicians,
+             COUNT(DISTINCT period_start) AS active_days
+      FROM public.gold_mi_technician_productivity_day_agg
+      WHERE category = 'FEEDER' AND meter_type = 'ALL'
+        AND period_start BETWEEN DATE '2026-10-01' AND DATE '2026-10-22'
+
+  - q: ["1PH productivity in August 2026", "single phase meter productivity", "3PH meter productivity"]
+    note: "One meter type: category <> 'ALL' AND meter_type = '1PH-Consumer_meter' (meter-type rows, any category)."
+    sql: |
+      SELECT ROUND(SUM(installation_count)::numeric / NULLIF(SUM(technician_day_count), 0), 2) AS productivity_per_tech_day,
+             SUM(installation_count) AS installations,
+             COUNT(DISTINCT technician_name) AS active_technicians
+      FROM public.gold_mi_technician_productivity_month_agg
+      WHERE category <> 'ALL' AND meter_type = '1PH-Consumer_meter' AND period_start = DATE '2026-08-01'
+
+  - q: ["Productivity daily from 1 Aug 2026 to 7 Aug 2026", "day wise MI productivity", "daily productivity trend"]
+    sql: |
+      SELECT CASE WHEN GROUPING(period_start) = 1 THEN 'Total' ELSE to_char(period_start, 'DD Mon YYYY') END AS day,
+             ROUND(SUM(installation_count)::numeric / NULLIF(SUM(technician_day_count), 0), 2) AS productivity_per_tech_day,
+             COUNT(DISTINCT technician_name) AS active_technicians,
+             SUM(installation_count) AS installations
+      FROM public.gold_mi_technician_productivity_day_agg
+      WHERE category = 'ALL' AND period_start BETWEEN DATE '2026-08-01' AND DATE '2026-08-07'
+      GROUP BY ROLLUP (period_start)
+      ORDER BY GROUPING(period_start) DESC, period_start
+
+  - q: ["MI productivity in Triveni from January 2026 to September 2026 month wise", "month wise productivity of a project", "MI productivity from 1 June 2026 to 15 August 2026"]
+    note: "Whole months from the month table (period_start = 1st); a partial first / last month (e.g. up to 15 Aug) from the day table bucketed to its month -- category = 'ALL' throughout. The Total row counts distinct technicians over the whole range."
+    sql: |
+      SELECT CASE WHEN GROUPING(m) = 1 THEN 'Total' ELSE to_char(m, 'Mon YYYY') END AS month,
+             ROUND(SUM(installation_count)::numeric / NULLIF(SUM(technician_day_count), 0), 2) AS productivity_per_tech_day,
+             COUNT(DISTINCT technician_name) AS active_technicians,
+             SUM(installation_count) AS installations
+      FROM (SELECT period_start AS m, technician_name, installation_count, technician_day_count
+            FROM public.gold_mi_technician_productivity_month_agg
+            WHERE category = 'ALL' AND LOWER(project) = 'triveni'
+              AND period_start BETWEEN DATE '2026-01-01' AND DATE '2026-09-01') t
+      GROUP BY ROLLUP (m)
+      ORDER BY GROUPING(m) DESC, m
+  - q: ["How many meters installed sub division wise in EDD Chunar division in August 2026", "sub division wise installs in a division", "subdivision wise DTR installed in a division in a month"]
+    note: "Installs by place (zone / circle / division / sub_division) always come from gold_mi_installation_* with the MI eligibility filters - never gold_meter_inventory_event_* (its installed_count includes replacements). Add the category filter only when asked (DTR = progress_category 'DT')."
+    sql: |
+      SELECT CASE WHEN GROUPING(sub_division) = 1 THEN 'Total' ELSE UPPER(sub_division) END AS sub_division,
+             SUM(meter_count) AS meters_installed
+      FROM public.gold_mi_installation_month_agg
+      WHERE has_meter_serial AND progress_category IS NOT NULL AND NOT is_replacement
+        AND LOWER(division) = 'edd chunar' AND period_start = DATE '2026-08-01'
+      GROUP BY ROLLUP (sub_division)
+      ORDER BY GROUPING(sub_division) DESC, meters_installed DESC
+
+  - q: ["How many meters installed day wise in the last 7 days", "daily installs last 7 days", "last week day wise meter installation"]
+    note: "'last 7 days' = CURRENT_DATE - 7 .. CURRENT_DATE - 1 (ending yesterday). One query on the day table - no UNION."
+    sql: |
+      SELECT CASE WHEN GROUPING(period_start) = 1 THEN 'Total' ELSE period_start::text END AS day,
+             SUM(meter_count) AS meters_installed,
+             COALESCE(SUM(meter_count) FILTER (WHERE progress_category = 'CONSUMER'), 0) AS consumer,
+             COALESCE(SUM(meter_count) FILTER (WHERE progress_category = 'DT'), 0) AS dtr,
+             COALESCE(SUM(meter_count) FILTER (WHERE progress_category = 'FEEDER'), 0) AS feeder
+      FROM public.gold_mi_installation_day_agg
+      WHERE has_meter_serial AND progress_category IS NOT NULL AND NOT is_replacement
+        AND period_start BETWEEN CURRENT_DATE - 7 AND CURRENT_DATE - 1
+      GROUP BY ROLLUP (period_start)
+      ORDER BY GROUPING(period_start) DESC, period_start
+  - q: ["oem wise meter installed in last 2 months", "meters installed in last 3 months", "installs in the last N months OEM wise"]
+    note: "'last N months' = rolling window ending yesterday, starting the same date N months earlier (asked 23 Oct: last 2 months = 22 Aug .. 22 Oct). Day table only; not whole calendar months. State the exact dates in the answer."
+    sql: |
+      SELECT CASE WHEN GROUPING(oem) = 1 THEN 'Total' ELSE UPPER(oem) END AS oem, SUM(meter_count) AS meters_installed,
+             MIN((CURRENT_DATE - 1 - INTERVAL '2 months')::date) AS from_date, MIN(CURRENT_DATE - 1) AS to_date
+      FROM public.gold_mi_installation_day_agg
+      WHERE has_meter_serial AND progress_category IS NOT NULL AND NOT is_replacement
+        AND period_start BETWEEN (CURRENT_DATE - 1 - INTERVAL '2 months')::date AND CURRENT_DATE - 1
+      GROUP BY ROLLUP (oem)
+      ORDER BY GROUPING(oem) DESC, meters_installed DESC
+  - q: ["How many meters installed, how many SAT done, how many defects found OEM wise in Agra only DT", "OEM wise installs SAT and defects for DT meters in a project", "only DT installs SAT defects by OEM"]
+    note: "Same UNION ALL pattern as the all-category version; DT = progress_category 'DT' in the installation leg (never inventory_category) and category 'DT' in the defect leg; the project filter goes on BOTH legs."
+    sql: |
+      SELECT u.oem, SUM(u.installed) AS installed_meters, SUM(u.sat_done) AS sat_done, SUM(u.defects) AS defects_found
+      FROM (SELECT UPPER(COALESCE(NULLIF(TRIM(oem), ''), 'Unknown')) AS oem, meter_count AS installed,
+                   CASE WHEN has_sat_number THEN meter_count ELSE 0 END AS sat_done, 0 AS defects
+            FROM public.gold_mi_installation_month_agg
+            WHERE has_meter_serial AND progress_category = 'DT' AND NOT is_replacement AND LOWER(project) = 'agra'
+            UNION ALL
+            SELECT UPPER(COALESCE(NULLIF(TRIM(oem), ''), 'Unknown')), 0, 0, defect_count
+            FROM public.gold_meter_defect_event_day_agg
+            WHERE category = 'DT' AND LOWER(project) = 'agra') u
+      GROUP BY u.oem
+      ORDER BY installed_meters DESC
+
+  - q: ["Consumer meter productivity per technician per day, installations and active technicians in September 2026", "consumer MI productivity in a month", "consumer installation productivity summary"]
+    note: "ONE summary row (no GROUP BY): one category = category = 'CONSUMER' AND meter_type = 'ALL' (its roll-up row)."
+    sql: |
+      SELECT ROUND(SUM(installation_count)::numeric / NULLIF(SUM(technician_day_count), 0), 2) AS productivity_per_tech_day,
+             SUM(installation_count) AS installations,
+             COUNT(DISTINCT technician_name) AS active_technicians,
+             COUNT(DISTINCT period_start) AS active_days
+      FROM public.gold_mi_technician_productivity_day_agg
+      WHERE category = 'CONSUMER' AND meter_type = 'ALL'
+        AND period_start BETWEEN DATE '2026-09-01' AND DATE '2026-09-30'
+
+  - q: ["3PH meter productivity per technician per day, installations and active technicians in September 2026", "three phase meter productivity", "3PH installs per technician day"]
+    note: "1PH / 3PH exist only in CONSUMER. A meter type = category <> 'ALL' AND meter_type = '3PH-Consumer_meter' -- never category = 'DT' with it (no such rows)."
+    sql: |
+      SELECT ROUND(SUM(installation_count)::numeric / NULLIF(SUM(technician_day_count), 0), 2) AS productivity_per_tech_day,
+             SUM(installation_count) AS installations,
+             COUNT(DISTINCT technician_name) AS active_technicians
+      FROM public.gold_mi_technician_productivity_day_agg
+      WHERE category <> 'ALL' AND meter_type = '3PH-Consumer_meter'
+        AND period_start BETWEEN DATE '2026-09-01' AND DATE '2026-09-30'
+
+  - q: ["LTCT meter productivity per technician per day, installations and active technicians in September 2026", "LTCT meters (all categories) productivity", "HTCT meter productivity"]
+    note: "The dashboard's LTCT filter covers every category: DT meters are 3-phase LTCT, so most LTCT installs are DT. Give the dashboard figure and the consumer-only part beside it (HTCT: same, the feeder part is FEEDER)."
+    sql: |
+      SELECT ROUND(SUM(installation_count)::numeric / NULLIF(SUM(technician_day_count), 0), 2) AS productivity_per_tech_day,
+             SUM(installation_count) AS installations,
+             COUNT(DISTINCT technician_name) AS active_technicians,
+             COALESCE(SUM(installation_count) FILTER (WHERE category = 'CONSUMER'), 0) AS consumer_ltct_installations,
+             COALESCE(SUM(installation_count) FILTER (WHERE category = 'DT'), 0) AS dt_installations
+      FROM public.gold_mi_technician_productivity_day_agg
+      WHERE category <> 'ALL' AND meter_type = 'LTCT-Consumer_meter'
+        AND period_start BETWEEN DATE '2026-09-01' AND DATE '2026-09-30'
+
+  - q: ["MI productivity discom wise in September 2026", "DVVNL vs PUVVNL productivity", "discom wise installation productivity"]
+    note: "KPI 2 card: technician productivity table grouped by discom, category = 'ALL' -- not the monthly trend cube."
+    sql: |
+      SELECT CASE WHEN GROUPING(discom) = 1 THEN 'Total' ELSE UPPER(discom) END AS discom,
+             ROUND(SUM(installation_count)::numeric / NULLIF(SUM(technician_day_count), 0), 2) AS productivity_per_tech_day,
+             SUM(installation_count) AS installations,
+             COUNT(DISTINCT technician_name) AS active_technicians
+      FROM public.gold_mi_technician_productivity_month_agg
+      WHERE category = 'ALL' AND period_start = DATE '2026-09-01'
+      GROUP BY ROLLUP (discom)
+      ORDER BY GROUPING(discom) DESC, installations DESC
+
+  - q: ["MI productivity month wise in Agra from January 2026 to September 2026", "DT meter MI productivity month wise in Mathura zone from April 2026 to September 2026", "month wise productivity of a zone or project"]
+    note: "Month wise = _month_agg GROUP BY period_start (KPI 2), never the trend cube. A category named -> category = 'X' AND meter_type = 'ALL'; a place -> its own column."
+    sql: |
+      SELECT CASE WHEN GROUPING(period_start) = 1 THEN 'Total' ELSE to_char(period_start, 'Mon YYYY') END AS month,
+             ROUND(SUM(installation_count)::numeric / NULLIF(SUM(technician_day_count), 0), 2) AS productivity_per_tech_day,
+             SUM(installation_count) AS installations,
+             COUNT(DISTINCT technician_name) AS active_technicians
+      FROM public.gold_mi_technician_productivity_month_agg
+      WHERE category = 'DT' AND meter_type = 'ALL' AND LOWER(zone) = 'mathura'
+        AND period_start BETWEEN DATE '2026-04-01' AND DATE '2026-09-01'
+      GROUP BY ROLLUP (period_start)
+      ORDER BY GROUPING(period_start) DESC, period_start
+
+  - q: ["Feeder meter MI productivity circle wise in Triveni from July 2026 to September 2026", "category productivity circle wise in a project", "consumer productivity division wise"]
+    note: "Place-wise with a category: technician productivity table, category = 'X' AND meter_type = 'ALL', GROUP BY the place column."
+    sql: |
+      SELECT CASE WHEN GROUPING(circle) = 1 THEN 'Total' ELSE UPPER(circle) END AS circle,
+             ROUND(SUM(installation_count)::numeric / NULLIF(SUM(technician_day_count), 0), 2) AS productivity_per_tech_day,
+             SUM(installation_count) AS installations,
+             COUNT(DISTINCT technician_name) AS active_technicians
+      FROM public.gold_mi_technician_productivity_month_agg
+      WHERE category = 'FEEDER' AND meter_type = 'ALL' AND LOWER(project) = 'triveni'
+        AND period_start BETWEEN DATE '2026-07-01' AND DATE '2026-09-01'
+      GROUP BY ROLLUP (circle)
+      ORDER BY GROUPING(circle) DESC, installations DESC
+
+  - q: ["PUVVNL productivity per technician per day, installations and active technicians in September 2026", "EDC Varanasi circle productivity per technician per day in September 2026", "productivity of a discom zone circle or division"]
+    note: "Place only, no category word -> category = 'ALL' and NO meter_type filter. A full stored place name (with its EDC / EUDD / EUDSD prefix) -> exact LOWER(col) = '...'."
+    sql: |
+      SELECT ROUND(SUM(installation_count)::numeric / NULLIF(SUM(technician_day_count), 0), 2) AS productivity_per_tech_day,
+             SUM(installation_count) AS installations,
+             COUNT(DISTINCT technician_name) AS active_technicians,
+             COUNT(DISTINCT period_start) AS active_days
+      FROM public.gold_mi_technician_productivity_day_agg
+      WHERE category = 'ALL' AND LOWER(circle) = 'edc varanasi'
+        AND period_start BETWEEN DATE '2026-09-01' AND DATE '2026-09-30'
+  - q: ["How many HTCT meters installed from January 2026 to June 2026", "LTCT meters installed in a month", "how many 3 phase meters were installed"]
+    note: "A bare meter type = inventory_meter_type across ALL categories (HTCT meters sit in CONSUMER and FEEDER, LTCT in CONSUMER and DT) -- no progress_category filter unless the question says consumer / DT / feeder."
+    sql: |
+      SELECT SUM(meter_count) AS htct_meters_installed
+      FROM public.gold_mi_installation_month_agg
+      WHERE has_meter_serial AND progress_category IS NOT NULL AND NOT is_replacement
+        AND inventory_meter_type = 'HTCT-Consumer_meter'
+        AND period_start BETWEEN DATE '2026-01-01' AND DATE '2026-06-01'

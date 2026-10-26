@@ -185,6 +185,147 @@ def _check_grouping_level(root: exp.Expression) -> str | None:
     return None
 
 
+# Gold tables holding three complete roll-up levels per row key (gmr-etl cb13e5d): category x meter_type rows,
+# per-category rows (meter_type = 'ALL') and all-category rows (category = 'ALL', meter_type NULL).
+_ROLLUP_TABLES = {"gold_mi_technician_productivity_day_agg", "gold_mi_technician_productivity_month_agg",
+                  "gold_mi_productivity_trend_month_agg"}
+_ROLLUP_FIX = ("Read exactly one level: all categories = category = 'ALL' (no meter_type filter); one category = "
+               "category = 'DT' AND meter_type = 'ALL'; one meter type = category <> 'ALL' AND meter_type = "
+               "'1PH-Consumer_meter'.")
+
+
+_CATEGORY_TYPES = {"dt": {"ltct"}, "feeder": {"htct"}}
+
+
+def _check_rollup_level(root: exp.Expression) -> str | None:
+    """MI productivity tables: a SUM over more than one roll-up level counts every install twice (live, 23 Oct:
+    Kashi Aug 2026 shown as 35,738 installs instead of 17,869), and category = 'ALL' AND meter_type = 'ALL'
+    matches nothing (zero rows). The prompt rules alone did not hold -- the planner kept writing both."""
+    sums = root.find(exp.Sum) is not None
+    for sel in root.find_all(exp.Select):
+        # This SELECT's own FROM / JOIN tables (a subquery's tables have a nearer SELECT ancestor).
+        own = {t.name.lower() for t in sel.find_all(exp.Table) if t.find_ancestor(exp.Select) is sel}
+        if not own & _ROLLUP_TABLES:
+            continue
+        where = sel.args.get("where")
+        text = where.sql(dialect="postgres").lower() if where is not None else ""
+        if " or " in text and "meter_type" in text:
+            # Two levels on purpose: fine only when they stay apart -- GROUP BY category (one row per level) or a
+            # FILTER per measure. Live k06: (category = 'ALL' OR meter_type = 'ALL') GROUP BY zone summed both (2x).
+            group = sel.args.get("group")
+            by_category = group is not None and any(c.name.lower() == "category" for c in group.find_all(exp.Column))
+            if not (by_category or sel.find(exp.Filter) is not None) and sums:
+                return ("(category = 'ALL' OR meter_type = 'ALL') reads two roll-up levels; without GROUP BY category or "
+                        "a FILTER (WHERE category = 'ALL') on each SUM every install counts twice. " + _ROLLUP_FIX)
+            continue
+        # The trend cube holds project = 'ALL' rows beside every real project's rows: without a project filter both
+        # are summed (live 26 Oct: discom-wise Sep 2026 = 135,306 installs, twice the real 67,653).
+        if "gold_mi_productivity_trend_month_agg" in own and not re.search(r"\bproject\)?\s*(?:=|in\b)", text):
+            return ("gold_mi_productivity_trend_month_agg needs project = 'ALL' (program-wide) or LOWER(project) = 'x': "
+                    "it holds both, so without the filter every install counts twice. For MI-Productivity per team "
+                    "questions use gold_mi_technician_productivity_day_agg / _month_agg instead.")
+        cat_all = re.search(r"\bcategory\)?\s*=\s*'all'", text)
+        mt_all = re.search(r"\bmeter_type\)?\s*=\s*'all'", text)
+        group = sel.args.get("group")
+        by_category = group is not None and any(c.name.lower() == "category" for c in group.find_all(exp.Column))
+        if (mt_all and sums and not by_category and sel.find(exp.Filter) is None
+                and re.search(r"\bcategory\)?\s*(?:<>|!=)\s*'all'", text)):
+            # Live 26 Oct: a division total from the three per-category roll-ups -> 5.71 instead of 5.73 (a technician
+            # fitting consumer and DT meters on one day counted as two technician-days).
+            return ("category <> 'ALL' AND meter_type = 'ALL' adds the three per-category roll-ups: a technician working "
+                    "two categories on one day counts as two technician-days. For an all-category figure use "
+                    "category = 'ALL'; keep the per-category rows only with GROUP BY category.")
+        if cat_all and mt_all:
+            return ("category = 'ALL' rows have meter_type NULL, so adding meter_type = 'ALL' returns no rows. "
+                    + _ROLLUP_FIX)
+        # Meter types live in fixed categories; live 23 Oct: '3PH productivity' -> category = 'DT' AND
+        # meter_type = '3PH-Consumer_meter' -> zero rows reported as 'no data'.
+        cat = re.search(r"\bcategory\)?\s*=\s*'(dt|feeder)'", text)
+        mt = re.search(r"\bmeter_type\)?\s*=\s*'(1ph|3ph|ltct|htct)-consumer_meter'", text)
+        if cat and mt and mt.group(1) not in _CATEGORY_TYPES[cat.group(1)]:
+            return (f"No {cat.group(1).upper()} rows have meter_type '{mt.group(1).upper()}-Consumer_meter' (1PH / 3PH "
+                    "are CONSUMER only; LTCT is CONSUMER or DT; HTCT is CONSUMER or FEEDER), so this returns no rows. "
+                    "A meter type alone = category <> 'ALL' AND meter_type = 'X-Consumer_meter'.")
+        if not sums or "meter_type" in text or cat_all:
+            continue
+        if re.search(r"\bcategory\)?\s*(?:=|in)\s*\(?\s*'(?:consumer|dt|feeder)'", text):
+            return ("One category must also filter meter_type = 'ALL' (its roll-up row): without it the meter-type "
+                    "rows and the roll-up are both summed and every install counts twice. " + _ROLLUP_FIX)
+        if re.search(r"\bcategory\)?\s*(?:<>|!=)\s*'all'", text):
+            return ("category <> 'ALL' alone sums the meter-type rows AND the per-category roll-ups -- every "
+                    "install counts twice. " + _ROLLUP_FIX)
+        if "category" not in text:
+            return ("No category filter: the all-category, per-category and meter-type roll-up rows are all summed "
+                    "(installs counted three times). " + _ROLLUP_FIX)
+    return None
+
+
+_PERIOD_BOUND = re.compile(
+    r"\bperiod_start\)?\s*(?:(between)\s+(.+?)\s+and\s+(.+?)(?=\s+and\s|\s+or\s|\)|$)|(>=|<=|>|<|=)\s*(.+?)(?=\s+and\s|\s+or\s|\)\s*(?:and|or|$)|$))")
+_DATE_LIT = re.compile(r"'(\d{4})-(\d{2})-(\d{2})'")
+
+
+def _month_aligned(bound: str, op: str) -> bool:
+    """Does this period_start bound fall on a month boundary (so a month row is wholly in or out)?"""
+    if "current_date" in bound or "now()" in bound or "current_timestamp" in bound:
+        # An upper bound at today is 'as of now' (the current month row is month-to-date); a today-relative
+        # LOWER bound is a rolling window and must be month-truncated.
+        return op in ("<=", "<") or "date_trunc('month'" in bound.replace('"', "'") or "date_trunc(month" in bound
+    m = _DATE_LIT.search(bound)
+    if not m:
+        return True  # not a literal / today-relative bound -- leave it
+    y, mo, d = (int(g) for g in m.groups())
+    if op in (">=", "<", "="):
+        return d == 1
+    import calendar
+    # '<=' / '>': a month end, or the 1st (rows are dated the 1st, so '<= 2026-09-01' = through September)
+    return d == 1 or d == calendar.monthrange(y, mo)[1]
+
+
+def _check_month_table_window(root: exp.Expression) -> str | None:
+    """*_month_agg tables hold one row per whole month dated the 1st, so a mid-month or rolling bound
+    keeps or drops WHOLE months. Live, 23 Oct: 'oem wise meters installed in last 2 months' filtered
+    gold_mi_installation_month_agg with period_start BETWEEN CURRENT_DATE - 1 - INTERVAL '2 months' AND
+    CURRENT_DATE - 1 -> only the Sep and Oct rows (140,175) instead of 22 Aug .. 22 Oct (156,382).
+    The prompt rules and a verified day-table example alone did not hold."""
+    for sel in root.find_all(exp.Select):
+        sources = [sel.args.get("from_") or sel.args.get("from"), *(sel.args.get("joins") or [])]
+        own = {t.name.lower() for s in sources if s is not None for t in s.find_all(exp.Table)
+               if t.find_ancestor(exp.Select) is sel}
+        month_tables = sorted(t for t in own if t.endswith("_month_agg"))
+        where = sel.args.get("where")
+        if not month_tables or where is None:
+            continue
+        text = where.sql(dialect="postgres").lower()
+        for m in _PERIOD_BOUND.finditer(text):
+            if m.group(1):
+                bad = not (_month_aligned(m.group(2), ">=") and _month_aligned(m.group(3), "<="))
+            else:
+                bad = not _month_aligned(m.group(5), m.group(4))
+            if bad:
+                day = month_tables[0].replace("_month_agg", "_day_agg")
+                return (f"{month_tables[0]} has ONE row per whole month (period_start = the 1st), so this "
+                        f"period_start bound ({m.group(0).strip()}) counts or drops whole months. A range that does "
+                        f"not start on the 1st and end on a month end (e.g. a rolling 'last N months' or a "
+                        f"mid-month date) must read {day} with the same filters.")
+    return None
+
+
+def _check_meter_type_column(root: exp.Expression) -> str | None:
+    """Consumer meter type on the installation tables is inventory_meter_type. progress_meter_type (the
+    dashboard's narrow map) misses 6 raw codes, so its 4 types fall short of the consumer total (1,012 meters
+    all time). Live, 26 Oct: the same kind of ask used either column from run to run -- 3PH / HTCT came
+    back on the narrow map, 1PH / LTCT on the full one."""
+    tables = {t.name.lower() for t in root.find_all(exp.Table)}
+    if not any(t.startswith("gold_mi_installation_") for t in tables):
+        return None
+    if any(c.name.lower() == "progress_meter_type" for c in root.find_all(exp.Column)):
+        return ("Use inventory_meter_type for consumer meter types (values '1PH-Consumer_meter', "
+                "'3PH-Consumer_meter', 'LTCT-Consumer_meter', 'HTCT-Consumer_meter'), never progress_meter_type: "
+                "the progress map leaves some meter codes out, so its types do not add up to the consumer total.")
+    return None
+
+
 def _fail(reason: str) -> dict:
     return {
         "ok": False, "reason": reason, "verification_required": "normal", "normalized_sql": None,
@@ -547,7 +688,8 @@ def check_sql_safety(sql: str, catalog: AthenaCatalog) -> dict:
     except Exception as exc:
         return _fail(f"Unknown or ambiguous column reference: {exc}{_column_hint(str(exc), referenced, schema)}")
     cumulative_reason = (_check_cumulative_sums(root, cte_names) or _check_cross_join_fanout(root)
-                         or _check_grouping_level(root))
+                         or _check_grouping_level(root) or _check_rollup_level(root)
+                         or _check_month_table_window(root) or _check_meter_type_column(root))
     if cumulative_reason:
         return _fail(cumulative_reason)
     return {

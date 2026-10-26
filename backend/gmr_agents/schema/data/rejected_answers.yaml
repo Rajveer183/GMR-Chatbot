@@ -1,0 +1,19 @@
+# Logged answers checked and found WRONG. The chatbot's past-question memory
+# (outputs/logs/questions.jsonl -> knowledge.question_items) skips these trace ids, so a
+# wrong SQL is never offered to the query writer as a "similar past answer" again.
+# The log itself is never edited (it is the audit trail). Add an entry whenever a
+# reviewed answer turns out wrong: trace_id from the log / response debug.trace_id.
+rejected:
+  - {trace_id: 79824ec5, question: "oem wise meter installed in last month", reason: "FEEDER filter not asked (17 instead of 67,653)"}
+  - {trace_id: c33bf545, question: "make wise installation last month in Kashi", reason: "CONSUMER filter not asked, no OEM split"}
+  - {trace_id: 53b0631a, question: "oem wise meter installed in last 2 months", reason: "last 2 months read as whole calendar months"}
+  - {trace_id: 44bb8f01, question: "oem wise meter installed in last 2 months", reason: "rolling window on the month table (140,175 instead of 156,382)"}
+  - {trace_id: 9485a0cb, question: "How many meters installed weekly from 1 June 2026 to 15 August 2026", reason: "rolling 7-day weeks, not month-anchored"}
+  - {trace_id: 4148831b, question: "How many consumer meters installed type wise in June 2026", reason: "progress_meter_type -> Unmapped row"}
+  - {trace_id: ae5d4e31, question: "How many consumer meters installed type wise in June 2026", reason: "progress_meter_type -> Unmapped row"}
+  - {trace_id: e2e02861, question: "How many consumer meters installed type wise in June 2026", reason: "progress_meter_type -> Unmapped row"}
+  - {trace_id: df4dfff8, question: "How many meters installed, how many SAT done, how many defects found OEM wise", reason: "join fan-out inflates counts"}
+  - {trace_id: 68e4baaf, question: "and Agra?", reason: "join fan-out (215,795,400 defects)"}
+  - {trace_id: c900eed6, question: "only DT", reason: "join fan-out on defects"}
+  - {trace_id: b6049d2d, question: "How many meters installed sub division wise in EDD Chunar division in August 2026", reason: "installs read from the inventory table (incl. replacements)"}
+  - {trace_id: 87acfc89, question: "How many DTR meters installed sub division wise in EDD Ballia Nagar division in August 2026", reason: "installs read from the inventory table (incl. replacements)"}

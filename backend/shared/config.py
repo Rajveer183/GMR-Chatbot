@@ -177,6 +177,7 @@ GROUNDING_TOP_K = _int("GROUNDING_TOP_K")                      # evidence chunks
 GROUNDING_MAX_CONTEXT_CHARS = _int("GROUNDING_MAX_CONTEXT_CHARS")  # evidence text cap in the prompt
 LLM_RATE_WINDOW_SECONDS = _float("LLM_RATE_WINDOW_SECONDS")    # sliding window length
 LLM_RATE_MAX_WAIT_SECONDS = _float("LLM_RATE_MAX_WAIT_SECONDS")  # longest wait for a slot before trying the next model
+LLM_BUSY_WAIT_SECONDS = _float("LLM_BUSY_WAIT_SECONDS")  # every model cooling: wait this long for the first to free up
 LLM_RPM_LIMITS = _provider_ints("LLM_RPM_LIMITS")              # requests per window, per model, by provider
 LLM_TPM_LIMITS = _provider_ints("LLM_TPM_LIMITS")              # tokens per window, per model, by provider
 LLM_RATE_BACKOFF_BASE_SECONDS = _float("LLM_RATE_BACKOFF_BASE_SECONDS")  # first 429 cooldown without Retry-After
@@ -260,6 +261,9 @@ PREWARM_TOP_N = _int("PREWARM_TOP_N")                     # most-asked history q
 PREWARM_PAUSE = _float("PREWARM_PAUSE")                   # seconds between warm-up questions
 PREWARM_CHECK_SECONDS = _float("PREWARM_CHECK_SECONDS")   # how often to look for a new data version
 PREWARM_START_DELAY = _float("PREWARM_START_DELAY")       # wait after startup before the first check
+PREWARM_BANK = _flag("PREWARM_BANK")                      # also warm the whole question bank (~420 questions)
+PREWARM_MAX_QUESTIONS = _int("PREWARM_MAX_QUESTIONS")     # LLM-answered questions per run (0 = no cap)
+PREWARM_SETTLE_SECONDS = _float("PREWARM_SETTLE_SECONDS") # a new version must stay unchanged this long first
 
 # --- Redis (shared/redis_client.py) -------------------------------------------
 # Optional cache/session/rate-limit layer -- REDIS_HOST="" or Redis unreachable both

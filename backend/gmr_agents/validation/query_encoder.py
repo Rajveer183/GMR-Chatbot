@@ -28,6 +28,10 @@ _RELATIVE = ["today", "yesterday", "last week", "this week", "last month", "this
              "kal", "aaj"]
 _LEVELS = ["project", "discom", "zone", "circle", "division", "sub_division", "substation", "feeder", "oem",
            "category", "month", "week", "day", "technician"]
+# Other words users put before 'wise' / after 'by' for a level. Live, 26 Oct: 'make wise installation in Kashi
+# last month' was not tagged as an OEM breakdown and came back as one total.
+_LEVEL_ALIASES = {"oem": ["make", "vendor", "brand", "manufacturer", "company"], "project": ["cluster"],
+                  "sub_division": ["sub division", "sub-division", "subdivision"]}
 
 
 def encode(question: str) -> dict:
@@ -97,7 +101,11 @@ def encode(question: str) -> dict:
         out["what_if_pct"] = float(pct.group(1))
     if signals:
         out["signals"] = signals
-    by = [lvl for lvl in _LEVELS if re.search(rf"\b(by|per|each|every|across|wise)\s+{lvl}s?\b|\b{lvl}[- ]wise\b", low)]
+    by = [lvl for lvl in _LEVELS
+          if any(re.search(rf"\b(by|per|each|every|across|wise)\s+{re.escape(w)}s?\b|\b{re.escape(w)}[- ]?wise\b", low)
+                 for w in [lvl, *_LEVEL_ALIASES.get(lvl, [])])]
+    if "sub_division" in by and "division" in by and not re.search(r"(?<!sub )(?<!sub-)\bdivision[- ]?wise\b|\bby\s+division", low):
+        by.remove("division")  # 'sub division wise' contains 'division wise'
     if by:
         out["breakdown_by"] = by
     return out
