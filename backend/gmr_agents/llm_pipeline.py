@@ -301,7 +301,7 @@ Reply with JSON only:
  "sql": "the main query (its result drives the cards/chart/table)",
  "extra_queries": [{"purpose": "what it adds", "sql": "..."}] or [],
  "labels": {"alias": "Readable Header", ...},
- "display": {"cards": [aliases of 0-4 headline numbers shown as cards. Cards read the FIRST row only, so use them only when the first row IS the overall answer (a single-row result, or a 'Total' row placed first); otherwise []],
+ "display": {"cards": [aliases of 0-6 headline numbers shown as cards. Cards read the FIRST row only, so use them only when the first row IS the overall answer (a single-row result, or a 'Total' row placed first); otherwise []],
              "chart": {"type": one type from CHART GUIDE -- the BEST match for this question and result shape, "x": "alias", "y": ["alias", ...], "y2": ["line alias"] (combo only), "group": "alias" (long rows -> one series per value), "unit": "...", "unit2": "..."},
              "table": true if the rows should be shown as a table},
  "title": "short title for the result",
@@ -499,7 +499,8 @@ def _to_plan(raw: dict, guard: dict, catalog, model: str) -> dict:
     first = catalog.get_table(tables[0]) if tables else None
     display = raw.get("display") if isinstance(raw.get("display"), dict) else {}
     labels = raw.get("labels") if isinstance(raw.get("labels"), dict) else {}
-    cards = [str(a) for a in display.get("cards") or []][:4]
+    # Up to six: the home-page headline strip has six tiles (supplied .. PMPM collected).
+    cards = [str(a) for a in display.get("cards") or []][:6]
     return {
         "engine": "sql", "data_engine": guard["data_engine"], "answer_kind": str(raw.get("answer_kind") or ""),
         "sql": sql, "database": first.database if first and first.engine == "athena" else None,
@@ -862,6 +863,14 @@ def _blocks(plan: dict, result: dict) -> dict:
     kpis = []
     for alias in [m["alias"] for m in plan["metrics"]]:
         if alias in df.columns:
+            value = _number(df.iloc[0][alias])
+            kpis.append({"label": _label(plan, alias), "value": value if value is not None else 0.0,
+                         "formatted_value": format_number(value) if value is not None else _cell(df.iloc[0][alias]),
+                         "unit": None})
+    # A one-row answer of a few figures (a home-page module headline) reads as cards, like the
+    # dashboard's tiles, even when the planner named none.
+    if not kpis and len(df) == 1 and len(df.columns) <= 6:
+        for alias in df.columns:
             value = _number(df.iloc[0][alias])
             kpis.append({"label": _label(plan, alias), "value": value if value is not None else 0.0,
                          "formatted_value": format_number(value) if value is not None else _cell(df.iloc[0][alias]),

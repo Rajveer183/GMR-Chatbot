@@ -36,9 +36,83 @@ examples:
       WHERE has_meter_serial AND progress_category IS NOT NULL AND NOT is_replacement
         AND period_start = CURRENT_DATE - 1
 
+  - q: ["Give me the dashboard headlines", "dashboard headline numbers", "home page headlines", "top headline strip"]
+    note: "The home-page strip with the card's labels: Supplied, Installed, SAT meters (+ % of eligible MI, rounded up), PMPM Invoiced, PMPM Collected -- all six columns as display cards, nothing else (no installed-last-day, no stock)."
+    sql: |
+      SELECT total_current_inventory_count AS supplied,
+             total_meter_installations AS installed,
+             total_sat_meters AS sat_meters,
+             CEIL(sat_percent) AS sat_pct_of_eligible_mi,
+             total_pmpm_invoice_done_meters AS pmpm_invoiced,
+             total_pmpm_collection_done_meters AS pmpm_collected
+      FROM public.gold_dashboard_stats_snapshot
+      WHERE singleton
+
+  - q: ["Meter installation headline", "installation module headline", "meter installation card on the home page"]
+    note: "The Meter-Installation module tile: Total installed and installed on the last complete day (name that date)."
+    sql: |
+      SELECT s.total_meter_installations AS total_installed,
+             s.meter_installed_on_last_day AS installed_on_last_day,
+             (SELECT MAX(period_start) FROM public.gold_mi_installation_day_agg
+              WHERE NOT is_replacement AND period_start < (NOW() AT TIME ZONE 'Asia/Kolkata')::date) AS last_day
+      FROM public.gold_dashboard_stats_snapshot s
+      WHERE s.singleton
+
+  - q: ["Supply headline", "supply module headline", "inventory card on the home page"]
+    note: "The Supply module tile: Supplied and Remaining stock."
+    sql: |
+      SELECT total_current_inventory_count AS supplied,
+             total_current_remaining_stock_count AS remaining_stock
+      FROM public.gold_dashboard_stats_snapshot
+      WHERE singleton
+
+  - q: ["O&M headline", "O&M module headline", "O&M card on the home page"]
+    note: "The O&M module tile: Open tickets (every row of the open snapshot) and tickets closed on the last complete day (closed date before today; name that date)."
+    sql: |
+      WITH c AS (SELECT closed_date, SUM(closed_tickets) AS closed
+                 FROM public.gold_om_closed_tickets_day_agg
+                 WHERE closed_date < (NOW() AT TIME ZONE 'Asia/Kolkata')::date
+                 GROUP BY closed_date)
+      SELECT (SELECT SUM(ticket_count) FROM public.gold_om_open_ageing_snapshot) AS open_tickets,
+             (SELECT closed FROM c ORDER BY closed_date DESC LIMIT 1) AS closed_on_last_day,
+             (SELECT MAX(closed_date) FROM c) AS last_day
+
+  - q: ["SAT headline", "SAT module headline", "SAT card on the home page"]
+    note: "The SAT module tile: Total SAT meters and SAT % of eligible MI, rounded UP like the card (94.40 shows as 95)."
+    sql: |
+      SELECT total_sat_meters AS total_sat_meters,
+             CEIL(sat_percent) AS sat_pct_of_eligible_mi,
+             sat_percent AS sat_pct_exact
+      FROM public.gold_dashboard_stats_snapshot
+      WHERE singleton
+
+  - q: ["Revenue headline", "revenue module headline", "revenue card on the home page"]
+    note: "The Revenue module tile in Rs crore: Invoiced, Realized and Overdue over lumpsum + PMPM + cable (latest receivables row per project). Overdue per stream is clamped at 0 before adding, like the card."
+    sql: |
+      SELECT ROUND(SUM(lumpsum_invoiced + pmpm_invoiced + cable_invoiced), 2) AS invoiced_cr,
+             ROUND(SUM(lumpsum_realised + pmpm_realised + cable_realised), 2) AS realized_cr,
+             ROUND(GREATEST(SUM(lumpsum_invoiced - lumpsum_realised - lumpsum_within_timeline), 0)
+                   + GREATEST(SUM(pmpm_invoiced - pmpm_realised - pmpm_within_timeline), 0)
+                   + GREATEST(SUM(cable_invoiced - cable_realised - cable_within_timeline), 0), 2) AS overdue_cr
+      FROM (SELECT r.*, ROW_NUMBER() OVER (PARTITION BY project ORDER BY created_at DESC, id DESC) AS rn
+            FROM public.revenue_receivables r) l
+      WHERE rn = 1
+
+  - q: ["Meter journey headline", "meter journey module headline", "meter journey card on the home page"]
+    note: "The Meter Journey module tile: average days from supply to revenue realization, Consumer vs Non-consumer (DT + feeder), new installations only (NOT is_replacement), one decimal."
+    sql: |
+      SELECT ROUND(SUM(total_journey_days_sum) FILTER (WHERE UPPER(category) = 'CONSUMER')
+                   / NULLIF(SUM(revenue_realized_meter_count) FILTER (WHERE UPPER(category) = 'CONSUMER'), 0), 1)
+               AS consumer_avg_journey_days,
+             ROUND(SUM(total_journey_days_sum) FILTER (WHERE UPPER(category) <> 'CONSUMER')
+                   / NULLIF(SUM(revenue_realized_meter_count) FILTER (WHERE UPPER(category) <> 'CONSUMER'), 0), 1)
+               AS non_consumer_avg_journey_days
+      FROM public.gold_meter_journey_stage_agg
+      WHERE NOT is_replacement
+
   - q: ["Give me a one-line status of the program", "program status", "quick update on the programme", "export today's headline stats", "CXO weekly summary", "Give me installed so far, SAT percentage and remaining stock in one go"]
     suggest: "Give me installed so far, SAT percentage and remaining stock in one go."
-    note: "Headline numbers come from the dashboard stats row (sat_percent = SAT / ELIGIBLE meters). Never compute SAT % from gold_mi_installation_* tables. Invoiced meters = total_lumpsum_invoice_done_meters; PMPM collected = total_pmpm_collection_done_meters."
+    note: "A one-line programme status (not the home-page headline strip -- 'dashboard headlines' is its own example with the strip's six tiles). Headline numbers come from the dashboard stats row (sat_percent = SAT / ELIGIBLE meters). Never compute SAT % from gold_mi_installation_* tables. Invoiced meters = total_lumpsum_invoice_done_meters; PMPM collected = total_pmpm_collection_done_meters."
     sql: |
       SELECT refreshed_at, total_meter_installations AS meters_installed, meter_installed_on_last_day AS installed_last_day,
              total_sat_meters AS sat_meters, sat_percent AS sat_pct, total_current_inventory_count AS meters_supplied,
