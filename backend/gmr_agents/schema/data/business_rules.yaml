@@ -173,6 +173,7 @@ topics:
       - "Lumpsum / PMPM invoiced = FILTER (WHERE has_lumpsum_invoice / has_pmpm_invoice); invoice % = invoiced / Total SAT - never / MI, never add lumpsum and PMPM. 'SAT done not invoiced' = sat_stage IS NOT NULL AND NOT has_lumpsum_invoice (or has_pmpm_invoice)."
       - "Pending: installed not SAT = sat_stage IS NULL; eligible pending = sat_stage IS NULL AND is_sat_eligible (= non-SAT total); not due yet = sat_stage IS NULL AND NOT is_sat_eligible."
       - "'SAT progress' = Total MI, Total SAT, % SAT vs MI and pending. Lagging/behind = lowest % SAT vs MI, not fewest SAT."
+      - "MI vs SAT vs Invoice funnel = installed, SAT done, lumpsum invoiced, PMPM invoiced, plus % lumpsum of SAT and % PMPM of SAT. Lumpsum and PMPM counts are equal today (every batch carries both) -- that is the data."
       - "Stage-wise: WHERE sat_stage IS NOT NULL GROUP BY sat_stage, label 'SAT-' || sat_stage. sat_stage is a tier: never SUM it."
       - "OEM-wise: the snapshot has no oem; use gold_mi_installation_day_agg (no replacement filter) with inventory_category as category, inventory_meter_type, sat_stage, meter_count - Total MI / Total SAT only."
     example:
@@ -287,6 +288,7 @@ topics:
       - "Dashboard card (Receivables summary - Delay analysis), per stream: Invoice Amount (Net) = <stream>_invoiced; Realised = <stream>_realised; Within Timeline = <stream>_within_timeline = UNPAID money that is not yet due; Overdue = invoiced - realised - within_timeline (unpaid and past due). Realised + Within Timeline + Overdue = Invoice Amount. Outstanding (all unpaid) = invoiced - realised = Within Timeline + Overdue; % realised = realised / invoiced x 100. Never 'realised - within_timeline' and never call within_timeline 'realised on time'."
       - "Default answer and 'delay analysis' / 'overdue' / 'invoice vs revenue released': per stream (Lumpsum, PMPM, Cable) plus All streams -- invoice_amount_net, realised, within_timeline, overdue, % realised. A negative overdue means the operator's figures do not add up (within_timeline larger than the unpaid amount): show it and say so."
       - "History/trend/change: every row ORDER BY project, created_at (latest vs previous submission per project). To-date amounts should not fall - flag a decrease as a correction."
+      - "Discom = its projects: PUVVNL = kashi + triveni, DVVNL = agra -- filter LOWER(project) IN (...) for a discom. Project-wise keeps every stream separate (lumpsum, PMPM, cable columns), never one merged amount."
       - "Filed per project only: no category, zone, meter type or date split. Such a question is NOT unanswerable: drop that filter, return the asked stream/measure per project plus Total (the answer writer says the split is not recorded). Never use meter-count tables for money."
     example:
       question: "Lumpsum and PMPM invoiced vs realised project-wise"
@@ -311,10 +313,11 @@ topics:
     keywords: [revenue not realized, revenue not realised, revenue ageing, uncollected, pmpm not collected, outstanding meters, days since sat, oldest sat date, average age, revenue pending ageing]
     tables: [gold_revenue_ageing_snapshot]
     rules:
-      - "public.gold_revenue_ageing_snapshot: SUM(outstanding_count) = SAT-done meters whose batch has no PMPM collection date."
+      - "public.gold_revenue_ageing_snapshot: SUM(outstanding_count) = SAT-done meters whose batch has no PMPM collection date. Every figure is a METER count: say '157,979 meters', never Rs / crore (money is the receivables topic)."
       - "Age = GREATEST((CURRENT_TIMESTAMP AT TIME ZONE 'Asia/Kolkata')::date - sat_date, 0). Bands: <= 30, 31-60, 61-90, 91-120, > 120 days; any custom threshold works."
       - "Average age = SUM(age * n) / SUM(n) with n = SUM(outstanding_count) per sat_date in a subquery; oldest = MIN(sat_date)."
-      - "Breakdowns: place, category (DT label 'DT'), meter_type, sat_date. Not Non-SAT ageing, not rupees (receivables)."
+      - "Breakdowns: place, category (DT label 'DT'), meter_type, sat_date. Not Non-SAT ageing, not rupees (receivables), not the current-stage tables."
+      - "A project / place with no rows has 0 outstanding (its PMPM collection arrived -- Agra today): answer 0 and say why, never 'no data'. Show every band, empty ones as 0."
     example:
       question: "Revenue not realized ageing band-wise"
       sql: |
@@ -440,7 +443,7 @@ topics:
       - "public.gold_inventory_unutilized_stock_snapshot: SUM(stock_count) = received, never installed, never scrapped."
       - "Age = GREATEST(CURRENT_DATE - inventory_date, 0); bands <= 30, 31-60, 61-90, > 90 days; any custom threshold works. An ageing question gets Total plus every band."
       - "Dimensions: project, warehouse (mixed case, e.g. 'Agra_HW' - compare UPPER(warehouse)), oem (UPPER), sku, current_stage ('warehouse','agency','supervisor','technician'), category, meter_type. No zone/circle/division, no date range (as of today)."
-      - "'Less than N days of stock' is the stock_cover topic, not age."
+      - "'Less than N days of stock' is the stock_cover topic, not age. Show every band, empty ones as 0."
       - "A name ending HW / ZW / SWH / Warehouse is a WAREHOUSE filter (LOWER(warehouse) = 'agra_hw'), never a project: 'Agra HW' is warehouse Agra_HW, not project agra."
     example:
       question: "Unused stock ageing warehouse-wise"

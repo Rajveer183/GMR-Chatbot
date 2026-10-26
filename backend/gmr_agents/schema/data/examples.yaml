@@ -268,25 +268,20 @@ examples:
       ORDER BY v.ord
 
   - q: ["receivables summary project wise", "show the receivables summary project wise", "invoice vs revenue released project wise", "overdue amount project wise", "receivables by project"]
-    note: "Per project (latest row each) plus Total, all streams together: Invoice Amount (Net), Realised, Within Timeline, Overdue = invoiced - realised - within_timeline, % realised. Per-stream detail is the per-stream card query. A negative overdue = the operator's figures do not add up -- say so."
+    note: "Per project (latest row each) plus Total, each stream SEPARATE like the card (lumpsum, PMPM, cable: invoiced, realised, overdue = invoiced - realised - within_timeline) -- never one merged amount. A discom = its projects: PUVVNL = kashi + triveni, DVVNL = agra (WHERE LOWER(project) IN (...)). A negative overdue = the operator's figures do not add up -- say so."
     sql: |
-      WITH l AS (
-        SELECT * FROM (SELECT r.*, ROW_NUMBER() OVER (PARTITION BY project ORDER BY created_at DESC, id DESC) AS rn
-                       FROM public.revenue_receivables r) x
-        WHERE rn = 1),
-      p AS (
-        SELECT CASE WHEN GROUPING(project) = 1 THEN 'Total' ELSE UPPER(project) END AS project,
-               GROUPING(project) AS is_total,
-               SUM(COALESCE(lumpsum_invoiced, 0) + COALESCE(pmpm_invoiced, 0) + COALESCE(cable_invoiced, 0)) AS inv,
-               SUM(COALESCE(lumpsum_realised, 0) + COALESCE(pmpm_realised, 0) + COALESCE(cable_realised, 0)) AS rea,
-               SUM(COALESCE(lumpsum_within_timeline, 0) + COALESCE(pmpm_within_timeline, 0) + COALESCE(cable_within_timeline, 0)) AS wt
-        FROM l
-        GROUP BY ROLLUP(project))
-      SELECT project, ROUND(inv, 2) AS invoice_amount_net_cr, ROUND(rea, 2) AS realised_cr,
-             ROUND(wt, 2) AS within_timeline_cr, ROUND(inv - rea - wt, 2) AS overdue_cr,
-             ROUND(rea * 100.0 / NULLIF(inv, 0), 2) AS pct_realised
-      FROM p
-      ORDER BY is_total, project
+      SELECT CASE WHEN GROUPING(project) = 1 THEN 'Total' ELSE UPPER(project) END AS project,
+             SUM(lumpsum_invoiced) AS lumpsum_invoiced_cr, SUM(lumpsum_realised) AS lumpsum_realised_cr,
+             SUM(lumpsum_invoiced - lumpsum_realised - lumpsum_within_timeline) AS lumpsum_overdue_cr,
+             SUM(pmpm_invoiced) AS pmpm_invoiced_cr, SUM(pmpm_realised) AS pmpm_realised_cr,
+             SUM(pmpm_invoiced - pmpm_realised - pmpm_within_timeline) AS pmpm_overdue_cr,
+             SUM(cable_invoiced) AS cable_invoiced_cr, SUM(cable_realised) AS cable_realised_cr,
+             SUM(cable_invoiced - cable_realised - cable_within_timeline) AS cable_overdue_cr
+      FROM (SELECT r.*, ROW_NUMBER() OVER (PARTITION BY project ORDER BY created_at DESC, id DESC) AS rn
+            FROM public.revenue_receivables r) l
+      WHERE rn = 1
+      GROUP BY ROLLUP (project)
+      ORDER BY GROUPING(project) DESC, project
 
   - q: ["Cable revenue realized for consumer meters", "lumpsum invoiced for DT meters", "pmpm realised zone wise", "receivables category wise", "cable realised for feeder meters"]
     note: "Receivables are filed per project only -- no category, meter type or zone split. Drop that filter and give the asked stream per project plus Total; the answer opens by saying the split is not recorded."
@@ -436,6 +431,36 @@ examples:
                    / NULLIF(SUM(meter_count) FILTER (WHERE is_sat_eligible), 0), 2) AS sat_pct_vs_eligible
       FROM public.gold_mi_sat_invoice_snapshot
       WHERE LOWER(project) = 'agra'
+
+  - q: ["MI vs SAT vs invoice funnel", "invoice funnel project wise", "installed to SAT to invoiced funnel", "lumpsum and PMPM invoiced vs SAT"]
+    note: "The funnel card: installed, SAT done, lumpsum invoiced and PMPM invoiced, each invoice count also as % of SAT done (never of installed, never summed). Drop the project ROLLUP when no breakdown is asked. Never exclude a meter type (OTHER-Consumer_meter, NULL) the question did not."
+    sql: |
+      SELECT CASE WHEN GROUPING(project) = 1 THEN 'Total' ELSE UPPER(project) END AS project,
+             SUM(meter_count) AS installed,
+             COALESCE(SUM(meter_count) FILTER (WHERE sat_stage IS NOT NULL), 0) AS sat_done,
+             COALESCE(SUM(meter_count) FILTER (WHERE has_lumpsum_invoice), 0) AS lumpsum_invoiced,
+             ROUND(COALESCE(SUM(meter_count) FILTER (WHERE has_lumpsum_invoice), 0) * 100.0
+                   / NULLIF(SUM(meter_count) FILTER (WHERE sat_stage IS NOT NULL), 0), 2) AS lumpsum_pct_of_sat,
+             COALESCE(SUM(meter_count) FILTER (WHERE has_pmpm_invoice), 0) AS pmpm_invoiced,
+             ROUND(COALESCE(SUM(meter_count) FILTER (WHERE has_pmpm_invoice), 0) * 100.0
+                   / NULLIF(SUM(meter_count) FILTER (WHERE sat_stage IS NOT NULL), 0), 2) AS pmpm_pct_of_sat
+      FROM public.gold_mi_sat_invoice_snapshot
+      GROUP BY ROLLUP (project)
+      ORDER BY GROUPING(project) DESC, installed DESC
+
+  - q: ["Revenue not realized ageing project wise", "revenue not realized ageing for Agra", "revenue ageing by project", "uncollected PMPM meters by age project wise"]
+    note: "Ageing = public.gold_revenue_ageing_snapshot (SAT done, PMPM not collected), never the current-stage tables. A project with no rows has 0 such meters (its PMPM collection arrived -- Agra today): list it as 0, never 'no data'. These are METER counts -- never Rs / crore / 'revenue of 157,979'."
+    sql: |
+      SELECT p.project, COALESCE(SUM(s.outstanding_count), 0) AS meters_revenue_not_realized,
+             COALESCE(SUM(s.outstanding_count) FILTER (WHERE GREATEST((CURRENT_TIMESTAMP AT TIME ZONE 'Asia/Kolkata')::date - s.sat_date, 0) <= 30), 0) AS days_0_30,
+             COALESCE(SUM(s.outstanding_count) FILTER (WHERE GREATEST((CURRENT_TIMESTAMP AT TIME ZONE 'Asia/Kolkata')::date - s.sat_date, 0) BETWEEN 31 AND 60), 0) AS days_31_60,
+             COALESCE(SUM(s.outstanding_count) FILTER (WHERE GREATEST((CURRENT_TIMESTAMP AT TIME ZONE 'Asia/Kolkata')::date - s.sat_date, 0) BETWEEN 61 AND 90), 0) AS days_61_90,
+             COALESCE(SUM(s.outstanding_count) FILTER (WHERE GREATEST((CURRENT_TIMESTAMP AT TIME ZONE 'Asia/Kolkata')::date - s.sat_date, 0) BETWEEN 91 AND 120), 0) AS days_91_120,
+             COALESCE(SUM(s.outstanding_count) FILTER (WHERE GREATEST((CURRENT_TIMESTAMP AT TIME ZONE 'Asia/Kolkata')::date - s.sat_date, 0) > 120), 0) AS days_120_plus
+      FROM (VALUES (1, 'Total', NULL), (2, 'AGRA', 'agra'), (3, 'KASHI', 'kashi'), (4, 'TRIVENI', 'triveni')) AS p(ord, project, key)
+      LEFT JOIN public.gold_revenue_ageing_snapshot s ON p.key IS NULL OR LOWER(s.project) = p.key
+      GROUP BY p.ord, p.project
+      ORDER BY p.ord
 
   - q: ["Non-SAT ageing for feeder meters", "Non-SAT ageing", "non sat ageing for consumer meters", "non-SAT ageing band wise", "eligible meters pending SAT by age"]
     note: "The card: one row per band in order (empty bands as 0) plus Total, over the whole scope -- no project split unless asked. Filters go in the ON clause."

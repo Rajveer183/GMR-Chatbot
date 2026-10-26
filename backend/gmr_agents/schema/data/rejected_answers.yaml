@@ -55,3 +55,13 @@ rejected:
   - {trace_id: 0ac59fd1, question: "Meter journey avg time for meters installed in 2025", reason: "stage averages without total meters"}
   - {trace_id: 1fcbfe19, question: "Meter journey avg time for consumer meters in Agra", reason: "stage averages without total meters"}
   - {trace_id: ffc4c3d1, question: "Meters current stage for revenue not realized for consumer meters", reason: "dropped OTHER-Consumer_meter (1,011,742 instead of 1,011,743)"}
+  - {trace_id: 8b23682a, question: "MI vs SAT vs invoice funnel", reason: "funnel without % lumpsum / % PMPM of SAT"}
+  - {trace_id: 623999a9, question: "Invoice funnel project wise", reason: "funnel without % lumpsum / % PMPM of SAT"}
+  - {trace_id: 39f9b213, question: "MI vs SAT vs invoice funnel for consumer meters", reason: "funnel without % lumpsum / % PMPM of SAT"}
+  - {trace_id: fd8e8664, question: "Invoice funnel zone wise in Triveni", reason: "dropped OTHER / NULL meter types (44 meters)"}
+  - {trace_id: d5118648, question: "Invoice vs revenue released project wise", reason: "lumpsum, PMPM and cable merged into one amount"}
+  - {trace_id: 523f6758, question: "Lumpsum and PMPM within timeline for PUVVNL", reason: "PUVVNL not filtered (Agra/DVVNL included)"}
+  - {trace_id: e82e6ecd, question: "Lumpsum and PMPM within timeline for PUVVNL", reason: "PUVVNL not filtered (Agra/DVVNL included)"}
+  - {trace_id: dadefd75, question: "Revenue not realized ageing project wise", reason: "read the current-stage table (1,019,165 instead of 157,979)"}
+  - {trace_id: 0dc52eec, question: "Revenue not realized ageing for Agra", reason: "'data unavailable' instead of 0 meters"}
+  - {trace_id: ea70d387, question: "Revenue not realized ageing for Agra", reason: "meter counts reported as Rs crore"}

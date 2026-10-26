@@ -130,6 +130,11 @@ _KPI3_CARD_RE = re.compile(r"(?<!daily )(?<!weekly )\bproductivity trend\b|\bmon
 _KPI3_RE = re.compile(_KPI3_CARD_RE.pattern + r"|\b(?:average|avg\.?) active technicians\b", re.I)
 _SUPPLY_CARD_RE = re.compile(r"\b(?:supply|inventory) utili[sz]ation\b|\butili[sz]ation rate\b|\bmi pace\b|"
                              r"\bpace vs\.? stock\b|\bstock availa?bi?li?ty\b", re.I)
+_DISCOM_PROJECTS = {"puvvnl": ["kashi", "triveni"], "dvvnl": ["agra"]}
+_DROPPED_TYPE_RE = re.compile(r"meter_type\s*(?:<>|!=)\s*'other-consumer_meter'|"
+                              r"meter_type\s+not\s+in\s*\([^)]*'other-consumer_meter'|meter_type\s+is\s+not\s+null")
+_REVENUE_AGEING_RE = re.compile(r"\brevenue\s+(?:not|un)[- ]?reali[sz]ed\b.*\b(?:ageing|aging|aged|age|old|days)\b|"
+                                r"\brevenue\s+ageing\b", re.I)
 _WAREHOUSE_RE = re.compile(r"\b(?!(?:a|an|the|each|every|per|by|any|one|this|that|which|all|some)\b)[a-z]+[ _-]?"
                            r"(?:hw|zw|swh|warehouse)\b", re.I)
 
@@ -158,7 +163,9 @@ def check(question: str, sql_texts: list[str], columns: set[str] | None = None) 
         for key in named - named_ok:
             if not any(a in low for a in table[key]) and key not in low:
                 problems.append(f"the question names {label} '{key}' but the SQL never uses it")
-        # Leak: an equality / IN filter on a value the question never named.
+        # Leak: an equality / IN filter on a value the question never named (a named discom names its projects).
+        if column == "project":
+            named = named | {p for d, ps in _DISCOM_PROJECTS.items() if f" {d} " in _words(question) for p in ps}
         leaked = _filtered(sql, list(table)) - named
         # A filter on every value of the dimension (IN ('agra','kashi','triveni')) is a breakdown, not a leak.
         if leaked and len(leaked) < len(table) and not named:
@@ -303,6 +310,28 @@ def check(question: str, sql_texts: list[str], columns: set[str] | None = None) 
     if _WAREHOUSE_RE.search(question) and (cols is None or "warehouse" in cols) and "warehouse" not in low:
         problems.append("the question names a warehouse (a name ending HW / ZW / SWH / Warehouse) -- filter "
                         "LOWER(warehouse) = 'agra_hw' (etc.), not the project")
+
+    # revenue_receivables has no discom column: a discom is its projects. Live 26 Oct: 'within timeline for PUVVNL'
+    # summed all three projects (Agra is DVVNL).
+    if "revenue_receivables" in low:
+        for discom, projects in _DISCOM_PROJECTS.items():
+            if f" {discom} " in _words(question) and not all(re.search(rf"'{p}'", low) for p in projects):
+                problems.append(f"{discom.upper()} = project(s) {', '.join(projects)} -- revenue_receivables has no "
+                                f"discom column, so filter LOWER(project) IN ({', '.join(repr(p) for p in projects)})")
+
+    # A meter-type exclusion nobody asked for. Live 26 Oct: 'invoice funnel zone wise in Triveni' added
+    # meter_type <> 'OTHER-Consumer_meter' AND meter_type IS NOT NULL and lost 44 meters.
+    # (On the productivity cubes meter_type IS NOT NULL picks the roll-up level, not an exclusion.)
+    if (_DROPPED_TYPE_RE.search(low) and "productivity" not in low
+            and not re.search(r"\b(other|unknown|unmapped|blank|null|excluding|exclude|without|except)\b", question, re.I)):
+        problems.append("the SQL drops meter types the question never excluded (OTHER-Consumer_meter / NULL meter_type) -- "
+                        "remove that filter; every meter counts")
+
+    # 'Revenue not realized ageing' is the SAT-done-PMPM-uncollected snapshot. Live 26 Oct: 'revenue not realized
+    # ageing project wise' read the current-stage table (1,019,165 instead of 157,979).
+    if _REVENUE_AGEING_RE.search(question) and "gold_revenue_ageing_snapshot" not in low:
+        problems.append("revenue not realized ageing reads public.gold_revenue_ageing_snapshot (SUM(outstanding_count), "
+                        "age from sat_date) -- not the current-stage tables")
 
     # Time breakdown asked but dropped: 'productivity weekly in august' once came back as one
     # monthly figure. An average ('daily average', 'avg monthly') is not a breakdown.

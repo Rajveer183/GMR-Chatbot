@@ -46,3 +46,35 @@ def test_warehouse_name_read_as_project_is_rejected():
 def test_generic_warehouse_wording_is_not_a_name():
     assert not warehouse_problems("Stock ageing for each warehouse in agra", PROJECT_AGEING)
     assert not warehouse_problems("Stock ageing for agra project", PROJECT_AGEING)
+
+
+DROPPED = ("SELECT zone, SUM(meter_count) FROM public.gold_mi_sat_invoice_snapshot WHERE LOWER(project) = 'triveni' "
+           "AND meter_type IS NOT NULL AND meter_type != 'OTHER-Consumer_meter' GROUP BY zone")
+STAGE = "SELECT project, SUM(meter_count) FROM public.gold_meter_revenue_pending_stage_snapshot GROUP BY project"
+AGEING = "SELECT project, SUM(outstanding_count) FROM public.gold_revenue_ageing_snapshot GROUP BY project"
+
+
+def test_unasked_meter_type_exclusion_is_rejected():
+    # live 26 Oct: 'invoice funnel zone wise in Triveni' dropped OTHER / NULL meter types (44 meters)
+    assert [p for p in check("Invoice funnel zone wise in Triveni", [DROPPED]) if "drops meter types" in p]
+    assert not [p for p in check("Invoice funnel zone wise in Triveni excluding other meters", [DROPPED])
+                if "drops meter types" in p]
+
+
+def test_revenue_ageing_reads_the_ageing_snapshot():
+    # live 26 Oct: answered from the current-stage table (1,019,165 instead of 157,979)
+    assert [p for p in check("Revenue not realized ageing project wise", [STAGE]) if "ageing reads" in p]
+    assert not [p for p in check("Revenue not realized ageing project wise", [AGEING]) if "ageing reads" in p]
+    assert not [p for p in check("Revenue not realized meters project wise", [STAGE]) if "ageing reads" in p]
+
+
+ALL_PROJECTS = ("SELECT SUM(lumpsum_within_timeline) FROM (SELECT r.*, ROW_NUMBER() OVER (PARTITION BY project "
+                "ORDER BY created_at DESC) AS rn FROM public.revenue_receivables r) l WHERE rn = 1")
+PUVVNL = ALL_PROJECTS + " AND LOWER(project) IN ('kashi', 'triveni')"
+
+
+def test_discom_on_receivables_becomes_its_projects():
+    # live 26 Oct: 'within timeline for PUVVNL' summed Agra (DVVNL) too
+    assert [p for p in check("Lumpsum within timeline for PUVVNL", [ALL_PROJECTS]) if "no discom column" in p]
+    assert not [p for p in check("Lumpsum within timeline for PUVVNL", [PUVVNL])
+                if "no discom column" in p or "does not mention" in p]
