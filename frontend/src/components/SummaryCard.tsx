@@ -17,13 +17,26 @@ interface SummaryCardProps {
   lang?: string;
 }
 
+// A figure worth picking out in a summary: grouped (4,214,678 / 42,14,678), decimal (3.36),
+// a share or Indian unit (97.5% / 16.45L / 1.2Cr / 4.30 million), or a bare count of five or
+// more digits. Dates and day counts ('27 Sep 2026', 'last 30 days') stay plain.
+const FIGURE_RE = /(\b\d{1,3}(?:,\d{2,3})+(?:\.\d+)?\b(?:\s?(?:%|L\b|Cr\b|lakh|crore|million))?|\b\d+\.\d+\b(?:\s?(?:%|L\b|Cr\b|lakh|crore|million))?|\b\d+\s?%|\b\d{5,}\b)/g;
+
+function highlightFigures(text: string, keyPrefix: string): React.ReactNode[] {
+  return text.split(FIGURE_RE).map((part, idx) =>
+    idx % 2 === 1 ? <strong key={`${keyPrefix}-${idx}`} className="summary-figure">{part}</strong>
+      : <React.Fragment key={`${keyPrefix}-${idx}`}>{part}</React.Fragment>
+  );
+}
+
 function renderInlineMarkdown(text: string): React.ReactNode[] {
   const parts = text.split(/(\*\*[^*]+\*\*)/g);
-  return parts.map((part, idx) => {
+  return parts.flatMap((part, idx): React.ReactNode[] => {
     if (part.startsWith("**") && part.endsWith("**")) {
-      return <strong key={idx}>{part.slice(2, -2)}</strong>;
+      return [<strong key={idx}>{part.slice(2, -2)}</strong>];
     }
-    return <React.Fragment key={idx}>{part}</React.Fragment>;
+    // The answer's key figures stand out the way the dashboard's tiles do.
+    return highlightFigures(part, String(idx));
   });
 }
 

@@ -130,6 +130,18 @@ def split_column(df: Any, x: str, ys: list[str]) -> str | None:
     return None
 
 
+def card_measure(kpi: str, df: Any, ys: list[str]) -> list[str]:
+    """A productivity card plots productivity: when the rows carry a productivity column the planner
+    left out of its chart, that column is the bar. Seen live: 'MI productivity per team by project'
+    stacked installations on active technicians while productivity sat only in the table."""
+    if kpi not in ("mi_productivity", "monthly_productivity", "om_productivity"):
+        return ys
+    if any(re.search(r"productivity", str(y), re.I) for y in ys):
+        return ys
+    prod = [c for c in df.columns if re.search(r"productivity", str(c), re.I) and pd.api.types.is_numeric_dtype(df[c])]
+    return prod[:1] or ys
+
+
 def auto_spec(kpi: str, df: Any) -> dict | None:
     """The card's chart when the planner drew none: x = the first label column, y = the card's own
     series (Consumer / DT / Feeder, age bands, Burnt / Faulty / Others, OK / Failed / Other), else
@@ -168,12 +180,70 @@ def _donut(cats: list[str], data: list[float]) -> tuple[list[str], list[float]]:
             [p[1] for p in head] + [sum(p[1] for p in rest)])
 
 
+def _merge_repeats(cats: list[str], series: list[dict]) -> list[str]:
+    """One bar per category. Seen live: MI progress by project came back as a consumer row, a DT row,
+    a feeder row and a subtotal row per project -- AGRA drawn four times. Per repeated category the
+    row that holds the whole (each value at least the rest of the group's sum) is kept, else the rows
+    are added."""
+    if len(set(cats)) == len(cats):
+        return cats
+    order = list(dict.fromkeys(cats))
+    groups = {c: [i for i, x in enumerate(cats) if x == c] for c in order}
+    picked: dict[str, list[float]] = {}
+    for c, rows in groups.items():
+        cols = [[s["data"][i] for i in rows] for s in series]
+        whole = next((r for r in range(len(rows))
+                      if all(col[r] >= sum(col) - col[r] - 1e-6 * max(1.0, abs(sum(col))) for col in cols)), None)
+        picked[c] = [col[whole] if whole is not None else sum(col) for col in cols]
+    for j, s in enumerate(series):
+        s["data"] = [picked[c][j] for c in order]
+    return order
+
+
+def _drop_sum_series(bars: list[dict]) -> list[dict]:
+    """A series that is exactly the sum of the others (Meters Installed beside Consumer / DT /
+    Feeder) is the total the dashboard shows in its tooltip, not a series. Seen live: the daily
+    installs area drew it over its own parts, both in navy."""
+    if len(bars) < 3:
+        return bars
+    for s in bars:
+        rest = [o for o in bars if o is not s]
+        if all(abs(v - sum(o["data"][i] for o in rest)) <= 0.005 * max(1.0, abs(v)) for i, v in enumerate(s["data"])):
+            return rest
+    return bars
+
+
+_BAND_NAME_RE = re.compile(r"^(?:age|days?|band|bucket)?[_\s-]*(\d+)[_\s-]*(?:(?:to|-|_)[_\s-]*(\d+)|(plus|\+|above))?"
+                           r"[_\s-]*(?:days?)?$", re.I)
+
+
+def _band_order(bars: list[dict]) -> list[dict]:
+    """Age bands as the dashboard shows them: youngest first, named '91-120 days' / '120+ days'.
+    Seen live: the split by age_key gave the legend 'age_120_plus', 'age_91_120' -- oldest band
+    at the bottom of every stack, under its raw key."""
+    parsed = [_BAND_NAME_RE.match(s["name"].strip()) for s in bars]
+    if len(bars) < 2 or not all(parsed):
+        return bars
+    for s, m in zip(bars, parsed):
+        lo, hi = m.group(1), m.group(2)
+        s["name"] = f"{lo}-{hi} days" if hi else f"{lo}+ days" if m.group(3) else s["name"]
+    return [s for _, s in sorted(zip(parsed, bars), key=lambda p: (int(p[0].group(1)), p[0].group(2) is None))]
+
+
 def shape(kpi: str, planned: str, cats: list[str], series: list[dict], x_alias: Any) -> dict:
     """The dashboard card's chart for these rows: {type, x, series, labels, rates?}.
     `series` are the built series ({name, data, type?}); rates leave the bars."""
+    cats = _merge_repeats(cats, series)
     rates = [s for s in series if _RATE_RE.search(s["name"]) or s.get("type") == "line"]
     bars = [s for s in series if s not in rates] or rates
     rates = [s for s in rates if s not in bars]
+    # A productivity card plots productivity itself (the dashboard's comparison chart); the
+    # installs / technicians behind it stay in the table. Seen live: installs were the bars and
+    # productivity only a label on top.
+    prod = [s for s in rates if re.search(r"productivity", s["name"], re.I)]
+    if kpi in ("mi_productivity", "monthly_productivity", "om_productivity") and prod:
+        bars, rates = prod[:1], []
+    bars = _band_order(_drop_sum_series(bars))
     for s in bars + rates:
         s.pop("type", None)
     n, k = len(cats), len(bars)
@@ -203,7 +273,9 @@ def shape(kpi: str, planned: str, cats: list[str], series: list[dict], x_alias: 
             ctype = "horizontal_bar" if horizontal else "bar"
 
     view = f"{kpi}_{'geo' if geo else 'stage'}"
-    labels = ("none" if kpi in _NO_LABELS or view in _NO_LABELS
+    # A single productivity bar keeps its value: the dashboard drops labels to avoid crowding its
+    # stacked productivity / installs / technicians bars, which a lone bar does not have.
+    labels = ("none" if (kpi in _NO_LABELS and k > 1) or view in _NO_LABELS
               else "total" if (kpi in _TOTAL_LABELS or view in _TOTAL_LABELS) and k > 1
               else "segments")
     return {"type": ctype, "x": cats, "series": bars, "labels": labels, "rates": rates}

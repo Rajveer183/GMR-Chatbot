@@ -4,6 +4,7 @@ import { SummaryCard } from "./SummaryCard";
 import { MetricCard } from "./MetricCard";
 import { ChartCard } from "./ChartCard";
 import { ChartVisualization } from "./ChartVisualization";
+import { DASHBOARD_CARDS } from "./charts/dashboardPalette";
 import { ExpandableChartModal } from "./ExpandableChartModal";
 import { ResultTable } from "./ResultTable";
 import { InsightList } from "./InsightList";
@@ -96,7 +97,8 @@ export const ResultRenderer: React.FC<ResultRendererProps> = ({ result, onFollow
               <ChartCard
                 key={chart.id}
                 title={chart.display_title || chart.title}
-                subtitle={chart.display_description || chart.description}
+                subtitle={chart.display_description || chart.description || (chart.dashboard && DASHBOARD_CARDS[chart.dashboard]
+                  ? uiText(lang, "dashboardView", { card: DASHBOARD_CARDS[chart.dashboard] }) : undefined)}
                 onExpand={() => setExpandedChart(chart)}
               >
                 <ChartVisualization chart={chart} height={340} onPointClick={drilldownHandler(chart)} />

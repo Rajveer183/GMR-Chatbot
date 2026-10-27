@@ -809,6 +809,10 @@ def _build_chart(plan: dict, df: pd.DataFrame) -> dict | None:
         return None
     x, group = chart.get("x"), chart.get("group")
     ys = [y for y in (chart.get("y") or []) if y in df.columns]
+    if on_card:
+        measure = dashboard_charts.card_measure(card, df, ys)
+        if measure != ys:
+            ys, chart = measure, {**chart, "y2": []}
     if on_card and not group and len(ys) == 1 and x in df.columns:
         group = dashboard_charts.split_column(df, x, ys)
     y2 = [y for y in (chart.get("y2") or []) if y in df.columns and y not in ys]
@@ -902,6 +906,20 @@ def _blocks(plan: dict, result: dict) -> dict:
             kpis.append({"label": _label(plan, alias), "value": value if value is not None else 0.0,
                          "formatted_value": format_number(value) if value is not None else _cell(df.iloc[0][alias]),
                          "unit": None})
+    # A breakdown with a 'Total' row leads with that row's figures as cards -- the dashboard's
+    # headline tiles over its charts (the figures are the query's own, nothing is derived).
+    if not kpis and len(df) > 1:
+        labels = [c for c in df.columns if not pd.api.types.is_numeric_dtype(df[c])]
+        total = df[df[labels].apply(lambda col: col.astype(str).str.strip().str.lower()
+                                    .isin({"total", "grand total"})).any(axis=1)] if labels else df.iloc[0:0]
+        if len(total) == 1:
+            row = total.iloc[0]
+            for alias in [c for c in df.columns if c not in labels and not _RAW_COL_RE.search(str(c))][:4]:
+                value = _number(row[alias])
+                if value is not None:
+                    kpis.append({"label": f"Overall {_label(plan, alias)}" if "total" not in _label(plan, alias).lower()
+                                 else _label(plan, alias), "value": value, "formatted_value": format_number(value),
+                                 "unit": None})
     built = _build_chart(plan, df)
     charts = [built] if built else []
     tables = []

@@ -37,11 +37,23 @@ def main() -> None:
     sys.stdout.reconfigure(encoding="utf-8")
     ap = argparse.ArgumentParser()
     ap.add_argument("--workers", type=int, default=2)
+    ap.add_argument("--misses", action="store_true",
+                    help="re-ask only the questions the saved results missed (e.g. 'AI busy' answers); keep the rest")
     args = ap.parse_args()
     bank = yaml.safe_load(open(os.path.join(HERE, "dashboard_chart_questions.yaml"), encoding="utf-8"))["modules"]
     cases = [{**c, "module": m} for m, cs in bank.items() for c in cs]
+    saved_path = os.path.join(HERE, "results", "dashboard_charts.json")
+    kept: dict[str, dict] = {}
+    if args.misses and os.path.exists(saved_path):
+        for r in json.load(open(saved_path, encoding="utf-8")):
+            case = next((c for c in cases if c["q"] == r["q"]), None)
+            # re-checked against the bank as it is now (expectations may have been corrected)
+            if case and r["got"] in case["want"] and r["tag"] == case["kpi"]:
+                kept[r["q"]] = {**r, **case, "ok_type": True, "ok_kpi": True}
     with ThreadPoolExecutor(args.workers) as pool:
-        out = list(pool.map(ask, cases))
+        asked = dict(zip([c["q"] for c in cases if c["q"] not in kept],
+                         pool.map(ask, [c for c in cases if c["q"] not in kept])))
+    out = [kept.get(c["q"]) or asked[c["q"]] for c in cases]
     module = None
     for r in out:
         if r["module"] != module:

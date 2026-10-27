@@ -15,6 +15,7 @@ const en = {
   translating: "Translating…",
   translationFailed: "Translation unavailable — showing the original answer.",
   drillDown: "Tell me about {x}",
+  dashboardView: "As on the dashboard: {card}",
   copy: "Copy",
   copyAll: "Copy all",
   copied: "Copied",
@@ -159,6 +160,7 @@ const hinglish: Strings = {
 const hi: Strings = {
   summary: "सारांश", keyMetrics: "मुख्य मीट्रिक्स", insights: "इनसाइट्स", followups: "सुझाए गए अगले प्रश्न",
   resultPreview: "परिणाम पूर्वावलोकन", warnings: "चेतावनियाँ", interpretedAs: "इस रूप में समझा गया:",
+  dashboardView: "डैशबोर्ड जैसा: {card}",
   translating: "अनुवाद हो रहा है…", translationFailed: "अनुवाद उपलब्ध नहीं है — मूल उत्तर दिखाया जा रहा है।",
   drillDown: "{x} के बारे में बताइए", copy: "कॉपी", copyAll: "सब कॉपी करें", copied: "कॉपी हो गया",
   play: "सुनें", pause: "रोकें", loadingAudio: "लोड हो रहा है...",

@@ -103,6 +103,28 @@ const KPI_OVERRIDES: Record<string, Record<string, string>> = {
   meter_stage: METER_STAGE_COLORS,
 };
 
+/** The dashboard card each `chart.dashboard` tag reproduces, by its name on the dashboard. */
+export const DASHBOARD_CARDS: Record<string, string> = {
+  mi_progress: "MI-Progress",
+  mi_productivity: "MI-Productivity per team",
+  monthly_productivity: "Monthly Productivity trend",
+  meter_replacement: "Meter Replacement",
+  supply_utilization: "Supply utilization rate",
+  mi_pace_stock: "MI pace Vs Stock availability",
+  stock_ageing: "Un-utilized stock ageing",
+  mi_vs_sat: "MI Vs SAT-Progress",
+  sat_invoice_funnel: "MI vs SAT vs Invoice Funnel",
+  non_sat_ageing: "Non-SAT ageing",
+  revenue_ageing: "Revenue not realized ageing",
+  meter_journey: "Meters Journey Avg time",
+  meter_stage: "Meters Current Stage",
+  om_active_ageing: "O&M Active Ticket Ageing",
+  om_escalated: "O&M Escalated to Discom",
+  om_productivity: "O&M-Productivity per team",
+  om_closed: "O&M Ticket Closed Analysis",
+  hhu_reading: "HHU Reading Trend",
+};
+
 /** chartUtils.js getColor: the key's fixed colour, else the palette slot for its position. */
 export function getColor(key: string, index: number): string {
   const k = key.toLowerCase().trim();

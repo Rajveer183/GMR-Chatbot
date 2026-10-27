@@ -1326,11 +1326,18 @@ button {
 .chart-plot,
 .chat-chart-plot {
   width: 100%;
-  /* Matches the height={340} prop ChartVisualization is actually mounted
-     with (ResultRenderer.tsx) -- a taller CSS box than the chart renders at
-     just leaves dead space under it. */
-  height: 340px;
+  /* At least the height={340} prop ChartVisualization is mounted with
+     (ResultRenderer.tsx); horizontal bars grow by 30px a row past that, and a
+     fixed height let a 12-row chart spill over the result table below. */
+  height: auto;
   min-height: 340px;
+}
+
+/* Key figures in the summary, picked out like the dashboard's tile numbers. */
+.summary-figure {
+  font-weight: 700;
+  color: var(--accent);
+  font-variant-numeric: tabular-nums;
 }
 
 .chart-expand-btn {

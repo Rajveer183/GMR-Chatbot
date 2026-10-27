@@ -32,7 +32,7 @@
  */
 import type { ApexOptions } from "apexcharts";
 import type { AIChartSpec } from "../api/client";
-import { DV, MONO, axisNumber, fullNumber, seriesColour, truncate } from "./charts/dataviz";
+import { DV, MONO, axisNumber, fullNumber, niceAxis, seriesColour, truncate } from "./charts/dataviz";
 import { canonicalKey, dashboardColour, getContrastText } from "./charts/dashboardPalette";
 
 // Kept for callers/tests that refer to the categorical palette by this name.
@@ -673,16 +673,20 @@ function dashboardOptions(
         },
       },
     },
-    fill: {
-      type: "gradient",
-      gradient: {
-        type: horizontal ? "horizontal" : "vertical",
-        shadeIntensity: 0,
-        opacityFrom: horizontal ? 0.8 : 1,
-        opacityTo: horizontal ? 1 : 0.7,
-        stops: [0, 100],
-      },
-    },
+    // Glossy gradient on single / side-by-side bars; a stack is solid -- ApexCharts runs the
+    // gradient per segment, which washed a tall bottom segment out to pink at its top.
+    fill: series.length > 1 && !grouped
+      ? { type: "solid", opacity: 0.95 }
+      : {
+          type: "gradient",
+          gradient: {
+            type: horizontal ? "horizontal" : "vertical",
+            shadeIntensity: 0,
+            opacityFrom: horizontal ? 0.8 : 1,
+            opacityTo: horizontal ? 1 : 0.7,
+            stops: [0, 100],
+          },
+        },
     stroke: { show: true, width: 1, colors: palette },
     grid: {
       borderColor: DV.grid,
@@ -718,8 +722,8 @@ function dashboardOptions(
       axisTicks: { show: false },
     },
     yaxis: {
-      // Room past the longest stack so its total / rate label is never clipped.
-      ...(showTotal && maxTotal > 0 ? { max: maxTotal * (horizontal ? 1.15 : 1.12), min: 0 } : {}),
+      // Room past the longest stack so its total / rate label is never clipped, on round ticks.
+      ...(showTotal && maxTotal > 0 ? { ...niceAxis(maxTotal * (horizontal ? 1.15 : 1.12)), min: 0 } : {}),
       labels: {
         style: DASH_AXIS,
         maxWidth: horizontal ? 150 : 90,

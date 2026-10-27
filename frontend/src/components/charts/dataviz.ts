@@ -42,8 +42,19 @@ export function axisNumber(value: number, unit?: string): string {
   let text: string;
   if (abs >= 10000000) text = `${(value / 10000000).toFixed(1)}Cr`;
   else if (abs >= 100000) text = `${(value / 100000).toFixed(2)}L`;
-  else text = value.toLocaleString("en-IN", { maximumFractionDigits: 2 });
+  else text = value.toLocaleString("en-IN", { maximumFractionDigits: abs >= 1000 ? 0 : 2 });
   return unit === "%" ? `${text}%` : text;
+}
+
+/** Axis top past `value` on a round step (1 / 2 / 2.5 / 5 x 10^n), about five ticks: the
+ * dashboard's 0 / 10,000 / 20,000 ... instead of 0 / 9,882.66 / 19,765.31. */
+export function niceAxis(value: number): { max: number; tickAmount: number } {
+  if (!(value > 0)) return { max: 1, tickAmount: 1 };
+  const raw = value / 5;
+  const mag = Math.pow(10, Math.floor(Math.log10(raw)));
+  const step = [1, 2, 2.5, 5, 10].map((m) => m * mag).find((s) => s >= raw) ?? 10 * mag;
+  const ticks = Math.ceil(value / step);
+  return { max: ticks * step, tickAmount: ticks };
 }
 
 export function truncate(text: string, max: number): string {

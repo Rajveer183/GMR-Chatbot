@@ -69,11 +69,67 @@ def test_dates_are_columns_then_area_past_25_points():
 
 
 def test_rates_leave_the_bars():
+    out = dc.shape("supply_utilization", "combo", ["AGRA", "KASHI"],
+                   [s("Installed", [500, 400]), {**s("Utilization Rate", [97.2, 96.9]), "type": "line"}], "project")
+    assert [x["name"] for x in out["series"]] == ["Installed"]
+    assert [x["name"] for x in out["rates"]] == ["Utilization Rate"] and "type" not in out["rates"][0]
+
+
+def test_a_productivity_card_plots_productivity():
+    # live: installs were the bars and productivity only a label on top
     out = dc.shape("mi_productivity", "combo", ["AGRA", "KASHI"],
                    [s("Installations", [500, 400]), {**s("Productivity", [3.2, 2.9]), "type": "line"}], "project")
-    assert [x["name"] for x in out["series"]] == ["Installations"]
-    assert [x["name"] for x in out["rates"]] == ["Productivity"] and "type" not in out["rates"][0]
-    assert out["type"] == "bar" and out["labels"] == "none"
+    assert [x["name"] for x in out["series"]] == ["Productivity"] and out["rates"] == []
+    assert out["type"] == "bar" and out["labels"] == "segments"   # a lone bar keeps its value
+
+
+def test_age_bands_youngest_first_with_readable_names():
+    # live: legend 'age_120_plus', 'age_91_120' with the oldest band at the bottom
+    out = dc.shape("non_sat_ageing", "stacked_bar", ["AGRA", "KASHI"],
+                   [s("age_120_plus", [92, 71]), s("age_91_120", [4, 3])], "project")
+    assert [x["name"] for x in out["series"]] == ["91-120 days", "120+ days"]
+    assert [x["data"] for x in out["series"]] == [[4, 3], [92, 71]]
+    named = dc.shape("stock_ageing", "stacked_bar", ["W1", "W2"],
+                     [s("days_0_30", [1, 2]), s("31-60 Days", [1, 2]), s("90+ days", [1, 2])], "warehouse")
+    assert [x["name"] for x in named["series"]] == ["0-30 days", "31-60 days", "90+ days"]
+
+
+def test_productivity_column_is_the_bar_even_when_the_planner_left_it_out():
+    # live: installations stacked on active technicians; productivity only in the table
+    sql = "SELECT project, productivity_per_tech_day, installations, active_technicians FROM public.gold_mi_technician_productivity_day_agg"
+    df = pd.DataFrame({"project": ["KASHI", "AGRA"], "productivity_per_tech_day": [3.36, 3.21],
+                       "installations": [44207, 34092], "active_technicians": [1204, 767]})
+    out = _build_chart(plan(sql, {"type": "stacked_bar", "x": "project", "y": ["installations", "active_technicians"]}), df)
+    assert out["type"] == "bar" and out["y"] == [3.36, 3.21] and "series" not in out
+
+
+def test_repeated_categories_keep_their_subtotal_row():
+    # live: MI progress by project drew AGRA four times (consumer, DT, feeder and subtotal rows)
+    cats = ["AGRA", "AGRA", "AGRA", "AGRA", "KASHI", "KASHI"]
+    out = dc.shape("mi_progress", "stacked_bar", cats,
+                   [s("Consumer", [16, 0, 0, 16, 13, 13]), s("DT", [0, 4, 0, 4, 0, 0]), s("Feeder", [0, 0, 1, 1, 0, 0])],
+                   "project")
+    assert out["x"] == ["AGRA", "KASHI"] and [x["data"] for x in out["series"]] == [[16, 13], [4, 0], [1, 0]]
+
+
+def test_a_series_that_is_the_sum_of_the_others_is_dropped():
+    # live: daily installs drew 'Meters Installed' over Consumer / DT / Feeder
+    days = [f"2026-09-{d:02d}" for d in range(1, 31)]
+    out = dc.shape("mi_progress", "area", days, [s("Consumer", [5] * 30), s("DT", [2] * 30), s("Feeder", [1] * 30),
+                                                 s("Meters Installed", [8] * 30)], "day")
+    assert [x["name"] for x in out["series"]] == ["Consumer", "DT", "Feeder"] and out["type"] == "area"
+
+
+def test_total_row_leads_as_cards():
+    from gmr_agents.llm_pipeline import _blocks
+    sql = "SELECT project, productivity, technicians FROM public.gold_mi_technician_productivity_day_agg"
+    df = pd.DataFrame({"project": ["KASHI", "AGRA", "Total"], "productivity": [3.36, 3.22, 3.19],
+                       "technicians": [1202, 763, 2808]})
+    p = {**plan(sql, {"type": "bar", "x": "project", "y": ["productivity"]}), "metrics": [],
+         "labels": {"productivity": "Productivity", "technicians": "Active Technicians"}}
+    out = _blocks(p, {"result": df})
+    assert [(k["label"], k["value"]) for k in out["kpis"]] == [("Overall Productivity", 3.19),
+                                                              ("Overall Active Technicians", 2808.0)]
 
 
 def test_a_total_is_never_stacked_on_its_parts():
@@ -131,7 +187,7 @@ def test_long_rows_split_by_their_second_label():
                        "non_sat_meters": [5, 100, 2, 80]})
     out = _build_chart(plan(sql, {"type": "horizontal_bar", "x": "project", "y": ["non_sat_meters"]}), df)
     assert out["type"] == "stacked_bar" and out["x"] == ["AGRA", "KASHI"]
-    assert [s["name"] for s in out["series"]] == ["age_91_120", "age_120_plus"]
+    assert [s["name"] for s in out["series"]] == ["91-120 days", "120+ days"]
 
 
 def test_a_numeric_group_is_not_a_split():

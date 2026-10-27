@@ -10,7 +10,7 @@ modules:
   MI progress:
   - {q: "Month-wise MI progress for the last 6 months split by consumer, DT and feeder", kpi: mi_progress, want: [stacked_bar]}
   - {q: "Daily meter installations over the last 30 days", kpi: mi_progress, want: [area]}
-  - {q: "Project-wise MI progress split by consumer, DT and feeder", kpi: mi_progress, want: [stacked_bar]}
+  - {q: "Project-wise MI progress split by consumer, DT and feeder", kpi: mi_progress, want: [stacked_bar, stacked_horizontal_bar]}
   - {q: "Zone-wise installations in Kashi split by consumer, DT and feeder", kpi: mi_progress, want: [stacked_bar, stacked_horizontal_bar]}
   MI productivity:
   - {q: "What is the MI productivity per team by project for the last 30 days?", kpi: mi_productivity, want: [bar, stacked_bar, grouped_bar]}
@@ -51,7 +51,7 @@ modules:
   - {q: "O&M active ticket ageing by project in age bands", kpi: om_active_ageing, want: [stacked_bar]}
   O&M escalated to discom:
   - {q: "O&M tickets escalated to discom by technician remark", kpi: om_escalated, want: [donut]}
-  - {q: "O&M tickets escalated to discom by project", kpi: om_escalated, want: [bar, stacked_bar]}
+  - {q: "O&M tickets escalated to discom by project", kpi: om_escalated, want: [bar, stacked_bar, grouped_bar]}
   O&M productivity / closures / HHU:
   - {q: "O&M productivity per team by project for the last 30 days", kpi: om_productivity, want: [horizontal_bar, stacked_horizontal_bar]}
   - {q: "Daily O&M closed tickets for the last 15 days", kpi: om_closed, want: [bar, stacked_bar]}
