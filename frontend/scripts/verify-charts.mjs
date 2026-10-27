@@ -196,6 +196,90 @@ for (const { name, chart } of CASES) {
   }
 }
 
+// Dashboard cards (chart.dashboard): the WFM dashboard's colour per series name and its
+// stacking / label rules (SmartChart.jsx, chartUtils.js KEY_COLORS).
+const NAVY = "#0B3C6D", GOLD = "#FBBC04", RED = "#E31E24";
+const DASHBOARD = [
+  { name: "MI progress by project: Consumer / DT / Feeder stack, total on top",
+    chart: { id: "c", title: "MI", type: "stacked_bar", dashboard: "mi_progress", labels: "total", x: ["AGRA", "KASHI", "TRIVENI"], y: [0],
+      series: [{ name: "Consumer", data: [1, 2, 3] }, { name: "Dtr", data: [1, 1, 1] }, { name: "feeder", data: [0, 1, 0] }] },
+    colors: [NAVY, GOLD, RED], stacked: true, total: true },
+  { name: "Non-SAT ageing by project: age band colours",
+    chart: { id: "c", title: "Non-SAT", type: "stacked_bar", dashboard: "non_sat_ageing", labels: "segments", x: ["AGRA", "KASHI"], y: [0],
+      series: ["days_0_30", "31-60 days", "61 to 90 days", "91-120", "days_120_plus"].map((n) => ({ name: n, data: [5, 6] })) },
+    colors: ["#F2665D", "#3987E5", NAVY, GOLD, RED], stacked: true, total: false },
+  { name: "Stock ageing by warehouse: stock band colours, no labels",
+    chart: { id: "c", title: "Stock", type: "stacked_bar", dashboard: "stock_ageing", labels: "none", x: ["W1", "W2"], y: [0],
+      series: ["0-30 days", "31-60 days", "61-90 days", "90+ days"].map((n) => ({ name: n, data: [5, 6] })) },
+    colors: ["#3987E5", GOLD, NAVY, RED], stacked: true, total: false, labelsOff: true },
+  { name: "MI vs SAT by project: grouped, % over Total MI",
+    chart: { id: "c", title: "MI vs SAT", type: "grouped_bar", dashboard: "mi_vs_sat", labels: "segments", x: ["AGRA", "KASHI"], y: [0],
+      series: [{ name: "Total MI", data: [100, 200] }, { name: "Eligible MI", data: [90, 150] }, { name: "Total SAT", data: [80, 120] }],
+      rates: [{ name: "SAT % vs MI", data: [80, 60] }] },
+    colors: [NAVY, GOLD, RED], stacked: false, rateOn: [0, "80.0%"] },
+  { name: "Supply utilization: Supplied / Installed side by side, rate on the last bar",
+    chart: { id: "c", title: "Supply", type: "grouped_bar", dashboard: "supply_utilization", labels: "segments", x: ["AGRA"], y: [0],
+      series: [{ name: "Supplied", data: [100] }, { name: "Installed", data: [97] }], rates: [{ name: "Utilization Rate", data: [97] }] },
+    colors: [NAVY, GOLD], stacked: false, rateOn: [1, "97.0%"] },
+  { name: "Meter replacement by OEM: Burnt / Faulty / Others",
+    chart: { id: "c", title: "Defects", type: "stacked_bar", dashboard: "meter_replacement", labels: "total", x: ["HPL", "AEW"], y: [0],
+      series: [{ name: "Meter Burnt", data: [1, 2] }, { name: "Meter Faulty", data: [3, 4] }, { name: "Others", data: [1, 1] }] },
+    colors: [RED, NAVY, GOLD], stacked: true, total: true },
+  { name: "Meter journey stages",
+    chart: { id: "c", title: "Journey", type: "stacked_bar", dashboard: "meter_journey", labels: "segments", x: ["AGRA"], y: [0],
+      series: ["Inventory To Agency", "Agency To Supervisor", "Installation To Sat", "Sat To Revenue Realized"].map((n) => ({ name: n, data: [3] })) },
+    colors: ["#199e70", "#F2665D", RED, GOLD], stacked: true, total: false },
+  { name: "MI productivity: one bar, productivity above it",
+    chart: { id: "c", title: "Productivity", type: "bar", dashboard: "mi_productivity", labels: "none", x: ["AGRA", "KASHI"], y: [500, 400],
+      rates: [{ name: "Productivity", data: [3.2, 2.9] }] },
+    stacked: true, total: true, labelsOff: true },
+  { name: "O&M open tickets by complaint type: donut, % inside",
+    chart: { id: "c", title: "Open", type: "donut", dashboard: "om_active_ageing", labels: "segments", x: ["No display", "Others (3 types)"], y: [90, 10] } },
+  { name: "Installs over 40 days: area, productivity on a right axis",
+    chart: { id: "c", title: "Trend", type: "area", dashboard: "mi_productivity", labels: "none",
+      x: Array.from({ length: 40 }, (_, i) => `2026-09-${String((i % 30) + 1).padStart(2, "0")}`), y: Array.from({ length: 40 }, () => 5),
+      series: [{ name: "Installations", data: Array.from({ length: 40 }, () => 5) }, { name: "Agencies", data: Array.from({ length: 40 }, () => 2) }],
+      rates: [{ name: "Productivity", data: Array.from({ length: 40 }, () => 3) }] },
+    colors: [NAVY, "#ef4444", RED] },
+];
+
+for (const { name, chart, colors, stacked, total, labelsOff, rateOn } of DASHBOARD) {
+  const problems = [];
+  try {
+    const layout = resolveKind(chart.type);
+    const options = buildChartOptions(chart, layout);
+    const series = buildChartSeries(chart, layout);
+    for (const at of undefinedPaths(options)) problems.push(`option "${at}" is present but undefined`);
+    checkUnguarded(options, problems);
+    if (colors && JSON.stringify(options.colors.slice(0, colors.length)) !== JSON.stringify(colors)) {
+      problems.push(`colours ${JSON.stringify(options.colors)} != dashboard ${JSON.stringify(colors)}`);
+    }
+    if (stacked !== undefined && Boolean(options.chart?.stacked) !== stacked) problems.push(`stacked=${options.chart?.stacked}, want ${stacked}`);
+    const totalOn = Boolean(options.plotOptions?.bar?.dataLabels?.total?.enabled);
+    if (total !== undefined && totalOn !== total) problems.push(`stack total label ${totalOn ? "on" : "off"}, want ${total ? "on" : "off"}`);
+    if (labelsOff && options.dataLabels?.enabled) problems.push("value labels must be off on this card");
+    if (rateOn && options.dataLabels.formatter(1, { seriesIndex: rateOn[0], dataPointIndex: 0 }) !== rateOn[1]) {
+      problems.push(`rate label on series ${rateOn[0]}: ${options.dataLabels.formatter(1, { seriesIndex: rateOn[0], dataPointIndex: 0 })}`);
+    }
+    if (chart.type === "bar" && chart.rates && options.plotOptions.bar.dataLabels.total.formatter("500", { dataPointIndex: 0 }) !== "3.2") {
+      problems.push("productivity must sit on top of the bar");
+    }
+    if (chart.type === "donut") {
+      if (options.dataLabels.formatter(3) !== "" || options.dataLabels.formatter(42.4) !== "42%") problems.push("donut slices must show their % (5% or more)");
+      if (options.legend.position !== "bottom") problems.push("donut legend goes under the ring");
+    }
+    if (chart.type === "area") {
+      if (!series.some((s) => s.type === "line" && s.name === "Productivity")) problems.push("rate must be a line series");
+      if (!Array.isArray(options.yaxis) || !options.yaxis.some((a) => a.opposite)) problems.push("rate needs a right-hand axis");
+    }
+  } catch (err) {
+    problems.push(`threw: ${err?.message ?? err}`);
+  }
+  failures += problems.length ? 1 : 0;
+  console.log(`  ${problems.length ? "FAIL" : "ok  "}  dashboard: ${name}`);
+  for (const p of problems) console.log(`          - ${p}`);
+}
+
 const FORMATS = [
   [fullNumber(4214678), "42,14,678"], [fullNumber(97.56, "%"), "97.56%"], [fullNumber(110493, "meters"), "1,10,493 meters"],
   [axisNumber(4214678), "42.15L"], [axisNumber(43728020), "4.4Cr"], [axisNumber(9876), "9,876"], [axisNumber(88.01, "%"), "88.01%"],

@@ -374,6 +374,7 @@ def answer_node(state: AgentState, config: RunnableConfig) -> dict[str, Any]:
         ctx.plan, ctx.result, ctx.extras = ctx.fallback["plan"], ctx.fallback["result"], ctx.fallback["extras"]
     plan, result, extras = ctx.plan, ctx.result, ctx.extras
     plan["extra_sql"] = [ex["sql"] for ex in extras]
+    plan["question"] = triage["question"]   # a chart type the user named outranks the dashboard's chart
     ps.update(plan=plan, result=result, agent=triage["domain"], domain=triage["domain"],
               row_count=len(result.get("result", [])))
     t0 = time.perf_counter()

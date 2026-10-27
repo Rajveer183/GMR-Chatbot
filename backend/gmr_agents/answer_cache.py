@@ -7,7 +7,7 @@ while nothing it depends on has changed. An entry is valid only for the same:
   * data version   -- gold_dashboard_stats_snapshot.refreshed_at (gold refresh)
   * training       -- content hash of business_rules / examples / charts / table_metadata /
                       kpi_definitions YAML, .env and the answer-writing code (llm_pipeline.py,
-                      answer_cache.py, every validation/*.py check, graph/nodes.py)
+                      answer_cache.py, every validation/*.py check, graph/nodes.py, dashboard_charts.py)
   * date (IST)     -- 'yesterday', 'last 30 days' ... move every day
 Keys: a standalone question (triage said it is not a follow-up) is stored under
 its own normalised text; a follow-up is stored under (previous question, text),
@@ -80,6 +80,8 @@ def _code_digest():
     here = os.path.dirname(os.path.abspath(__file__))
     sources = [os.path.join(here, "llm_pipeline.py"), os.path.join(here, "answer_cache.py"),
                os.path.join(here, "graph", "nodes.py"),
+               # which chart a dashboard card's answer is drawn as
+               os.path.join(here, "dashboard_charts.py"),
                # which language an answer is written in / whether it is translated
                os.path.join(here, "language.py"),
                # which past answers are offered as hints (a filter fix must not replay old answers)

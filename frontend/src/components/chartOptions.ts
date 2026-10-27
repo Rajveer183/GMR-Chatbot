@@ -33,6 +33,7 @@
 import type { ApexOptions } from "apexcharts";
 import type { AIChartSpec } from "../api/client";
 import { DV, MONO, axisNumber, fullNumber, seriesColour, truncate } from "./charts/dataviz";
+import { canonicalKey, dashboardColour, getContrastText } from "./charts/dashboardPalette";
 
 // Kept for callers/tests that refer to the categorical palette by this name.
 export const SERIES_COLORS = DV.palette;
@@ -102,6 +103,19 @@ function namedSeries(chart: AIChartSpec): Named[] {
  * band ramp for ordered bands (age buckets), categorical palette otherwise. */
 function colours(chart: AIChartSpec, layout: ChartLayout): string[] {
   const series = namedSeries(chart);
+  const kpi = chart.dashboard;
+  if (kpi && layout.kind !== "radialBar" && layout.kind !== "heatmap") {
+    // The dashboard card's fixed colour per series name (per slice / step for donuts and funnels).
+    if (layout.kind === "pie" || layout.kind === "donut" || layout.funnel) {
+      return chartCategories(chart).map((c, i) => dashboardColour(kpi, c, i, true));
+    }
+    // One unnamed series is the card's `value` (blue); its name is only the chart's title --
+    // seen live, 'Revenue-Not-Realized Meters by Current Stage' turned the bars revenue red.
+    const first = chart.series?.length ? series[0].name : "value";
+    const names = [first, ...series.slice(1).map((s) => s.name),
+      ...(layout.kind === "area" ? (chart.rates ?? []).map((r) => r.name) : [])];
+    return names.map((n, i) => dashboardColour(kpi, n, i));
+  }
   if (layout.kind === "pie" || layout.kind === "donut" || layout.funnel) return DV.palette;
   if (layout.kind === "radialBar") return [DV.good, ...DV.palette.slice(1)];
   if (layout.kind === "heatmap") return [DV.series];
@@ -136,6 +150,13 @@ export function buildChartSeries(
   if (layout.combo) {
     // Series the backend marked "line" ride the second axis; the rest are bars.
     return namedSeries(chart).map((s) => ({ name: s.name, type: s.type === "line" ? "line" : "column", data: s.data }));
+  }
+  if (chart.dashboard && layout.kind === "area" && chart.rates?.length) {
+    // Dashboard area trend: a rate (Productivity) is a line on its own right-hand axis.
+    return [
+      ...namedSeries(chart).map((s) => ({ name: s.name, type: "area", data: s.data })),
+      ...chart.rates.map((r) => ({ name: r.name, type: "line", data: (r.data ?? []).map(safeNumber) })),
+    ];
   }
   return namedSeries(chart).map((s) => ({ name: s.name, data: s.data }));
 }
@@ -201,6 +222,9 @@ export function buildChartOptions(
     states: { hover: { filter: { type: "darken" } } },
     noData: { text: "No data for this chart." },
   };
+
+  const dashboard = chart.dashboard ? dashboardOptions(chart, layout, base, categories, series, palette, unit) : null;
+  if (dashboard) return dashboard;
 
   if (isCircular) {
     // Dashboard donut: total in the hole, each slice named with its count AND share.
@@ -466,6 +490,243 @@ export function buildChartOptions(
       ...(!horizontal && unit && !layout.percent
         ? { title: { text: unit, style: { color: DV.axis, fontWeight: 500 } } }
         : {}),
+    },
+  };
+}
+
+// ---------------------------------------------------------------------------
+// Dashboard cards (chart.dashboard set): drawn the way the WFM dashboard's
+// SmartChart.jsx draws that KPI -- one stack per category with a glossy
+// top-to-bottom gradient and a 1px outline in the series colour, rounded top on
+// the last segment, value labels inside the segments (or only the stack total /
+// the rate on top), dashed light grid, legend on top with round swatches; area
+// trends with a 0.4 -> 0.05 gradient; donuts with the share % inside each slice.
+// Other kinds (line, combo, heatmap, funnel, gauge) keep the builder above, in
+// the card's colours.
+// ---------------------------------------------------------------------------
+
+const DASH_AXIS = { colors: DV.axis, fontSize: "12px", fontWeight: 700 };
+const DENSE_LABEL_BARS = 20; // SmartChart MAX_DENSE_LABEL_BARS: past this, value labels are dropped
+// Grouped MI / SAT bars: each count bar carries its own progress % (SmartChart MI_SAT_LABEL_MAP).
+const RATE_FOR: Record<string, string> = { "total mi": "% sat vs mi", "eligible mi for sat": "% sat vs eligible mi" };
+
+function rateLabel(name: string, value: number | undefined): string {
+  if (value === undefined || !Number.isFinite(value)) return "";
+  return `${value.toFixed(1)}${/%|rate|pct|percent/i.test(name) ? "%" : ""}`;
+}
+
+function dashboardOptions(
+  chart: AIChartSpec,
+  layout: ChartLayout,
+  base: ApexOptions,
+  categories: string[],
+  series: Named[],
+  palette: string[],
+  unit: string | undefined
+): ApexOptions | null {
+  const kpi = chart.dashboard as string;
+  const { kind, horizontal } = layout;
+  const rates = (chart.rates ?? []).map((r) => ({ name: r.name, data: (r.data ?? []).map(safeNumber) }));
+  const n = categories.length;
+  const legend = {
+    ...base.legend,
+    position: "top" as const,
+    fontWeight: 800,
+    markers: { size: 5, shape: "circle" as const },
+    itemMargin: { horizontal: 12, vertical: 4 },
+  };
+  const tooltip = { y: { formatter: (val: number) => fullNumber(val, unit) } };
+
+  if (kind === "pie" || kind === "donut") {
+    // SmartChart DonutVariant: inner radius 45% of a 75% ring, 3deg gaps between slices,
+    // the share % in white inside each slice of 5% or more, legend under the ring.
+    return {
+      ...base,
+      labels: categories,
+      legend: { ...legend, show: true, position: "bottom" },
+      dataLabels: {
+        enabled: true,
+        formatter: (pct: number) => (pct < 5 ? "" : `${pct.toFixed(0)}%`),
+        style: { fontSize: "13px", fontWeight: 800, colors: ["#fff"] },
+        dropShadow: { enabled: false },
+      },
+      plotOptions: { pie: { expandOnClick: false, donut: { size: kind === "donut" ? "60%" : "0%", labels: { show: false } } } },
+      stroke: { width: 3, colors: [DV.surface] },
+      tooltip,
+    };
+  }
+
+  if (kind === "area") {
+    // SmartChart AreaVariant: unstacked areas, gradient 0.4 -> 0.05, 3px line, dots up to 50 points;
+    // a rate rides a right-hand axis as a plain line (RIGHT_AXIS_CONFIGS).
+    const dense = n > 14;
+    const all = [...series.map((s) => s.name), ...rates.map((r) => r.name)];
+    return {
+      ...base,
+      chart: { ...base.chart, type: "area", stacked: false },
+      legend: { ...legend, show: all.length > 1 },
+      dataLabels: { enabled: false },
+      stroke: { width: all.map((_n, i) => (i < series.length && n > 100 ? 1.5 : 3)), curve: "smooth" },
+      fill: {
+        type: all.map((_n, i) => (i < series.length ? "gradient" : "solid")),
+        gradient: { shadeIntensity: 0, opacityFrom: 0.4, opacityTo: 0.05, stops: [5, 95] },
+      },
+      markers: { size: n > 50 ? 0 : 4, strokeWidth: 0, hover: { size: 6 } },
+      grid: { borderColor: DV.grid, strokeDashArray: 3, xaxis: { lines: { show: false } }, yaxis: { lines: { show: true } } },
+      tooltip: { shared: true, intersect: false, ...tooltip, ...axisTooltipX(categories, false) },
+      xaxis: {
+        categories,
+        ...(n > 14 ? { tickAmount: n > 60 ? 6 : 10 } : {}),
+        labels: { style: DASH_AXIS, rotate: dense ? -35 : 0, rotateAlways: dense, hideOverlappingLabels: true },
+        axisBorder: { show: false },
+        axisTicks: { show: false },
+      },
+      yaxis: rates.length
+        ? all.map((name, i) => {
+            const isRate = i >= series.length;
+            return {
+              seriesName: isRate ? rates[0].name : series[0].name,
+              opposite: isRate,
+              show: i === 0 || i === series.length,
+              labels: { style: DASH_AXIS, formatter: (v: number) => axisNumber(v) },
+              ...(isRate ? { title: { text: name, style: { color: DV.axis, fontWeight: 700 } } } : {}),
+            };
+          })
+        : { labels: { style: DASH_AXIS, formatter: (v: number) => axisNumber(v) } },
+    };
+  }
+
+  if (kind !== "bar" || layout.funnel || layout.percent) return null;
+
+  // SmartChart BarVariant / HBarVariant. Every series shares one stack, except the grouped
+  // MI vs SAT bars (and other totals the backend keeps side by side).
+  const grouped = !layout.stacked && series.length > 1;
+  const mode = chart.labels ?? "segments";
+  const crowded = n > DENSE_LABEL_BARS;
+  const totals = categories.map((_c, i) => series.reduce((t, s) => t + (s.data[i] ?? 0), 0));
+  const maxTotal = Math.max(0, ...totals);
+  const rateText = (i: number) => rates.map((r) => rateLabel(r.name, r.data[i])).filter(Boolean).join(" · ");
+  const pairedRate = series.map((s) => {
+    const want = RATE_FOR[canonicalKey(kpi, s.name)];
+    return want ? rates.find((r) => canonicalKey(kpi, r.name) === want) : undefined;
+  });
+  const showTotal = !grouped && !crowded && (rates.length > 0 || mode === "total");
+  const rotate = !horizontal && n > 6;
+
+  const dataLabels: ApexOptions["dataLabels"] = grouped
+    ? {
+        // Above each bar: its own progress % when it has one, else the count.
+        enabled: !crowded && mode !== "none",
+        formatter: (val: number, opts: any) => {
+          const s = opts?.seriesIndex ?? 0;
+          const i = opts?.dataPointIndex ?? 0;
+          const rate = pairedRate[s];
+          if (rate) return rateLabel(rate.name, rate.data[i]);
+          // A rate no bar owns (Utilization Rate beside Supplied / Installed) sits on the last bar.
+          if (rates.length && !pairedRate.some(Boolean) && s === series.length - 1) return rateText(i);
+          return axisNumber(val);
+        },
+        offsetY: horizontal ? 0 : -18,
+        offsetX: horizontal ? 6 : 0,
+        ...(horizontal ? { textAnchor: "start" as const } : {}),
+        style: { fontSize: "11px", fontWeight: 800, colors: [DV.axis] },
+        background: { enabled: false },
+        dropShadow: { enabled: false },
+      }
+    : {
+        // Inside each segment in ink that reads on its fill; a sliver too thin to hold one stays blank.
+        enabled: mode === "segments" && !crowded,
+        formatter: (val: number) => (maxTotal > 0 && val / maxTotal >= 0.06 ? axisNumber(val) : ""),
+        style: { fontSize: "12px", fontWeight: 800, colors: palette.map(getContrastText) },
+        background: { enabled: false },
+        dropShadow: { enabled: false },
+      };
+
+  return {
+    ...base,
+    chart: { ...base.chart, stacked: !grouped },
+    legend: { ...legend, show: series.length > 1 },
+    dataLabels,
+    plotOptions: {
+      bar: {
+        horizontal,
+        borderRadius: grouped ? 0 : horizontal ? 4 : 6,
+        borderRadiusApplication: "end",
+        borderRadiusWhenStacked: "last",
+        columnWidth: n > 10 ? "70%" : grouped ? "60%" : "45%",
+        barHeight: n > 15 ? "70%" : "55%",
+        dataLabels: {
+          position: grouped ? "top" : "center",
+          total: {
+            enabled: showTotal,
+            // The rate (Utilization Rate, Productivity, SAT %) when there is one, else the stack's total.
+            formatter: (val?: string, opts?: any) =>
+              rates.length ? rateText(opts?.dataPointIndex ?? 0) : axisNumber(safeNumber(val)),
+            offsetY: horizontal ? 0 : -4,
+            offsetX: horizontal ? 6 : 0,
+            style: {
+              fontSize: "12px",
+              fontWeight: 800,
+              color: rates.length ? dashboardColour(kpi, rates[0].name, 0) : DV.axis,
+            },
+          },
+        },
+      },
+    },
+    fill: {
+      type: "gradient",
+      gradient: {
+        type: horizontal ? "horizontal" : "vertical",
+        shadeIntensity: 0,
+        opacityFrom: horizontal ? 0.8 : 1,
+        opacityTo: horizontal ? 1 : 0.7,
+        stops: [0, 100],
+      },
+    },
+    stroke: { show: true, width: 1, colors: palette },
+    grid: {
+      borderColor: DV.grid,
+      strokeDashArray: 3,
+      xaxis: { lines: { show: horizontal } },
+      yaxis: { lines: { show: !horizontal } },
+    },
+    tooltip: {
+      shared: series.length > 1 && !horizontal,
+      intersect: false,
+      y: {
+        formatter: (val: number, opts: any) => {
+          const i = opts?.dataPointIndex ?? 0;
+          const extra = rates.length && opts?.seriesIndex === series.length - 1 ? `  (${rateText(i)})` : "";
+          return `${fullNumber(val, unit)}${extra}`;
+        },
+      },
+      ...axisTooltipX(categories, horizontal),
+    },
+    xaxis: {
+      categories,
+      labels: {
+        style: DASH_AXIS,
+        rotate: horizontal ? 0 : -45,
+        rotateAlways: rotate,
+        trim: false,
+        hideOverlappingLabels: horizontal,
+        formatter: horizontal
+          ? (value: string) => axisNumber(safeNumber(value))
+          : (value: string) => truncate(String(value ?? ""), 12),
+      },
+      axisBorder: { show: false },
+      axisTicks: { show: false },
+    },
+    yaxis: {
+      // Room past the longest stack so its total / rate label is never clipped.
+      ...(showTotal && maxTotal > 0 ? { max: maxTotal * (horizontal ? 1.15 : 1.12), min: 0 } : {}),
+      labels: {
+        style: DASH_AXIS,
+        maxWidth: horizontal ? 150 : 90,
+        formatter: horizontal
+          ? (value: any) => truncate(String(value ?? ""), 20)
+          : (value: number) => axisNumber(value),
+      },
     },
   };
 }

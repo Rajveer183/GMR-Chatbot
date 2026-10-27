@@ -70,6 +70,13 @@ export interface AIChartSpec {
   unit?: string;
   /** Unit of the second (line) axis in a combo chart. */
   unit2?: string;
+  /** The WFM dashboard KPI card this chart reproduces (backend dashboard_charts.py):
+   * drawn in that card's style and series colours. */
+  dashboard?: string;
+  /** Dashboard value labels: inside each segment, only the stack total on top, or none. */
+  labels?: "segments" | "total" | "none";
+  /** Rates (Productivity, Utilization Rate, % SAT vs MI) shown above each bar, not drawn as bars. */
+  rates?: { name: string; data: number[] }[];
   description?: string;
   /** Title / description in the answer's language; `title` stays English. */
   display_title?: string;

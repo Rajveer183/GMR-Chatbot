@@ -1,0 +1,63 @@
+# Dashboard-parity chart bank: for every WFM dashboard KPI card, questions its left (trend /
+# stage) chart and right (comparison by geography) chart answer, with the card the chart must
+# be tagged with (charts[0].dashboard, gmr_agents/dashboard_charts.py) and the chart type(s) the
+# dashboard would draw (SmartChart.jsx rules: one stack per category, horizontal past 8
+# categories, area past 25 dates, donut for complaint types / remarks).
+# Run with eval/question_bank/run_dashboard_charts.py
+#   kpi:  expected dashboard tag; null = no dashboard card (planner's chart kept)
+#   want: acceptable chart types (category count decides vertical vs horizontal)
+modules:
+  MI progress:
+  - {q: "Month-wise MI progress for the last 6 months split by consumer, DT and feeder", kpi: mi_progress, want: [stacked_bar]}
+  - {q: "Daily meter installations over the last 30 days", kpi: mi_progress, want: [area]}
+  - {q: "Project-wise MI progress split by consumer, DT and feeder", kpi: mi_progress, want: [stacked_bar]}
+  - {q: "Zone-wise installations in Kashi split by consumer, DT and feeder", kpi: mi_progress, want: [stacked_bar, stacked_horizontal_bar]}
+  MI productivity:
+  - {q: "What is the MI productivity per team by project for the last 30 days?", kpi: mi_productivity, want: [bar, stacked_bar, grouped_bar]}
+  - {q: "Daily MI productivity per team for the last 15 days", kpi: mi_productivity, want: [bar, stacked_bar, grouped_bar]}
+  - {q: "Monthly productivity trend for the last 6 months", kpi: monthly_productivity, want: [bar, stacked_bar, grouped_bar]}
+  Meter replacement:
+  - {q: "Meter replacement by OEM split by burnt, faulty and others", kpi: meter_replacement, want: [stacked_bar, stacked_horizontal_bar]}
+  - {q: "Project-wise defective meters split by burnt, faulty and others", kpi: meter_replacement, want: [stacked_bar]}
+  - {q: "Monthly burnt meters over the last 12 months", kpi: meter_replacement, want: [bar]}
+  Supply utilization / pace vs stock:
+  - {q: "Supply utilization rate by project", kpi: supply_utilization, want: [grouped_bar, bar, radial]}
+  - {q: "Month-wise supplied vs installed meters for the last 6 months", kpi: supply_utilization, want: [grouped_bar]}
+  - {q: "MI pace vs stock availability by zone", kpi: mi_pace_stock, want: [horizontal_bar]}
+  Un-utilized stock ageing:
+  - {q: "Un-utilized stock ageing by warehouse in age bands", kpi: stock_ageing, want: [stacked_bar, stacked_horizontal_bar]}
+  - {q: "How much un-utilized stock is in each age band?", kpi: stock_ageing, want: [bar]}
+  MI vs SAT progress:
+  - {q: "MI vs SAT progress by project with SAT percentage", kpi: mi_vs_sat, want: [grouped_bar]}
+  - {q: "Show SAT meters by SAT stage", kpi: mi_vs_sat, want: [bar, horizontal_bar]}
+  - {q: "Zone-wise MI vs SAT in Agra", kpi: mi_vs_sat, want: [grouped_bar, horizontal_bar]}
+  Non-SAT ageing:
+  - {q: "Non-SAT ageing by project in age bands", kpi: non_sat_ageing, want: [stacked_bar]}
+  - {q: "Non-SAT meters by age band split by consumer, DT and feeder", kpi: non_sat_ageing, want: [stacked_bar]}
+  MI vs SAT vs invoice funnel:
+  - {q: "Show the MI vs SAT vs invoice funnel", kpi: sat_invoice_funnel, want: [bar, grouped_bar]}
+  - {q: "Project-wise installed, SAT, lumpsum invoiced and PMPM invoiced meters", kpi: sat_invoice_funnel, want: [grouped_bar]}
+  Revenue not realized ageing:
+  - {q: "Revenue not realized ageing by age band", kpi: revenue_ageing, want: [bar, stacked_bar]}
+  - {q: "Revenue not realized ageing by project in age bands", kpi: revenue_ageing, want: [stacked_bar]}
+  Meter journey:
+  - {q: "Average days at each stage of the meter journey", kpi: meter_journey, want: [bar, horizontal_bar]}
+  - {q: "Meter journey average time per stage by project", kpi: meter_journey, want: [stacked_bar, grouped_bar]}
+  Meters current stage:
+  - {q: "How many revenue-not-realized meters are at each current stage?", kpi: meter_stage, want: [bar, stacked_bar]}
+  - {q: "Project-wise meters current stage for revenue not realized", kpi: meter_stage, want: [stacked_bar]}
+  O&M active ticket ageing:
+  - {q: "Open O&M tickets by complaint type", kpi: om_active_ageing, want: [donut]}
+  - {q: "O&M active ticket ageing by project in age bands", kpi: om_active_ageing, want: [stacked_bar]}
+  O&M escalated to discom:
+  - {q: "O&M tickets escalated to discom by technician remark", kpi: om_escalated, want: [donut]}
+  - {q: "O&M tickets escalated to discom by project", kpi: om_escalated, want: [bar, stacked_bar]}
+  O&M productivity / closures / HHU:
+  - {q: "O&M productivity per team by project for the last 30 days", kpi: om_productivity, want: [horizontal_bar, stacked_horizontal_bar]}
+  - {q: "Daily O&M closed tickets for the last 15 days", kpi: om_closed, want: [bar, stacked_bar]}
+  - {q: "Average O&M ticket closure time by project", kpi: om_closed, want: [bar]}
+  - {q: "HHU reading uploads by project, OK vs failed", kpi: hhu_reading, want: [stacked_bar]}
+  Fallback (not a dashboard chart):
+  - {q: "Give me the dashboard headlines", kpi: null, want: [none]}
+  - {q: "Give me a pie chart of defective meters by defect type", kpi: meter_replacement, want: [pie]}
+  - {q: "Show monthly installations as a line chart for the last 6 months", kpi: mi_progress, want: [line]}

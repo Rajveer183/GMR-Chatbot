@@ -45,7 +45,7 @@ from gmr_agents.schema.catalog import get_catalog
 from gmr_agents.schema.schema_brief import build as build_schema
 from gmr_agents.schema.table_metadata import SCHEMA_RE
 from gmr_agents.sql import executor, hierarchy
-from gmr_agents import answer_cache, context_manager, language
+from gmr_agents import answer_cache, context_manager, dashboard_charts, language
 from gmr_agents.guards import injection
 from gmr_agents.validation import entity_check, extreme_check, grounding, number_check, query_encoder, sql_guard
 from gmr_agents.validation import scope as place_scope
@@ -799,10 +799,18 @@ def _build_chart(plan: dict, df: pd.DataFrame) -> dict | None:
       * the ROLLUP 'Total' row is left out (it would dwarf the bars)"""
     chart = plan["display"].get("chart") if isinstance(plan["display"].get("chart"), dict) else {}
     ctype = str(chart.get("type") or "none")
+    # A dashboard card's rows always get the card's chart, even when the planner drew none.
+    card = dashboard_charts.kpi_for(plan.get("sql"), [str(c) for c in df.columns], plan.get("question"))
+    on_card = bool(card) and not dashboard_charts.user_named_type(plan.get("question"))
+    if on_card and (ctype not in business_rules.chart_types() or ctype == "none"):
+        chart = dashboard_charts.auto_spec(card, df) or chart
+        ctype = str(chart.get("type") or "none")
     if ctype not in business_rules.chart_types() or ctype == "none":
         return None
     x, group = chart.get("x"), chart.get("group")
     ys = [y for y in (chart.get("y") or []) if y in df.columns]
+    if on_card and not group and len(ys) == 1 and x in df.columns:
+        group = dashboard_charts.split_column(df, x, ys)
     y2 = [y for y in (chart.get("y2") or []) if y in df.columns and y not in ys]
     if not ys and not y2:
         return None
@@ -826,7 +834,9 @@ def _build_chart(plan: dict, df: pd.DataFrame) -> dict | None:
         cats = [_label(plan, y) for y in ys + y2]
         series = [{"name": plan.get("table_title") or "Value", "data": [_number(row[y]) or 0.0 for y in ys + y2]}]
         y2 = []
-    elif group in data.columns and group != x and ys:
+    # A numeric group (a stage's sort order) is not a split -- seen live: journey stages drew one
+    # series per 'ord' value, '1' to '7', each holding a single bar.
+    elif group in data.columns and group != x and ys and not pd.api.types.is_numeric_dtype(data[group]):
         pivot = data.pivot_table(index=x, columns=group, values=ys[0], aggfunc="sum", sort=False).fillna(0)
         pivot = pivot.head(_CHART_POINTS)
         cats = [str(c) for c in pivot.index]
@@ -840,6 +850,20 @@ def _build_chart(plan: dict, df: pd.DataFrame) -> dict | None:
         return None
 
     chosen = ctype
+    # First priority: a question one of the dashboard's KPI cards answers is drawn the way
+    # that card draws it (dashboard_charts.py); anything else keeps the planner's chart.
+    kpi = dashboard_charts.kpi_for(plan.get("sql"), [s["name"] for s in series], plan.get("question"))
+    if kpi and not dashboard_charts.user_named_type(plan.get("question")):
+        dash = dashboard_charts.shape(kpi, ctype, cats, series, x)
+        out = {"id": "primary_chart", "title": plan.get("table_title") or f"{dash['series'][0]['name']} by {_label(plan, x) if x else ''}",
+               "type": dash["type"], "x": dash["x"], "y": dash["series"][0]["data"],
+               **({"series": dash["series"]} if len(dash["series"]) > 1 else {}),
+               "dashboard": kpi, "labels": dash["labels"],
+               **({"rates": dash["rates"]} if dash["rates"] else {}),
+               **({"unit": str(chart["unit"])} if chart.get("unit") else {})}
+        if dash["type"] != chosen:
+            out["chosen_type"], out["fallback_reason"] = chosen, "dashboard chart"
+        return out
     ctype, why = _chart_fallback(ctype, cats, series, sum(1 for s in series if s.get("type") == "line"))
     if ctype != "combo":
         for s in series:
@@ -851,7 +875,8 @@ def _build_chart(plan: dict, df: pd.DataFrame) -> dict | None:
            "type": ctype, "x": cats, "y": series[0]["data"],
            **({"series": series} if len(series) > 1 or ctype == "combo" else {}),
            **({"unit": str(chart["unit"])} if chart.get("unit") else {}),
-           **({"unit2": str(chart["unit2"])} if chart.get("unit2") else {})}
+           **({"unit2": str(chart["unit2"])} if chart.get("unit2") else {}),
+           **({"dashboard": kpi} if kpi else {})}   # the user's chart type, in the card's colours
     if why:
         out["chosen_type"], out["fallback_reason"] = chosen, why
     return out
