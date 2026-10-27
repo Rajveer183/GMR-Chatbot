@@ -21,7 +21,8 @@
    'edc varanasi' / 'eudc i varanasi' -> Varanasi I). `refresh()` learns warehouse -> zone
    from that name match, weighted by each zone's installs on the matching circles (a zone
    under 5% is dropped; Prayagraj_HW matches both Prayagraj zones and is split by share).
-   A query that uses `zone` on gold_meter_inventory_event_day_agg / _month_agg then reads
+   A query that groups by `zone` (and does not filter it, like the dashboard) on
+   gold_meter_inventory_event_day_agg / _month_agg then reads
    the table with its no-zone stock rows swapped for the same meters from
    gold_inventory_unutilized_stock_snapshot carrying their warehouse's zone -- verified
    2026-10-04: identical at (project, category, meter_type, date) grain, 0 mismatches,
@@ -47,7 +48,8 @@ _LEVELS = [("zone", "circle"), ("circle", "division"), ("division", "sub_divisio
 _REFRESH_SECONDS = 3600
 # (b) below is off: the WFM dashboard reports places exactly as stored, and the user chose exact dashboard
 # parity on 2026-10-26 (HHU circle-wise in Azamgarh: EDC BALLIA 37 with the fill, 34 on the dashboard).
-# Stock -> zone placement (a) stays on: the dashboard's supply / stock cards place stock the same way.
+# Stock -> zone placement (a) stays on for zone-wise breakdowns: the dashboard's supply / stock comparison
+# bars place stock the same way. A zone filter does not place it (see rewrite()).
 FILL_ORPHAN_PARENTS = False
 _STATE: dict = {"map": {}, "stock_zones": [], "places": {}, "at": 0.0, "running": False}
 _EVENT_TABLES = {"gold_meter_inventory_event_day_agg", "gold_meter_inventory_event_month_agg"}
@@ -264,6 +266,14 @@ def rewrite(sql: str, mapping: dict | None = None, stock_zones: list[tuple] | No
         tree = sqlglot.parse_one(sql, read="postgres")
     except Exception:
         return sql
+    # The dashboard's supply / pace cards place stock only on their zone-wise bars; with a zone
+    # FILTER their summary tiles read the event rows as stored (Varanasi I 23 Sep 2026: 266,549
+    # supplied, not 270,599), so a WHERE on zone keeps the event table unplaced.
+    if place_stock and not stage_place and any(
+            c.name.lower() == "zone" for w in tree.find_all(exp.Where) for c in w.find_all(exp.Column)):
+        place_stock = False
+        if not mapping:
+            return sql
     changed = _place_stock(tree, stock_zones) if place_stock else False
     by_parent = {p: (c, fixes) for (p, c), fixes in mapping.items()}
     for select in list(tree.find_all(exp.Select)):

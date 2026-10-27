@@ -802,6 +802,9 @@ def _build_chart(plan: dict, df: pd.DataFrame) -> dict | None:
     # A dashboard card's rows always get the card's chart, even when the planner drew none.
     card = dashboard_charts.kpi_for(plan.get("sql"), [str(c) for c in df.columns], plan.get("question"))
     on_card = bool(card) and not dashboard_charts.user_named_type(plan.get("question"))
+    named = dashboard_charts.exact_named_type(plan.get("question"))
+    if named and ctype not in ("none", named) and named in business_rules.chart_types():
+        ctype = named   # still checked by _chart_fallback below (a pie needs 2-8 parts, ...)
     if on_card and (ctype not in business_rules.chart_types() or ctype == "none"):
         chart = dashboard_charts.auto_spec(card, df) or chart
         ctype = str(chart.get("type") or "none")
@@ -818,6 +821,11 @@ def _build_chart(plan: dict, df: pd.DataFrame) -> dict | None:
     y2 = [y for y in (chart.get("y2") or []) if y in df.columns and y not in ys]
     if not ys and not y2:
         return None
+    # Categories are labels, never a measure. Seen live 27 Oct: 'consumer supply utilization type wise'
+    # drew x = 98.84 / 91.12 / 32.18 (the utilization %), 'sat progress for feeder meters' x = 7874.0.
+    if ctype != "radial" and x in df.columns and (pd.api.types.is_numeric_dtype(df[x]) or x in ys + y2):
+        labels = [c for c in df.columns if c != group and not pd.api.types.is_numeric_dtype(df[c])]
+        x = labels[0] if labels else None
     data = df
     if x in df.columns:
         data = df[~df[x].astype(str).str.strip().str.lower().isin({"total", "grand total"})]
@@ -924,8 +932,11 @@ def _blocks(plan: dict, result: dict) -> dict:
     charts = [built] if built else []
     tables = []
     # A one-row answer with more columns than cards (the Never / Non-comm card has ten figures) keeps
-    # its table too, or the figures past the fourth card are never shown.
-    if display.get("table") or (not kpis and not charts) or (len(df) == 1 and len(df.columns) > len(kpis)):
+    # its table too, or the figures past the fourth card are never shown. A breakdown always keeps it:
+    # the summary gives only the total and points to it (seen live 27 Oct: 'consumers, dtr and feeder
+    # installed monthwise' and 'sat progress circle wise' came back as a chart with no table).
+    if (display.get("table") or (not kpis and not charts) or len(df) > 1
+            or (len(df) == 1 and len(df.columns) > len(kpis))):
         shown = df.head(_TABLE_ROWS)
         cols = [_label(plan, c) for c in shown.columns]
         raw = raw_cols(shown.columns)

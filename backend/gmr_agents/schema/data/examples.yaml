@@ -321,6 +321,64 @@ examples:
       FROM public.gold_inventory_unutilized_stock_snapshot
       WHERE LOWER(warehouse) = 'agra_hw'
 
+  - q: ["Unutilized stock ageing", "un-utilised stock ageing card", "how old is our unused stock", "stock ageing bands"]
+    note: "The card: one row per band in order (0-30, 31-60, 61-90, 90+ days) plus Total, every stage and warehouse. A place / category / stage filter goes in the ON clause."
+    sql: |
+      SELECT b.label AS ageing_band, COALESCE(SUM(s.stock_count), 0) AS stock
+      FROM (VALUES (1, 0, 30, '0-30 days'), (2, 31, 60, '31-60 days'), (3, 61, 90, '61-90 days'), (4, 91, NULL, '90+ days'),
+                   (5, NULL, NULL, 'Total')) AS b(ord, lo, hi, label)
+      LEFT JOIN public.gold_inventory_unutilized_stock_snapshot s
+        ON b.lo IS NULL OR (GREATEST(CURRENT_DATE - s.inventory_date, 0) >= b.lo
+                            AND (b.hi IS NULL OR GREATEST(CURRENT_DATE - s.inventory_date, 0) <= b.hi))
+      GROUP BY b.ord, b.label
+      ORDER BY b.ord
+
+  - q: ["Consumer stock ageing type wise", "unutilized stock ageing by meter type", "unused 1 phase 3 phase stock by age", "stock ageing meter type wise"]
+    note: "Stock ageing is the un-utilised stock snapshot -- never gold_non_sat_ageing_snapshot (installed meters waiting for SAT). 'Consumer type wise' = the consumer meter types of category 'CONSUMER', the card's four bands as columns."
+    sql: |
+      SELECT CASE WHEN GROUPING(meter_type) = 1 THEN 'Total' ELSE meter_type END AS meter_type,
+             SUM(stock_count) AS total_stock,
+             COALESCE(SUM(stock_count) FILTER (WHERE GREATEST(CURRENT_DATE - inventory_date, 0) <= 30), 0) AS days_0_30,
+             COALESCE(SUM(stock_count) FILTER (WHERE GREATEST(CURRENT_DATE - inventory_date, 0) BETWEEN 31 AND 60), 0) AS days_31_60,
+             COALESCE(SUM(stock_count) FILTER (WHERE GREATEST(CURRENT_DATE - inventory_date, 0) BETWEEN 61 AND 90), 0) AS days_61_90,
+             COALESCE(SUM(stock_count) FILTER (WHERE GREATEST(CURRENT_DATE - inventory_date, 0) > 90), 0) AS days_90_plus
+      FROM public.gold_inventory_unutilized_stock_snapshot
+      WHERE category = 'CONSUMER'
+      GROUP BY ROLLUP (meter_type)
+      ORDER BY GROUPING(meter_type) DESC, total_stock DESC
+
+  - q: ["90+ days stock still in the warehouse in Triveni", "stock older than 90 days lying with agencies", "old stock with supervisors in Kashi", "how much aged stock is still in the warehouse"]
+    note: "'in the warehouse' / 'with technicians' / 'with agency' / 'with supervisors' = current_stage 'warehouse' / 'technician' / 'agency' / 'supervisor' -- always filter it. Total first, then each warehouse."
+    sql: |
+      SELECT CASE WHEN GROUPING(warehouse) = 1 THEN 'Total' ELSE warehouse END AS warehouse,
+             SUM(stock_count) AS stock_90_plus_days
+      FROM public.gold_inventory_unutilized_stock_snapshot
+      WHERE LOWER(project) = 'triveni' AND current_stage = 'warehouse'
+        AND GREATEST(CURRENT_DATE - inventory_date, 0) > 90
+      GROUP BY ROLLUP (warehouse)
+      ORDER BY GROUPING(warehouse) DESC, stock_90_plus_days DESC
+
+  - q: ["Stock between 100 and 200 days old", "unused meters aged between two numbers of days", "stock 150 to 300 days old"]
+    note: "A custom age range: the Total in that range first (the answer), then each warehouse holding it."
+    sql: |
+      SELECT CASE WHEN GROUPING(warehouse) = 1 THEN 'Total' ELSE warehouse END AS warehouse,
+             SUM(stock_count) AS stock_100_to_200_days
+      FROM public.gold_inventory_unutilized_stock_snapshot
+      WHERE GREATEST(CURRENT_DATE - inventory_date, 0) BETWEEN 100 AND 200
+      GROUP BY ROLLUP (warehouse)
+      ORDER BY GROUPING(warehouse) DESC, stock_100_to_200_days DESC
+
+  - q: ["Stock older than 45 days at Mirzapur_ZW", "unused stock older than N days at a warehouse", "how much stock is more than 60 days old in Agra HW"]
+    note: "Mirzapur_ZW / Agra_HW are WAREHOUSES (say 'warehouse', never 'zone'): keep the warehouse column. Give the old stock, the warehouse's whole stock and the share."
+    sql: |
+      SELECT warehouse, SUM(stock_count) AS total_stock,
+             COALESCE(SUM(stock_count) FILTER (WHERE GREATEST(CURRENT_DATE - inventory_date, 0) > 45), 0) AS stock_older_than_45_days,
+             ROUND(COALESCE(SUM(stock_count) FILTER (WHERE GREATEST(CURRENT_DATE - inventory_date, 0) > 45), 0) * 100.0
+                   / NULLIF(SUM(stock_count), 0), 2) AS older_than_45_days_pct
+      FROM public.gold_inventory_unutilized_stock_snapshot
+      WHERE LOWER(warehouse) = 'mirzapur_zw'
+      GROUP BY warehouse
+
   - q: ["Top performing O&M technician in the last 30 days", "O&M top performer", "lowest O&M technician", "O&M technicians requiring support"]
     note: "Per technician on the category = 'ALL' rows: productivity = closed tickets / distinct days worked; rank by productivity, then closed tickets, then name (ASC for lowest). No minimum days, like the card."
     sql: |
@@ -609,28 +667,81 @@ examples:
       GROUP BY ROLLUP (zone)
       ORDER BY GROUPING(zone) DESC, total_meters DESC
 
-  - q: ["how long has meter HP8500592 been waiting for sat", "is meter X SAT done", "SAT status of one meter", "since when is this meter pending SAT"]
-    note: "One meter: its install row LEFT JOIN its SAT mapping -- a meter with no SAT batch is still found (an inner join / sat_milestones filter returns nothing for exactly the meters that are waiting). Waiting days = today - mi_date while no SAT batch."
+  - q: ["how long has meter HP8500592 been waiting for sat", "is meter HP9000628 sat done", "SAT status of one meter", "since when is this meter pending SAT"]
+    note: "One meter: its install row LEFT JOIN its SAT mapping LEFT JOIN its batch's sat_milestones (project AND sat_number) -- a meter with no SAT batch is still found. Say the SAT number and SAT date when done; waiting days = today - mi_date while no SAT batch."
     sql: |
       SELECT i.new_meter_serial_number AS meter_serial, i.mi_date AS installed_on, i.project, i.zone,
-             m.sat_number,
+             m.sat_number, s.sat_date,
              CASE WHEN m.sat_number IS NULL THEN 'Waiting for SAT' ELSE 'SAT done' END AS sat_status,
              CASE WHEN m.sat_number IS NULL THEN date_diff('day', CAST(i.mi_date AS date), current_date) END AS days_waiting_since_install
       FROM (SELECT new_meter_serial_number, mi_date, project, zone FROM gmr_wfm_silver.unified_installations
             WHERE new_meter_serial_number = 'HP8500592' ORDER BY updated_at DESC LIMIT 1) i
-      LEFT JOIN (SELECT meter_serial_number, sat_number FROM gmr_wfm_silver.sat_meter_mappings
+      LEFT JOIN (SELECT meter_serial_number, sat_number, project FROM gmr_wfm_silver.sat_meter_mappings
                  WHERE meter_serial_number = 'HP8500592' ORDER BY updated_at DESC LIMIT 1) m
              ON m.meter_serial_number = i.new_meter_serial_number
+      LEFT JOIN gmr_wfm_silver.sat_milestones s ON s.project = m.project AND s.sat_number = m.sat_number
 
-  - q: ["How many installed meters have not yet cleared SAT?", "meters pending SAT", "how many meters are pending SAT", "SAT pending meters", "feeder meters without sat", "meters without SAT", "how many meters not SAT done"]
+  - q: ["is meter HP9000628 invoiced", "has meter X been billed", "invoice status of one meter", "lumpsum and PMPM invoice dates of a meter"]
+    note: "A meter is invoiced when its SAT batch carries an invoice date (sat_milestones on project AND sat_number) -- read the dates, never infer from snapshot counts. No SAT batch = not invoiced because SAT is not done."
+    sql: |
+      SELECT i.new_meter_serial_number AS meter_serial, i.project, m.sat_number, s.sat_date,
+             CASE WHEN s.lumpsum_invoice_date IS NOT NULL OR s.pmpm_invoice_date IS NOT NULL THEN 'Invoiced'
+                  WHEN m.sat_number IS NULL THEN 'Not invoiced (SAT not done yet)'
+                  ELSE 'Not invoiced (SAT batch not invoiced yet)' END AS invoice_status,
+             s.lumpsum_invoice_date, s.lumpsum_collection_date, s.pmpm_invoice_date, s.pmpm_collection_date
+      FROM (SELECT new_meter_serial_number, project FROM gmr_wfm_silver.unified_installations
+            WHERE new_meter_serial_number = 'HP9000628' ORDER BY updated_at DESC LIMIT 1) i
+      LEFT JOIN (SELECT meter_serial_number, sat_number, project FROM gmr_wfm_silver.sat_meter_mappings
+                 WHERE meter_serial_number = 'HP9000628' ORDER BY updated_at DESC LIMIT 1) m
+             ON m.meter_serial_number = i.new_meter_serial_number
+      LEFT JOIN gmr_wfm_silver.sat_milestones s ON s.project = m.project AND s.sat_number = m.sat_number
+
+  - q: ["is meter CA8081038 eligible for sat", "is this meter due for SAT", "SAT eligibility of one meter"]
+    note: "Eligible = installed on or before its project's SAT cutoff (public.sat_eligibility_config, Postgres -- the extra query). Main query = the meter itself (Athena); compare its installed_on with its project's cutoff and say both dates."
+    sql: |
+      SELECT i.new_meter_serial_number AS meter_serial, i.mi_date AS installed_on, LOWER(i.project) AS project,
+             i.report_category AS category, m.sat_number
+      FROM (SELECT new_meter_serial_number, mi_date, project, report_category FROM gmr_wfm_silver.unified_installations
+            WHERE new_meter_serial_number = 'CA8081038' ORDER BY updated_at DESC LIMIT 1) i
+      LEFT JOIN (SELECT meter_serial_number, sat_number FROM gmr_wfm_silver.sat_meter_mappings
+                 WHERE meter_serial_number = 'CA8081038' ORDER BY updated_at DESC LIMIT 1) m
+             ON m.meter_serial_number = i.new_meter_serial_number
+    extra:
+      - purpose: "SAT eligibility cutoff date per project"
+        sql: |
+          SELECT project, eligibility_cutoff_date FROM public.sat_eligibility_config ORDER BY project
+
+  - q: ["was meter HP8500592 replaced and why", "has meter X been replaced", "which meter replaced X", "replacement reason of a meter"]
+    note: "Replaced = some installation lists the meter as old_meter_number (reason = that row's old_meter_status). The meter's own install row lists the OLD meter it replaced -- that is the other direction: never say 'X was replaced with <its old meter>'. No 'replaced by' row = not replaced."
+    sql: |
+      SELECT r.meter_role, r.other_meter, r.reason_recorded, r.on_date, r.project, r.zone, r.technician
+      FROM (SELECT 'replaced by a newer meter' AS meter_role, new_meter_serial_number AS other_meter,
+                   old_meter_status AS reason_recorded, mi_date AS on_date, project, zone, technician_name AS technician, updated_at
+            FROM gmr_wfm_silver.unified_installations WHERE old_meter_number = 'HP8500592'
+            UNION ALL
+            SELECT 'installed in place of an old meter', old_meter_number, old_meter_status, mi_date, project, zone, technician_name, updated_at
+            FROM gmr_wfm_silver.unified_installations WHERE new_meter_serial_number = 'HP8500592') r
+      ORDER BY r.updated_at DESC
+
+  - q: ["How many installed meters have not yet cleared SAT?", "how many meters are sat pending in Kashi", "meters pending SAT", "SAT pending meters", "feeder meters without sat", "meters without SAT", "how many meters not SAT done"]
     suggest: "How many installed meters have not yet cleared SAT?"
-    note: "Use public.gold_mi_sat_invoice_snapshot (never gold_mi_installation_day_agg). Answer = installed_not_sat, split into eligible_pending_sat and not_yet_due."
+    note: "installed_not_sat from public.gold_mi_sat_invoice_snapshot (= MI - SAT on the MI vs SAT card); eligible_pending_sat = the Non-SAT Ageing card's total (gold_non_sat_ageing_snapshot); a place / category goes on the outer query AND both subqueries (Kashi: LOWER(project) = 'kashi' three times); not_yet_due = the difference. Quote all three."
     sql: |
       SELECT SUM(meter_count) AS total_mi,
              SUM(meter_count) FILTER (WHERE sat_stage IS NULL) AS installed_not_sat,
-             SUM(meter_count) FILTER (WHERE sat_stage IS NULL AND is_sat_eligible) AS eligible_pending_sat,
-             SUM(meter_count) FILTER (WHERE sat_stage IS NULL AND NOT is_sat_eligible) AS not_yet_due
+             (SELECT SUM(meter_count) FROM public.gold_non_sat_ageing_snapshot) AS eligible_pending_sat,
+             SUM(meter_count) FILTER (WHERE sat_stage IS NULL)
+               - (SELECT SUM(meter_count) FROM public.gold_non_sat_ageing_snapshot) AS not_yet_due
       FROM public.gold_mi_sat_invoice_snapshot
+
+  - q: ["SAT pending less than 60 days", "non-SAT meters younger than 90 days", "meters waiting for SAT under 30 days"]
+    note: "Under N days = only the bands below N. The answer is pending_under_60_days (0 today: every non-SAT meter is 91+ days -- ages freeze at the snapshot's cutoffs); all_non_sat_meters is context only, never 'under 60 days'."
+    sql: |
+      SELECT COALESCE(SUM(meter_count) FILTER (WHERE age_key IN ('age_0_30', 'age_31_60')), 0) AS pending_under_60_days,
+             COALESCE(SUM(meter_count) FILTER (WHERE age_key = 'age_0_30'), 0) AS days_0_30,
+             COALESCE(SUM(meter_count) FILTER (WHERE age_key = 'age_31_60'), 0) AS days_31_60,
+             SUM(meter_count) AS all_non_sat_meters
+      FROM public.gold_non_sat_ageing_snapshot
 
   - q: ["Which project is worst on pending SAT?", "which project has most meters pending SAT", "SAT pending project-wise"]
     suggest: "Which project is worst on pending SAT?"
@@ -645,7 +756,7 @@ examples:
       GROUP BY ROLLUP (project)
       ORDER BY GROUPING(project) DESC, eligible_pending_sat DESC
 
-  - q: ["SAT percentage against eligible MI for Agra", "SAT % vs eligible MI", "how much of eligible MI has SAT done", "SAT progress against eligible meters"]
+  - q: ["SAT percentage against eligible MI for Agra", "eligible sat % in Kashi", "SAT % vs eligible MI", "how much of eligible MI has SAT done", "SAT progress against eligible meters"]
     note: "% SAT vs eligible MI = ALL SAT meters (sat_stage IS NOT NULL, eligible or not) / eligible MI -- the dashboard formula, can exceed 100%. Never SAT(eligible) / eligible. Show both percentages."
     sql: |
       SELECT SUM(meter_count) AS total_mi,
@@ -1181,7 +1292,7 @@ examples:
       GROUP BY month_start
       ORDER BY month_start
 
-  - q: ["Monthly productivity trend for EDC Ghazipur circle in 2026", "monthly productivity trend for a zone / circle / division / sub-division", "productivity trend in Varanasi II zone", "average active technicians per month in a division"]
+  - q: ["Monthly productivity trend for EDC Ghazipur circle in 2026", "monthly productivity trend for a zone / circle / division / sub-division", "productivity trend in Varanasi II zone", "Month-wise productivity in Agra zone from Jan 2026 to Jun 2026", "average active technicians per month in a division"]
     note: "A place scope on the KPI 3 cube = filter_level ('zone'/'circle'/'division'/'sub_division') + filter_label (UPPER name) with aggregate_level = 'all' and project = 'ALL' -- never LOWER(circle) (no such column)."
     sql: |
       SELECT month_start AS month, SUM(total_installations) AS installations,
@@ -1518,6 +1629,19 @@ examples:
       WHERE LOWER(circle) = 'edc ghazipur'
       GROUP BY ROLLUP (division)
       ORDER BY GROUPING(division) DESC, total_defective DESC
+
+  - q: ["What is the defect rate in Kashi", "defect rate for SEIPL meters in Varanasi II zone", "defect rate in a project or zone", "defect rate of one OEM in a place"]
+    note: "The card's Defect Rate % for a place / OEM: Meter Faulty / installed meters of the OEMs with defects there. The SAME place / OEM filter on the defect leg, the installed leg and its OEM subquery -- and NO category filter unless one is named. One summary row (no ROLLUP) unless a breakdown is asked."
+    sql: |
+      SELECT SUM(u.defects) AS total_defective, SUM(u.faulty) AS meter_faulty, SUM(u.installed) AS installed_meters,
+             ROUND(SUM(u.faulty) * 100.0 / NULLIF(SUM(u.installed), 0), 2) AS defect_rate_pct
+      FROM (SELECT defect_count AS defects, defect_rate_numerator_count AS faulty, 0 AS installed
+            FROM public.gold_meter_defect_event_day_agg WHERE LOWER(project) = 'kashi'
+            UNION ALL
+            SELECT 0, 0, meter_count FROM public.gold_mi_installation_month_agg
+            WHERE NOT is_replacement AND has_meter_serial AND oem IS NOT NULL AND LOWER(project) = 'kashi'
+              AND UPPER(oem) IN (SELECT DISTINCT UPPER(oem) FROM public.gold_meter_defect_event_day_agg
+                                 WHERE LOWER(project) = 'kashi')) u
 
   - q: ["Defect rate for DT meters in Kashi OEM wise", "defect rate for feeder meters", "defect rate by OEM for one category", "overall defect rate in a period with OEM split"]
     note: "Keep a Total row: its rate is the card's blended Defect Rate % (all faulty / all installed), not an average of OEM rates. Installs: same project / place / date filters; category via progress_category or inventory_category."
@@ -2030,7 +2154,7 @@ examples:
           ORDER BY GROUPING(project) DESC, remaining_stock DESC
 
   - q: ["Stock left in Prayagraj II zone", "remaining stock in a zone", "how much stock does a zone have"]
-    note: "Stock counts in the zone of the warehouse holding it (the app places it), so filter the zone directly; circle / division have no stock."
+    note: "Filter the zone directly: like the dashboard's summary tiles for one zone, a zone filter counts the event rows stored with that zone (warehouse stock is placed into zones only on zone-wise breakdowns); circle / division have no stock."
     sql: |
       SELECT UPPER(zone) AS zone, MAX(UPPER(project)) AS project,
              SUM(inventory_count) AS supplied, SUM(installed_count) AS installed,
@@ -2177,7 +2301,7 @@ examples:
       GROUP BY ROLLUP (period_start)
       ORDER BY GROUPING(period_start) DESC, period_start
 
-  - q: ["MI productivity in Triveni from January 2026 to September 2026 month wise", "month wise productivity of a project", "MI productivity from 1 June 2026 to 15 August 2026"]
+  - q: ["MI productivity in Triveni from January 2026 to September 2026 month wise", "productivity month wise of a project", "MI productivity from 1 June 2026 to 15 August 2026"]
     note: "Whole months from the month table (period_start = 1st); a partial first / last month (e.g. up to 15 Aug) from the day table bucketed to its month -- category = 'ALL' throughout. The Total row counts distinct technicians over the whole range."
     sql: |
       SELECT CASE WHEN GROUPING(m) = 1 THEN 'Total' ELSE to_char(m, 'Mon YYYY') END AS month,
@@ -2284,7 +2408,7 @@ examples:
       GROUP BY ROLLUP (discom)
       ORDER BY GROUPING(discom) DESC, installations DESC
 
-  - q: ["MI productivity month wise in Agra from January 2026 to September 2026", "DT meter MI productivity month wise in Mathura zone from April 2026 to September 2026", "month wise productivity of a zone or project"]
+  - q: ["MI productivity month wise in Agra from January 2026 to September 2026", "DT meter MI productivity month wise in Mathura zone from April 2026 to September 2026", "productivity month wise of a zone or project"]
     note: "Month wise = _month_agg GROUP BY period_start (KPI 2), never the trend cube. A category named -> category = 'X' AND meter_type = 'ALL'; a place -> its own column."
     sql: |
       SELECT CASE WHEN GROUPING(period_start) = 1 THEN 'Total' ELSE to_char(period_start, 'Mon YYYY') END AS month,

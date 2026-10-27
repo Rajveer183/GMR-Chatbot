@@ -63,7 +63,10 @@ _RATE_RE = re.compile(r"%|\bpct\b|percent|\brate\b|productivity|per (?:team|tech
                       re.I)
 # A total already contains the other series; stacking it on them counts every meter twice.
 # Seen live: 'Escalated Tickets' (every escalation) was stacked on its Discom pending / approved parts.
-_WHOLE_RE = re.compile(r"\b(?:total|suppl(?:y|ied|ies)|inventory|received|eligible)\b|^escalated tickets$", re.I)
+# Installed meters hold their SAT-done / faulty meters -- seen live 27 Oct: 'Meter Faulty' stacked on
+# 'Installed Meters' per OEM, and 'SAT Done' on 'Installed Meters'.
+_WHOLE_RE = re.compile(r"\b(?:total|suppl(?:y|ied|ies)|inventory|received|eligible)\b|^escalated tickets$|"
+                       r"^(?:installed(?: meters)?|meters installed)$", re.I)
 # Geography / organisation only -- seen live: x = 'technician_remark' counted as a place, and the
 # escalations-by-remark donut became bars.
 _GEO_RE = re.compile(r"project|discom|zone|circle|division|cluster|warehouse|\boem\b|vendor|\bsku\b|region", re.I)
@@ -73,6 +76,7 @@ _CARD_COLUMNS = {
     "mi_progress": r"consumer|\bdtr?\b|^dt_|feeder",
     "meter_replacement": r"burnt|faulty|other",
     "hhu_reading": r"^ok|_ok\b|fail|other",
+    "meter_journey": r"_to_|\bto\b",
     "non_sat_ageing": _BAND_COL_RE, "revenue_ageing": _BAND_COL_RE,
     "stock_ageing": _BAND_COL_RE, "om_active_ageing": _BAND_COL_RE,
 }
@@ -80,8 +84,11 @@ _NOT_A_MEASURE_RE = re.compile(r"^(?:ord|rank|sort|seq|row_?num|year|yr)$|_id$|^
 _NO_LABEL = {"total", "grand total", "none", "nan", "", "all"}
 _PROJECTS = {"agra", "kashi", "triveni", "puvvnl", "dvvnl"}
 # chartUtils.js isDate: ISO / DD-MM-YYYY dates, YYYY-MM, YYYY-Www, 'Oct 2026' / 'Oct-26', week labels.
+# Also '01 Sep 2026' and week ranges '01 Aug - 07 Aug' -- seen live 27 Oct: 15 days of MI pace vs stock
+# were drawn as horizontal bars (dates -> columns on the dashboard).
 _DATE_RE = re.compile(r"^(?:\d{4}-\d{2}-\d{2}|\d{2}-\d{2}-\d{4}|\d{2}-\d{2}-\d{2}|\d{2}/\d{2}/\d{4}|\d{2}/\d{2}/\d{2}|"
-                      r"\d{4}-\d{2}|\d{4}-w\d{1,2}|[a-z]{3}[-\s]\d{2,4})$|^week|^w\d+-", re.I)
+                      r"\d{4}-\d{2}|\d{4}-w\d{1,2}|[a-z]{3}[-\s]\d{2,4}|\d{1,2}[-\s][a-z]{3}[-\s]\d{2,4}|"
+                      r"\d{1,2}\s[a-z]{3}\s*-\s*\d{1,2}\s[a-z]{3})$|^week|^w\d+-", re.I)
 
 DONUT_SLICES = 9           # smartMeterUtils.js OM_TYPE_SLICES: the rest is one 'Others (N types)' slice
 _TOTAL_LABELS = {"mi_progress_geo", "non_sat_ageing_stage", "mi_vs_sat_stage", "meter_replacement"}
@@ -90,6 +97,19 @@ _NO_LABELS = {"stock_ageing_geo", "mi_productivity", "monthly_productivity", "om
 
 def user_named_type(question: str | None) -> bool:
     return bool(question and _NAMED_TYPE_RE.search(question))
+
+
+_EXACT_NAMED = [(re.compile(p, re.I), t) for p, t in [
+    (r"\bpie\b", "pie"), (r"\bdo(?:ugh)?nut\b", "donut"), (r"\bfunnel\b", "funnel"), (r"\bheat ?map\b", "heatmap"),
+    (r"\b(?:gauge|radial)\b", "radial"), (r"\bline (?:chart|graph|plot)\b|\bas an? line\b", "line"),
+    (r"\barea (?:chart|graph|plot)\b|\bas an? area\b", "area")]]
+
+
+def exact_named_type(question: str | None) -> str | None:
+    """The chart type the user asked for when the word names exactly one (pie, donut, line chart ...);
+    bar wording leaves the bar variant to the planner. Seen live: 'Give me a pie chart' came back a donut."""
+    hits = {t for pat, t in _EXACT_NAMED if question and pat.search(question)}
+    return hits.pop() if len(hits) == 1 else None
 
 
 def kpi_for(sql: str | None, names: list[str], question: str | None = None) -> str | None:
@@ -131,9 +151,16 @@ def split_column(df: Any, x: str, ys: list[str]) -> str | None:
 
 
 def card_measure(kpi: str, df: Any, ys: list[str]) -> list[str]:
-    """A productivity card plots productivity: when the rows carry a productivity column the planner
-    left out of its chart, that column is the bar. Seen live: 'MI productivity per team by project'
-    stacked installations on active technicians while productivity sat only in the table."""
+    """The card's own series when the rows carry them and the planner charted something else:
+      * a productivity card plots productivity -- seen live, 'MI productivity per team by project'
+        stacked installations on active technicians while productivity sat only in the table
+      * a card split into parts (Consumer / DT / Feeder, journey stages, age bands) plots the parts --
+        seen live, 'meter journey average time per stage by project' drew total journey days only"""
+    nums = [c for c in df.columns if pd.api.types.is_numeric_dtype(df[c])]
+    pattern = _CARD_COLUMNS.get(kpi)
+    parts = [c for c in nums if pattern and re.search(pattern, str(c), re.I) and not re.search(r"total", str(c), re.I)]
+    if len(parts) >= 2 and not set(ys) & set(parts):
+        return parts
     if kpi not in ("mi_productivity", "monthly_productivity", "om_productivity"):
         return ys
     if any(re.search(r"productivity", str(y), re.I) for y in ys):
@@ -243,13 +270,20 @@ def shape(kpi: str, planned: str, cats: list[str], series: list[dict], x_alias: 
     prod = [s for s in rates if re.search(r"productivity", s["name"], re.I)]
     if kpi in ("mi_productivity", "monthly_productivity", "om_productivity") and prod:
         bars, rates = prod[:1], []
+    # 'Defect rate OEM wise' plots the rate (the card's per-OEM figure), not faulty beside installed.
+    defect_rate = [s for s in rates if re.search(r"defect|fault", s["name"], re.I)]
+    if kpi == "meter_replacement" and defect_rate:
+        bars, rates = defect_rate[:1], []
     bars = _band_order(_drop_sum_series(bars))
     for s in bars + rates:
         s.pop("type", None)
     n, k = len(cats), len(bars)
     dated, geo = _is_dates(cats), _is_geo(x_alias, cats)
-    # Funnel stages are each a subset of the one before: side by side, never stacked.
-    nested = k > 1 and (kpi == "sat_invoice_funnel" or any(_WHOLE_RE.search(s["name"]) for s in bars))
+    # Funnel stages are each a subset of the one before: side by side, never stacked. Rates never add up:
+    # seen live 27 Oct, Agra's and Kashi's monthly productivity were stacked into one column per month.
+    nested = k > 1 and (kpi in ("sat_invoice_funnel", "mi_productivity", "monthly_productivity", "om_productivity")
+                        or any(_WHOLE_RE.search(s["name"]) for s in bars)
+                        or all(_RATE_RE.search(s["name"]) for s in bars))
 
     if planned == "radial" and k == 1 and not rates and n <= 4 and all(0 <= v <= 100 for v in bars[0]["data"]):
         ctype = "radial"                                   # the dashboard's utilization gauge

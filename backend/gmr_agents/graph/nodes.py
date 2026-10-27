@@ -234,12 +234,19 @@ def validate_node(state: AgentState, config: RunnableConfig) -> dict[str, Any]:
     ctx.plan = ctx.tool_ctx.plan = P._to_plan(ctx.raw_plan, verdict["guard"], catalog, call.get("model") or "")
 
     update: dict[str, Any] = {"step_count": _tick(state)}
-    if settings.VERIFY_ENTITIES and not state.get("entities_checked") and not limits.retries_exhausted(state["attempt"]):
+    # Every repaired SQL is checked again -- seen live 27 Oct: a repair fixed the flagged table but added a stage
+    # filter nobody asked for, and ran unchecked. The same problems twice in a row run anyway (the repair could
+    # not fix them; refusing would lose the answer).
+    if settings.VERIFY_ENTITIES and not limits.retries_exhausted(state["attempt"]):
         extra_sql = [str(e.get("sql") or "") for e in ctx.raw_plan.get("extra_queries") or [] if isinstance(e, dict)]
         mismatch = sql_validator.check_entities(triage["question"], [ctx.plan["sql"], *extra_sql],
                                                 columns=P._table_columns(ctx.plan["tables"], catalog),
                                                 asked=state.get("question"))
         update["entities_checked"] = True
+        before = [e for e in state.get("errors") or [] if e.get("kind") == "entity_mismatch"]
+        if mismatch and before and set(mismatch["problems"]) <= set(before[-1].get("problems") or []):
+            P._step(ps, "validate", t0, outcome="entity_mismatch_kept", problems=mismatch["problems"][:3])
+            mismatch = None
         if mismatch:
             err = {**mismatch, "sql": ctx.plan["sql"]}
             P._step(ps, "validate", t0, outcome="entity_mismatch", problems=mismatch["problems"][:3])
@@ -374,7 +381,10 @@ def answer_node(state: AgentState, config: RunnableConfig) -> dict[str, Any]:
         ctx.plan, ctx.result, ctx.extras = ctx.fallback["plan"], ctx.fallback["result"], ctx.fallback["extras"]
     plan, result, extras = ctx.plan, ctx.result, ctx.extras
     plan["extra_sql"] = [ex["sql"] for ex in extras]
-    plan["question"] = triage["question"]   # a chart type the user named outranks the dashboard's chart
+    # A chart type the user named outranks the dashboard's chart. Both wordings: the rewritten
+    # question can drop it -- seen live, 'Give me a pie chart of defective meters by defect type'
+    # became 'Show the count of defective meters by defect type' and was drawn as bars.
+    plan["question"] = f"{state['question']} || {triage['question']}"
     ps.update(plan=plan, result=result, agent=triage["domain"], domain=triage["domain"],
               row_count=len(result.get("result", [])))
     t0 = time.perf_counter()

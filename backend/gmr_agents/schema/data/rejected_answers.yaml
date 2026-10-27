@@ -82,3 +82,10 @@ rejected:
   - {trace_id: 11a15ad8, question: "Which meters had the most complaints in August 2026?", reason: "refused: said complaints are not tracked by month"}
   - {trace_id: 03a92c7d, question: "O&M tickets closed per technician per day in Triveni last month", reason: "per-technician list, not the team figure 1.94"}
   - {trace_id: 5bac2688, question: "O&M tickets closed per technician per day in Triveni last month", reason: "per technician-day rows averaged (1.67), not the team figure 1.94"}
+  - {trace_id: 05d980ce, question: "supply utilization summary from 23 jun 2026 to 23 sep 2026 in varanasi i and varanasi ii zone", reason: "zone filter placed warehouse stock (841,713 supplies instead of the card's 835,270)"}
+  - {trace_id: 3294ede5, question: "90+ days stock still in the warehouse in triveni", reason: "'in the warehouse' stage dropped (25,705 instead of 11,597)"}
+  - {trace_id: 50cf345c, question: "consumer stock ageing type wise", reason: "stock ageing read from the non-SAT ageing table"}
+  - {trace_id: ad5855a9, question: "sat pending less than 60 days", reason: "called all 263,243 non-SAT meters 'under 60 days' (answer is 0)"}
+  - {trace_id: 455e03f5, question: "eligible sat % in kashi", reason: "SAT(eligible) / eligible = 94.18% instead of the card's ALL SAT / eligible = 95.33%"}
+  - {trace_id: cf747569, question: "is meter HP9000628 invoiced", reason: "said 'not invoiced' without reading invoice dates (SAT-5 invoiced 4 Nov 2025)"}
+  - {trace_id: bb936e35, question: "was meter HP8500592 replaced and why", reason: "replacement direction reversed (HP8500592 replaced old meter XD31655, it was not replaced)"}

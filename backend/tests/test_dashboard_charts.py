@@ -103,6 +103,28 @@ def test_productivity_column_is_the_bar_even_when_the_planner_left_it_out():
     assert out["type"] == "bar" and out["y"] == [3.36, 3.21] and "series" not in out
 
 
+def test_a_named_type_survives_the_rewritten_question():
+    # live: 'Give me a pie chart of ...' was rewritten without 'pie chart' and drawn as bars
+    sql = "SELECT defective_type, SUM(defect_count) AS meters FROM public.gold_meter_defect_event_day_agg"
+    df = pd.DataFrame({"defective_type": ["Total", "METER FAULTY", "METER BURNT", "OTHERS"], "meters": [53, 39, 11, 3]})
+    q = "Give me a pie chart of defective meters by defect type || Show the count of defective meters by defect type"
+    out = _build_chart(plan(sql, {"type": "pie", "x": "defective_type", "y": ["meters"]}, question=q), df)
+    assert out["type"] == "pie" and out["dashboard"] == "meter_replacement"
+    # live: the planner answered the pie request with a donut
+    out = _build_chart(plan(sql, {"type": "donut", "x": "defective_type", "y": ["meters"]}, question=q), df)
+    assert out["type"] == "pie"
+    assert dc.exact_named_type("show it as a bar chart") is None and dc.exact_named_type("as a line") == "line"
+
+
+def test_a_cards_parts_win_over_its_total():
+    # live: journey time per stage by project drew total journey days only
+    sql = "SELECT project, di_to_agency, agency_to_supervisor, total_journey FROM public.gold_meter_journey_stage_agg"
+    df = pd.DataFrame({"project": ["AGRA", "KASHI"], "di_to_agency": [40.0, 50.0], "agency_to_supervisor": [10.0, 12.0],
+                       "total_journey": [171.0, 191.0]})
+    out = _build_chart(plan(sql, {"type": "bar", "x": "project", "y": ["total_journey"]}), df)
+    assert out["type"] == "stacked_bar" and [s["name"] for s in out["series"]] == ["Di To Agency", "Agency To Supervisor"]
+
+
 def test_repeated_categories_keep_their_subtotal_row():
     # live: MI progress by project drew AGRA four times (consumer, DT, feeder and subtotal rows)
     cats = ["AGRA", "AGRA", "AGRA", "AGRA", "KASHI", "KASHI"]
@@ -216,3 +238,23 @@ def test_build_chart_without_a_dashboard_table_is_unchanged():
     out = _build_chart(plan("SELECT zone, COUNT(*) AS meters FROM gmr_wfm_silver.unified_installations GROUP BY zone",
                             {"type": "bar", "x": "zone", "y": ["meters"]}), df)
     assert out["type"] == "bar" and "dashboard" not in out
+
+
+def test_live_fixes_27_oct():
+    # '01 Sep 2026' days are dates: columns, not horizontal bars
+    days = [f"{d:02d} Sep 2026" for d in range(1, 16)]
+    assert dc.shape("mi_pace_stock", "bar", days, [s("Remaining Stock", range(15))], "day")["type"] == "bar"
+    # two projects' productivity side by side, never stacked
+    out = dc.shape("monthly_productivity", "stacked_bar", ["2026-01", "2026-02"], [s("AGRA", [8.2, 7.3]), s("KASHI", [4.5, 4.3])], "month")
+    assert out["type"] == "grouped_bar"
+    # faulty is part of installed: side by side; defect rate per OEM is the bar when present
+    out = dc.shape("meter_replacement", "stacked_bar", ["AEW", "CAP"], [s("Meter Faulty", [9, 1]), s("Installed Meters", [900, 300])], "oem")
+    assert out["type"] == "grouped_bar"
+    out = dc.shape("meter_replacement", "stacked_bar", ["AEW", "CAP"],
+                   [s("Meter Faulty", [9, 1]), s("Installed Meters", [900, 300]), s("Defect Rate %", [1.0, 0.3])], "oem")
+    assert [b["name"] for b in out["series"]] == ["Defect Rate %"]
+    # a measure is never the category axis
+    df = pd.DataFrame({"meter_type": ["1PH", "3PH"], "utilization_pct": [98.8, 91.1], "supplied": [10, 5]})
+    out = _build_chart(plan("SELECT 1 FROM gmr_wfm_silver.unified_installations",
+                            {"type": "bar", "x": "utilization_pct", "y": ["supplied"]}), df)
+    assert out["x"] == ["1PH", "3PH"]

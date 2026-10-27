@@ -115,8 +115,9 @@ def _stock_filtered_by_place(sql: str) -> bool:
     return False
 
 
-# Zone is not here: stock is counted in its warehouse's zone (sql/hierarchy.py places it), so a
-# zone filter on stock is right; circle / division still have no stock.
+# Zone is not here: a zone filter on stock is right (it reads the event rows stored with that zone, like the
+# dashboard's one-zone tiles; zone-wise breakdowns get warehouse stock placed by sql/hierarchy.py); circle /
+# division have no stock.
 _WITHOUT_SAT_RE = re.compile(r"\b(without|pending|awaiting|no|not)\s+(a\s+)?sat\b|\bsat\s+(pending|not done|baaki)\b|"
                              r"\bnot\s+(yet\s+)?(cleared|passed)\s+sat\b", re.I)
 _AGEING_RE = re.compile(r"\b(age|ageing|aging|aged|old|older|band|bands|days?|since|how long|stuck|why)\b", re.I)
@@ -126,7 +127,8 @@ _PLACE_LEVELS = {"circle", "division", "sub_division"}
 _TREND_CUBE = "gold_mi_productivity_trend_month_agg"
 # Words that name the Monthly Productivity trend card (KPI 3); the cube's own measure may also be asked by name.
 # The card is monthly only: a 'daily / weekly productivity trend' is KPI 2's.
-_KPI3_CARD_RE = re.compile(r"(?<!daily )(?<!weekly )\bproductivity trend\b|\bmonthly (?:mi )?productivity\b|\bkpi[- ]?3\b", re.I)
+_KPI3_CARD_RE = re.compile(r"(?<!daily )(?<!weekly )\bproductivity trend\b|\b(?:monthly|month[- ]?wise) (?:mi )?productivity\b|"
+                           r"\bkpi[- ]?3\b", re.I)
 _KPI3_RE = re.compile(_KPI3_CARD_RE.pattern + r"|\b(?:average|avg\.?) active technicians\b", re.I)
 _SUPPLY_CARD_RE = re.compile(r"\b(?:supply|inventory) utili[sz]ation\b|\butili[sz]ation rate\b|\bmi pace\b|"
                              r"\bpace vs\.? stock\b|\bstock availa?bi?li?ty\b", re.I)
@@ -135,6 +137,92 @@ _DROPPED_TYPE_RE = re.compile(r"meter_type\s*(?:<>|!=)\s*'other-consumer_meter'|
                               r"meter_type\s+not\s+in\s*\([^)]*'other-consumer_meter'|meter_type\s+is\s+not\s+null")
 _REVENUE_AGEING_RE = re.compile(r"\brevenue\s+(?:not|un)[- ]?reali[sz]ed\b.*\b(?:ageing|aging|aged|age|old|days)\b|"
                                 r"\brevenue\s+ageing\b", re.I)
+_SERIAL_RE = re.compile(r"\b[A-Za-z]{1,4}\d{6,10}\b")
+_STOCK_STAGE_RE = re.compile(r"\bwith (?:the )?(?:technicians?|supervisors?|agenc(?:y|ies))\b|"
+                             r"\bin (?:the )?(?:gmr )?warehouses?\b", re.I)
+
+
+_PLACE_LITERAL_RE = re.compile(r"\b(zone|circle|division|sub_division|filter_label)\b\s*\)?\s*"
+                               r"(?:=\s*'([^']+)'|in\s*\(([^)]*)\))", re.I)
+
+
+def _unknown_places(low: str) -> list[str]:
+    """Place literals (zone / circle / division / sub-division / KPI 3 filter_label) that no stored place
+    has, with the stored names that contain the asked words. Skipped until the place list has loaded."""
+    from gmr_agents.sql import hierarchy
+
+    places = hierarchy.place_names()
+    if not places:
+        return []
+    known = set(places) | {"all", "unmapped", ""} | set(_PROJECTS) | {"puvvnl", "dvvnl"}
+    out = []
+    for m in _PLACE_LITERAL_RE.finditer(low):
+        values = [m.group(2)] if m.group(2) is not None else re.findall(r"'([^']*)'", m.group(3) or "")
+        for v in values:
+            v = v.strip().lower()
+            if v in known:
+                continue
+            words = [w for w in re.findall(r"[a-z]+", v) if len(w) > 2 and w not in {
+                "edd", "edc", "eudc", "eudd", "edsd", "zone", "circle", "division", "sub"}]
+            near = sorted(p for p in places if words and all(w in p for w in words))[:5]
+            out.append(f"no stored {m.group(1)} is named '{v}'" + (f" -- the stored names are {near}" if near else "")
+                       + " (place names are stored in full, e.g. 'edd chunar', 'edc agra')")
+    return out
+
+
+_PLACE_FILTER_RE = re.compile(r"(?:lower\(\s*)?\b(?:trimmed_)?(project|zone|circle|division|sub_division)\b\s*\)?\s*=\s*'([^']+)'")
+
+
+def _without_subqueries(text: str) -> str:
+    """`text` with every parenthesised SELECT removed (balanced parentheses)."""
+    out, i = [], 0
+    while i < len(text):
+        m = re.compile(r"\(\s*select\b").search(text, i)
+        if not m:
+            out.append(text[i:])
+            break
+        out.append(text[i:m.start()])
+        depth, j = 0, m.start()
+        while j < len(text):
+            depth += {"(": 1, ")": -1}.get(text[j], 0)
+            j += 1
+            if depth == 0:
+                break
+        i = j
+    return "".join(out)
+
+
+def _union_place_gaps(low: str) -> list[str]:
+    if "gold_meter_defect_event_day_agg" not in low or "gold_mi_installation_" not in low or "union all" not in low:
+        return []
+    legs = []
+    for chunk in re.split(r"\bunion all\b", low):
+        # the first leg starts after the outer query's '(' ; the last ends at the ')' closing it
+        opens = [m.start() for m in re.finditer(r"\(\s*select\b", chunk)]
+        while opens and chunk[opens[-1]:].count("(") > chunk[opens[-1]:].count(")"):
+            chunk = chunk[opens[-1] + 1:]
+            opens = [m.start() for m in re.finditer(r"\(\s*select\b", chunk)]
+        depth = 0
+        for k, ch in enumerate(chunk):
+            depth += {"(": 1, ")": -1}.get(ch, 0)
+            if depth < 0:
+                chunk = chunk[:k]
+                break
+        legs.append(chunk)
+    defect = [_without_subqueries(l) for l in legs if "gold_meter_defect_event_day_agg" in _without_subqueries(l)]
+    installed = [_without_subqueries(l) for l in legs if "gold_mi_installation_" in _without_subqueries(l)]
+    if not defect or not installed:
+        return []
+    wanted = {(c, v) for l in defect for c, v in _PLACE_FILTER_RE.findall(l)}
+    have = {(c, v) for l in installed for c, v in _PLACE_FILTER_RE.findall(l)}
+    return [f"the installed-meters leg also needs {c} = '{v}' (the defect leg filters it; the OEM subquery alone does "
+            "not narrow the installed base)" for c, v in sorted(wanted - have)]
+
+
+def _stock_stage(words: str) -> str:
+    return next(s for s in ("technician", "supervisor", "agenc", "warehouse") if s in words.lower()).replace("agenc", "agency")
+
+
 _WAREHOUSE_RE = re.compile(r"\b(?!(?:a|an|the|each|every|per|by|any|one|this|that|which|all|some)\b)[a-z]+[ _-]?"
                            r"(?:hw|zw|swh|warehouse)\b", re.I)
 
@@ -234,7 +322,9 @@ def check(question: str, sql_texts: list[str], columns: set[str] | None = None, 
     comparing = bool(_COMPARE_RE.search(question.lower()))
 
     for label, table, column in (("project", _PROJECTS, "project"), ("OEM", _OEMS, "oem")):
-        named = _named(question, table)
+        # The user's own words count too: live 27 Oct the rewrite turned 'seipl' into 'SEPL' and the OEM filter
+        # was dropped (17,869 Kashi installs instead of 273 SEIPL).
+        named = _named(question, table) | (_named(asked, table) if asked else set())
         # Every value named ('all projects (Agra, Kashi, Triveni)') = no filter needed. The SQL
         # breaking down by that dimension, for several named values or a comparison ('Agra vs
         # other projects', 'why does HPL have the highest ...') = each named one is a row.
@@ -255,10 +345,52 @@ def check(question: str, sql_texts: list[str], columns: set[str] | None = None, 
                             f"remove that filter (it was probably copied from an example)")
 
     has_category = cols is None or any("category" in c for c in cols)
+    words = _words(f"{question} {asked or ''}")
+    named_cats = set()
     for cat, aliases in _CATEGORIES.items() if has_category else ():
         named = any(f" {a} " in _words(question) for a in aliases) or (cat == "CONSUMER" and _CONSUMER_RE.search(question))
         if named and cat.lower() not in low:
             problems.append(f"the question asks about {cat} meters but the SQL never filters/selects category '{cat}'")
+        if named or any(f" {a} " in words for a in aliases) or (cat == "CONSUMER" and _CONSUMER_RE.search(words)) \
+                or re.search(rf"\b{cat.lower()}s?\b", words):
+            named_cats.add(cat)
+    # Leak: a category filter nobody asked for on the defect-rate union (defects + installed base). Live 27 Oct:
+    # 'defect rate for seipl meters in varanasi ii zone' kept only DT installs (0 installed, a 0.00% rate).
+    # Split columns (FILTER (WHERE category = 'DT')) and CASE labels are not filters.
+    where_only = re.sub(r"\bcase\b.*?\bend\b", " ", re.sub(r"filter\s*\(\s*where[^)]*\)", " ", low, flags=re.S), flags=re.S)
+    if ("gold_meter_defect_event_day_agg" in low and "gold_mi_installation_" in low and not comparing
+            and not meter_types(f"{question} {asked or ''}") and not re.search(r"\bcategor|\btype", words)):
+        for cat in ("DT", "FEEDER", "CONSUMER"):
+            if cat not in named_cats and re.search(rf"category\s*(?:=\s*'{cat.lower()}'|in\s*\([^)]*'{cat.lower()}')",
+                                                   where_only):
+                problems.append(f"the SQL filters category '{cat}' that the question does not ask for -- remove it "
+                                "(every category counts)")
+
+    # 'category wise' = every category. Live 27 Oct: 'productivity category wise in august 2026' ran as
+    # category = 'DT' only (one row).
+    if (re.search(r"\bcategor(?:y|ies)[- ]?wise\b|\bby categor|\beach categor", question, re.I)
+            and re.search(r"\bcategory\s*=\s*'(?:dt|feeder|consumer)'", where_only)):
+        problems.append("a category-wise answer has one row per category (Consumer / DT / Feeder): GROUP BY category, "
+                        "with no filter to a single category")
+
+    # A place name that is not stored is a 0-row answer. Live 27 Oct: 'Chunar division' ran as division = 'chunar'
+    # (stored 'edd chunar') and the answer said 0 active days.
+    problems += _unknown_places(low)
+    # The KPI 3 cube has no zone / circle columns: a place scope is filter_level + filter_label. Live 27 Oct:
+    # 'Month-wise productivity in Agra zone' ran as project = 'agra' AND filter_level = 'zone' (every Agra zone
+    # summed: 8.14 instead of 4.73).
+    if (_TREND_CUBE in low and re.search(r"filter_level\s*=\s*'(?:zone|circle|division|sub_division)'", low)
+            and "filter_label" not in low):
+        problems.append("on gold_mi_productivity_trend_month_agg a place is filter_level = 'zone' AND "
+                        "LOWER(filter_label) = 'agra' (the place's own name) -- filter_level alone sums every place")
+    # filter_label is stored upper-case. Live 27 Oct: filter_label = 'agra' returned 0 rows.
+    if _TREND_CUBE in low and re.search(r"(?<![\w(])filter_label\s*(?:=\s*'[^']*[a-z]|in\s*\([^)]*'[^']*[a-z])", sql):
+        problems.append("filter_label is stored in UPPER case: filter_label = 'AGRA' (or LOWER(filter_label) = 'agra')")
+
+    # The defect-rate union: every place filter of the defect leg also on the installed leg itself (not only inside
+    # its OEM subquery). Live 27 Oct: SEIPL in Varanasi II divided 1,430 faulty by all 754,142 SEIPL installs (0.19%
+    # instead of the card's 1.54%).
+    problems += _union_place_gaps(low)
 
     # 'type wise' = Consumer / DTR / Feeder (category); 'consumer type wise' = the 4 consumer
     # types (1PH / 3PH / LTCT / HTCT) of CONSUMER meters only. Seen live: 'consumer stock ageing
@@ -275,14 +407,78 @@ def check(question: str, sql_texts: list[str], columns: set[str] | None = None, 
     # 'without SAT' / 'pending SAT' counts: the total AND its split. The same question once
     # came back as 705 (all installed-not-SAT) and once as 364 (eligible only, the ageing card).
     # (O&M ticket questions filter tickets by their meter's SAT status -- 'open tickets of SAT pending meters'.)
+    # Eligible pending = the Non-SAT Ageing card's total (gold_non_sat_ageing_snapshot): live 27 Oct, Kashi 75,066
+    # there vs 75,070 from the MI-vs-SAT snapshot's flags.
     if (_WITHOUT_SAT_RE.search(question) and not _AGEING_RE.search(question)
             and not re.search(r"\b(tickets?|complaints?|escalat\w*|o&m|non[- ]?comm)\b", question, re.I)
-            and not re.search(r"\b[A-Za-z]{1,4}\d{6,10}\b", question)
-            and not ("sat_stage is null" in low and "is_sat_eligible" in low)):
-        problems.append("a count of meters without / pending SAT needs the total AND its split from "
-                        "public.gold_mi_sat_invoice_snapshot: installed_not_sat = SUM(meter_count) FILTER (WHERE "
-                        "sat_stage IS NULL), eligible_pending_sat (... AND is_sat_eligible), not_yet_due (... AND NOT "
-                        "is_sat_eligible) -- not the ageing snapshot (eligible only)")
+            and not _SERIAL_RE.search(question)
+            and not ("sat_stage is null" in low and (
+                "gold_non_sat_ageing_snapshot" in low
+                # a ranking / breakdown / what-if splits the snapshot's own flags per row
+                or ("is_sat_eligible" in low and re.search(r"\b(worst|best|which|most|if|wise|by)\b", question, re.I))))):
+        problems.append("a count of meters without / pending SAT needs the total AND its split: installed_not_sat = "
+                        "SUM(meter_count) FILTER (WHERE sat_stage IS NULL) from public.gold_mi_sat_invoice_snapshot, "
+                        "eligible_pending_sat = the Non-SAT card's (SELECT SUM(meter_count) FROM "
+                        "public.gold_non_sat_ageing_snapshot ...same place filter), not_yet_due = the difference")
+
+    # % SAT vs eligible MI = ALL SAT / eligible MI. Live 27 Oct: 'eligible sat % in kashi' came back as
+    # SAT(eligible) / eligible = 94.18% instead of the card's 95.33%.
+    if (re.search(r"\beligible\b", question, re.I) and re.search(r"%|percent|pct|\brate\b|\bratio\b", question, re.I)
+            and re.search(r"filter\s*\(\s*where\s+(?:sat_stage\s+is\s+not\s+null\s+and\s+is_sat_eligible|"
+                          r"is_sat_eligible\s+and\s+sat_stage\s+is\s+not\s+null)\s*\)(?:\s*,\s*0\s*\))?\s*\*\s*100", low)):
+        problems.append("% SAT vs eligible MI = ALL SAT meters (FILTER (WHERE sat_stage IS NOT NULL), eligible or not) "
+                        "* 100 / eligible MI -- the dashboard formula; never SAT(eligible) / eligible MI")
+
+    # Un-utilised stock: its own snapshot, and its stage words. Live 27 Oct: 'consumer stock ageing type wise' read
+    # the non-SAT ageing table; '90+ days stock still in the warehouse in triveni' dropped the stage (25,705 not 11,597).
+    if (re.search(r"\b(stock|unused|un-?utili[sz]ed)\b", question, re.I) and "gold_non_sat_ageing_snapshot" in low
+            and not re.search(r"\bsat\b", question, re.I)):
+        problems.append("stock ageing reads public.gold_inventory_unutilized_stock_snapshot (SUM(stock_count), age = "
+                        "CURRENT_DATE - inventory_date) -- gold_non_sat_ageing_snapshot is installed meters waiting for SAT")
+    user_words = asked or question
+    stage = _STOCK_STAGE_RE.search(question) or _STOCK_STAGE_RE.search(user_words)
+    if "gold_inventory_unutilized_stock_snapshot" in low and "current_stage" not in low and stage:
+        problems.append(f"'{stage.group(0)}' is a stock stage: filter current_stage = '{_stock_stage(stage.group(0))}' "
+                        "(stages: warehouse, agency, supervisor, technician)")
+    # Live 27 Oct: 'stock ageing warehouse wise in kashi' kept only current_stage = 'warehouse' (5,260 90+ instead
+    # of the card's every-stage figures) -- 'warehouse wise' is the holding warehouse, not the stage. The user's
+    # own words decide: the rewrite once turned 'warehouse wise' into 'in each warehouse'.
+    if ("gold_inventory_unutilized_stock_snapshot" in low and not _STOCK_STAGE_RE.search(user_words)
+            and not re.search(r"\bstages?\b|\btechnicians?\b|\bsupervisors?\b|\bagenc", user_words, re.I)
+            and re.search(r"\bcurrent_stage\s*(?:=|in\s*\()", low)):
+        problems.append("the question names no stock stage: count every stage (no current_stage filter) -- "
+                        "'warehouse wise' means GROUP BY warehouse, the warehouse holding the stock")
+
+    # inventory_date is each meter's receipt date, not a balance date. Live 27 Oct: 'remaining stock project wise' kept
+    # inventory_date = MAX(inventory_date) (12,930 instead of 110,310) and 'remaining stock as of june 2026' kept
+    # inventory_date <= '2026-06-30' (today's unused meters received by June, not June's stock).
+    if (re.search(r"\b(?:remaining|left|balance)\b", question, re.I)
+            and re.search(r"\binventory_date\s*(?:=|<=?|between)", low) and "gold_inventory_unutilized_stock_snapshot" in low
+            and not _AGEING_RE.search(user_words)):
+        problems.append("remaining stock = public.gold_meter_inventory_event_day_agg: SUM(inventory_count) - "
+                        "SUM(stock_consumed_count) WHERE period_start <= the as-of date -- the stock snapshot's "
+                        "inventory_date is each meter's receipt date, not a balance date")
+
+    # Installs are MI progress (gold_mi_installation_*), never the inventory table's installed_count. Live 27 Oct:
+    # 'how many dtr installed in chunar division in june 2026' read the inventory table (12 instead of 74).
+    if ("gold_meter_inventory_event_" in low and "gold_mi_installation_" not in low
+            and re.search(r"\binstall", question, re.I)
+            and not _SUPPLY_CARD_RE.search(question)
+            and not re.search(r"\b(stock|suppl\w*|receiv\w*|inventory|utili[sz]\w*|pace|remaining|warehouse|sku)\b",
+                              f"{question} {asked or ''}", re.I)):
+        problems.append("meters installed = MI progress: public.gold_mi_installation_day_agg / _month_agg (SUM(meter_count), "
+                        "has_meter_serial AND progress_category IS NOT NULL AND NOT is_replacement) -- not the inventory "
+                        "table's installed_count")
+
+    # One meter: the query must look that meter up. Live 27 Oct: 'is meter CA8081038 eligible for sat' read only the
+    # cutoff table, and 'is meter HP9000628 invoiced' answered 'not invoiced' without reading an invoice date.
+    for serial in set(_SERIAL_RE.findall(question)):
+        if serial.lower() not in low:
+            problems.append(f"the question is about meter {serial} but no query looks it up -- filter its serial "
+                            f"(new_meter_serial_number / meter_serial_number = '{serial}') in the main query")
+        elif re.search(r"\binvoic", question, re.I) and "invoice_date" not in low:
+            problems.append(f"whether meter {serial} is invoiced = its SAT batch's lumpsum_invoice_date / "
+                            "pmpm_invoice_date (sat_meter_mappings LEFT JOIN sat_milestones on project AND sat_number)")
 
     # 'stage wise' on the current-stage card = all six stages; the revenue-pending table alone
     # is only the last two (seen live: 'revenue not realized stage wise' showed 2 stages).
