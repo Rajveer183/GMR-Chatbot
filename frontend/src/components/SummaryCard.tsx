@@ -1,4 +1,5 @@
 import React, { useEffect, useMemo, useRef, useState } from "react";
+import { uiText } from "../i18n/languages";
 import { Play, Pause, Loader2 } from "lucide-react";
 import { apiClient } from "../api/client";
 import { CopyButton } from "./CopyButton";
@@ -12,6 +13,8 @@ interface SummaryCardProps {
   getFullCopyPayload?: () => CopyPayload;
   /** What Play reads aloud (summary + metrics + table preview); defaults to the summary. */
   speechText?: string;
+  /** The answer's language: headings and buttons follow it. */
+  lang?: string;
 }
 
 function renderInlineMarkdown(text: string): React.ReactNode[] {
@@ -28,7 +31,7 @@ function stripMarkdown(text: string) {
   return text.replace(/\*\*(.*?)\*\*/g, "$1").replace(/\[(.*?)\]\((.*?)\)/g, "$1");
 }
 
-export const SummaryCard: React.FC<SummaryCardProps> = ({ summary, interpretedIntent, interpretedQuery, getFullCopyPayload, speechText }) => {
+export const SummaryCard: React.FC<SummaryCardProps> = ({ summary, interpretedIntent, interpretedQuery, getFullCopyPayload, speechText, lang }) => {
   const [playing, setPlaying] = useState(false);
   const [loadingAudio, setLoadingAudio] = useState(false);
   const [audioError, setAudioError] = useState<string | null>(null);
@@ -105,20 +108,21 @@ export const SummaryCard: React.FC<SummaryCardProps> = ({ summary, interpretedIn
   return (
     <section className="chat-result-section chat-summary-section">
       <div className="summary-header-row">
-        <h4 className="chat-section-heading">Summary</h4>
+        <h4 className="chat-section-heading">{uiText(lang, "summary")}</h4>
         <div className="summary-header-actions">
           <CopyButton
             getPayload={getCopyPayload}
-            label={getFullCopyPayload ? "Copy all" : "Copy"}
-            title={getFullCopyPayload ? "Copy summary, metrics and tables" : "Copy summary"}
+            label={uiText(lang, getFullCopyPayload ? "copyAll" : "copy")}
+            title={uiText(lang, getFullCopyPayload ? "copyAllTitle" : "copySummaryTitle")}
+            copiedLabel={uiText(lang, "copied")}
           />
           <button
             type="button"
             className={`summary-audio-btn ${playing ? "playing" : ""}`}
             onClick={toggleSpeech}
             disabled={loadingAudio}
-            aria-label={playing ? "Pause summary audio" : "Play summary audio"}
-            title={loadingAudio ? "Loading audio..." : playing ? "Pause audio" : "Play audio"}
+            aria-label={uiText(lang, playing ? "pauseTitle" : "playTitle")}
+            title={loadingAudio ? uiText(lang, "loadingAudio") : uiText(lang, playing ? "pauseTitle" : "playTitle")}
           >
             {loadingAudio ? (
               <Loader2 size={16} className="spin" />
@@ -127,7 +131,7 @@ export const SummaryCard: React.FC<SummaryCardProps> = ({ summary, interpretedIn
             ) : (
               <Play size={16} />
             )}
-            <span>{loadingAudio ? "Loading..." : playing ? "Pause" : "Play"}</span>
+            <span>{loadingAudio ? uiText(lang, "loadingAudio") : uiText(lang, playing ? "pause" : "play")}</span>
           </button>
         </div>
       </div>

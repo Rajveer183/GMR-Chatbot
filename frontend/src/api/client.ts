@@ -1,3 +1,5 @@
+import type { LanguagePreference } from "../i18n/languages";
+
 export interface FilterRequest {
   business_group: string;
   business_sector_name: string;
@@ -18,6 +20,30 @@ export interface AIQueryRequest {
    * drilldown click rather than typed directly -- persisted on the stored
    * message so the "show full detail" view survives a page refresh. */
   via_followup?: boolean;
+  /** The language dropdown: "auto" answers in the language of the question. */
+  response_language?: LanguagePreference;
+  /** A clicked follow-up shown translated: the verified English question behind the
+   * translated text in `question` -- that is what runs. */
+  canonical_question?: string;
+}
+
+/** An earlier answer's text in another language (POST /api/translate). Only the
+ * written text -- KPI cards, charts and tables are data and never change. */
+export interface TranslatedAnswer {
+  trace_id: string;
+  target_language: LanguagePreference;
+  answer_language: string;
+  summary: string;
+  insights: string[];
+  warnings: string[];
+  /** Same values as the stored answer; display_* fields / column_labels carry the labels. */
+  kpis: AIKPI[];
+  charts: AIChartSpec[];
+  tables: AITableSpec[];
+  suggested_followups: string[];
+  suggested_followup_labels?: string[] | null;
+  /** "failed" = the translation could not be made; the text is the original. */
+  translation: { target: string; status: "ok" | "partial" | "failed" | "skipped" };
 }
 
 export interface AIKPI {
@@ -26,6 +52,9 @@ export interface AIKPI {
   formatted_value: string;
   description?: string;
   unit?: string;
+  /** The label in the answer's language (the backend's translation layer); `label` stays English. */
+  display_label?: string;
+  display_description?: string;
 }
 
 export interface AIChartSpec {
@@ -42,6 +71,9 @@ export interface AIChartSpec {
   /** Unit of the second (line) axis in a combo chart. */
   unit2?: string;
   description?: string;
+  /** Title / description in the answer's language; `title` stays English. */
+  display_title?: string;
+  display_description?: string;
 }
 
 export interface AITableSpec {
@@ -56,6 +88,11 @@ export interface AITableSpec {
   total_rows: number;
   has_next: boolean;
   has_previous?: boolean;
+  /** Title / heading in the answer's language. */
+  display_title?: string;
+  display_heading?: string;
+  /** Column -> its header in the answer's language. Row keys stay the original columns. */
+  column_labels?: Record<string, string>;
 }
 
 /** One server-side page of an answer's table (POST /api/table-page). */
@@ -85,6 +122,9 @@ export interface AIQueryResponse {
   insights: string[];
   warnings: string[];
   suggested_followups: string[];
+  /** The follow-ups as shown, in the answer's language (same order). A click sends the shown
+   * text as the question and the English one as canonical_question. */
+  suggested_followup_labels?: string[] | null;
   /** Where the answer comes from, built by the backend's grounding guard (never by the
    * LLM): the live query + verified pattern/rules for data answers, the cited rule /
    * glossary chunks for explanations. */
@@ -95,6 +135,12 @@ export interface AIQueryResponse {
   session_id?: string;
   /** True when the backend declined to answer (out of scope / unsafe). */
   refused?: boolean;
+  /** The dropdown value the answer was asked with. */
+  response_language?: LanguagePreference;
+  /** The language the question was written in. */
+  detected_language?: string | null;
+  /** The language the summary / insights are written in. */
+  answer_language?: string;
   debug?: {
     planner_used?: string;
     /** The SQL that produced the answer's data, when one was run. */
@@ -386,6 +432,12 @@ export const apiClient = {
    * SQL with OFFSET / LIMIT (no LLM call, no new SQL). */
   tablePage: async (trace_id: string, page: number, page_size: number, table_index = 0, offset?: number): Promise<TablePage> => {
     return postJSON("/api/table-page", { trace_id, page, page_size, table_index, offset });
+  },
+
+  /** An earlier answer re-presented in another language: the backend translates the stored
+   * answer's text (no SQL re-run, no new chat message, numbers checked unchanged). */
+  translate: async (session_id: string, trace_id: string, target_language: LanguagePreference): Promise<TranslatedAnswer> => {
+    return postJSON("/api/translate", { session_id, trace_id, target_language }, AI_QUERY_TIMEOUT_MS);
   },
 
   listSessions: async (): Promise<SessionSummary[]> => {

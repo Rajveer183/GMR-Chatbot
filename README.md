@@ -126,6 +126,30 @@ question
 `explain` questions are answered from retrieved KPI definitions; `chitchat` / `out_of_scope`
 replies come from the triage call.
 
+**Answer language** (`gmr_agents/language.py`). Every stage after triage works on the
+standalone English question, so the same question routes to the same KPI / SQL in any
+language. Only the written answer changes language, decided by code in this order:
+
+1. an explicit request in the message (`Hindi mein batao`, `explain in English`, `हिंदी में`)
+2. the header dropdown (`response_language`, anything but `auto`)
+3. the latest message's own language: script by code (Devanagari, Tamil ...), English vs
+   Hinglish from the triage LLM's reading (no extra call)
+4. an ambiguous message (`SAT?`) keeps the previous answer's language, else English
+
+The answer / explain LLM writes directly in that language (native digits are turned back to
+0-9 before the number check). A message that only asks for another language (`Explain this in
+English`) re-presents the previous answer instead of running a new query. Changing the dropdown
+calls `/api/translate` for the latest answer: the stored original is translated (summary,
+insights, warnings), each field must keep exactly the original's numbers / IDs and be in the
+target script, or the original text is shown.
+
+Card / chart / table labels, column headers and follow-up chips are translated in the same call
+into `display_*` fields / `column_labels` / `suggested_followup_labels` next to the English
+originals (values, rows and chart data never change). A clicked translated chip sends the text
+shown plus the verified English question as `canonical_question`, which is what runs. The
+screen's own text (sidebar, input, table pager, progress messages, empty state) is in
+`frontend/src/i18n/uiStrings.ts`; it follows the dropdown, or with Auto-detect the latest answer.
+
 **Models.** Free-tier OpenAI-compatible providers (Groq, NVIDIA NIM, Gemini). Each stage has
 its own ordered model chain (`LLM_MODELS_TRIAGE / _SQL / _ANSWER / _EXPLAIN` in `.env`); the
 gateway (`shared/llm_gateway.py`) sends each call to the first model with free budget and
@@ -182,8 +206,9 @@ in the frontend compose file to the backend's public URL.
 
 | Method | Path | Purpose |
 |---|---|---|
-| POST | `/api/ai-query` | answer a question (`{"question", "session_id"}`) |
+| POST | `/api/ai-query` | answer a question (`{"question", "session_id", "response_language"?}`; the response adds `detected_language`, `answer_language`) |
 | POST | `/api/ai-query/stream` | same, streamed (status → numbers → text) |
+| POST | `/api/translate` | an earlier answer's text in another language (`{"session_id", "trace_id", "target_language"}`; no SQL re-run) |
 | POST | `/api/table-page` | next page of a result table |
 | GET/POST/PATCH/DELETE | `/api/sessions[/{id}]` | chat sessions |
 | GET | `/api/datasets` | tables the chatbot can query |

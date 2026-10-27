@@ -1,4 +1,5 @@
 import React, { useEffect, useMemo, useState } from "react";
+import { uiText } from "../i18n/languages";
 import {
   flexRender,
   getCoreRowModel,
@@ -44,11 +45,13 @@ interface ResultTableProps {
    * fetched server-side (POST /api/table-page) instead of loading everything. */
   traceId?: string;
   tableIndex?: number;
+  /** The answer's language: headers (table.column_labels) and controls follow it. */
+  lang?: string;
 }
 
 const PAGE_SIZES = [25, 50, 100];
 
-export const ResultTable: React.FC<ResultTableProps> = ({ table, traceId, tableIndex = 0 }) => {
+export const ResultTable: React.FC<ResultTableProps> = ({ table, traceId, tableIndex = 0, lang }) => {
   const [sorting, setSorting] = useState<SortingState>([]);
   const [page, setPage] = useState(1);
   const [pageSize, setPageSize] = useState(25);
@@ -64,11 +67,12 @@ export const ResultTable: React.FC<ResultTableProps> = ({ table, traceId, tableI
         // can contain dots and spaces, which accessorKey would parse as a deep
         // property path and fail to resolve.
         accessorFn: (row: TableRow) => row[name],
-        header: name.replace(/_/g, " ").toUpperCase(),
+        // Shown in the answer's language when translated; the row key stays the column.
+        header: (table.column_labels?.[name] || name.replace(/_/g, " ")).toUpperCase(),
         cell: (info) => formatTableCell(info.getValue()),
         sortingFn: numericAwareSort,
       })),
-    [table.columns]
+    [table.columns, table.column_labels]
   );
 
   // A grand-total row (first cell "Total", e.g. the month-wise installation
@@ -159,17 +163,22 @@ export const ResultTable: React.FC<ResultTableProps> = ({ table, traceId, tableI
     <div className="table-card">
       <div className="table-card-toolbar">
         <div>
-          <h3 className="table-card-title">{table.title}</h3>
+          <h3 className="table-card-title">{table.display_title || table.title}</h3>
           <p className="table-card-subtitle">
             {showPager
-              ? `Showing ${(pageStart + 1).toLocaleString()}–${Math.min(pageStart + (data.length || pageRows), totalCount).toLocaleString()} of ${totalCount.toLocaleString()} rows`
-              : `Total rows: ${totalCount.toLocaleString()}`}
+              ? uiText(lang, "showingRows", {
+                  from: (pageStart + 1).toLocaleString(),
+                  to: Math.min(pageStart + (data.length || pageRows), totalCount).toLocaleString(),
+                  total: totalCount.toLocaleString(),
+                })
+              : uiText(lang, "totalRows", { total: totalCount.toLocaleString() })}
           </p>
         </div>
         <CopyButton
           getPayload={() => tableToPayload(table)}
-          label="Copy table"
-          title="Copy table (pastes into Excel / Word as a grid)"
+          label={uiText(lang, "copyTable")}
+          title={uiText(lang, "copyTableTitle")}
+          copiedLabel={uiText(lang, "copied")}
         />
       </div>
       <div className="table-container">
@@ -185,7 +194,7 @@ export const ResultTable: React.FC<ResultTableProps> = ({ table, traceId, tableI
                         type="button"
                         className="th-sort-btn"
                         onClick={header.column.getToggleSortingHandler()}
-                        title="Sort by this column"
+                        title={uiText(lang, "sortColumn")}
                       >
                         <span>{flexRender(header.column.columnDef.header, header.getContext())}</span>
                         {sorted === "asc" ? (
@@ -225,14 +234,14 @@ export const ResultTable: React.FC<ResultTableProps> = ({ table, traceId, tableI
             </tfoot>
           )}
         </table>
-        {loading ? <div className="table-page-status">Loading page…</div> : null}
+        {loading ? <div className="table-page-status">{uiText(lang, "loadingPage")}</div> : null}
         {pageError ? <div className="table-page-status table-page-error">{pageError}</div> : null}
-        {!loading && !pageError && data.length === 0 ? <div className="table-page-status">No rows on this page.</div> : null}
+        {!loading && !pageError && data.length === 0 ? <div className="table-page-status">{uiText(lang, "noRowsPage")}</div> : null}
       </div>
       {showPager ? (
         <div className="table-pager">
           <label className="table-pager-size">
-            Rows per page
+            {uiText(lang, "rowsPerPage")}
             <select value={pageSize} onChange={(e) => setPageSize(Number(e.target.value))}>
               {PAGE_SIZES.map((n) => (
                 <option key={n} value={n}>
@@ -243,16 +252,16 @@ export const ResultTable: React.FC<ResultTableProps> = ({ table, traceId, tableI
           </label>
           <div className="table-pager-nav">
             <button type="button" onClick={() => setPage((p) => Math.max(1, p - 1))} disabled={page <= 1 || loading}
-              aria-label="Previous page">
-              <ChevronLeft size={14} /> Previous
+              aria-label={uiText(lang, "previous")}>
+              <ChevronLeft size={14} /> {uiText(lang, "previous")}
             </button>
             <span className="table-pager-page">
-              Page {page} of {totalPages}
+              {uiText(lang, "pageOf", { page, pages: totalPages })}
             </span>
             <button type="button" onClick={() => setPage((p) => Math.min(totalPages, p + 1))}
               disabled={page >= totalPages || loading || (!traceId && pageStart + pageRows >= delivered.length)}
-              aria-label="Next page">
-              Next <ChevronRight size={14} />
+              aria-label={uiText(lang, "next")}>
+              {uiText(lang, "next")} <ChevronRight size={14} />
             </button>
           </div>
         </div>

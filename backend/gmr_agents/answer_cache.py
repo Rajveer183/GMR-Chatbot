@@ -80,6 +80,8 @@ def _code_digest():
     here = os.path.dirname(os.path.abspath(__file__))
     sources = [os.path.join(here, "llm_pipeline.py"), os.path.join(here, "answer_cache.py"),
                os.path.join(here, "graph", "nodes.py"),
+               # which language an answer is written in / whether it is translated
+               os.path.join(here, "language.py"),
                # which past answers are offered as hints (a filter fix must not replay old answers)
                os.path.join(here, "schema", "knowledge.py")]
     # Every query / answer check (entity_check, sql_guard, number_check, extreme_check ...):
@@ -204,6 +206,10 @@ def put(question: str, prior_turns: list[dict] | None, state: dict, entry: dict)
     """entry = {"response": the API response, "context": the session turn context}."""
     response = entry.get("response") or {}
     if not config.ANSWER_CACHE_ENABLED or response.get("refused") or not str(response.get("summary") or "").strip():
+        return
+    if (response.get("debug") or {}).get("answer_model") == "none (AI busy)":
+        # Numbers but no written answer (rate limit): replaying it would show "AI summary
+        # unavailable" for the rest of the day.
         return
     version = _version()
     if not version:

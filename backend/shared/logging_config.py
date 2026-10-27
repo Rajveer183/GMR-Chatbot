@@ -38,6 +38,12 @@ def configure_logging() -> None:
     if root.handlers:
         return  # already configured (e.g. uvicorn --reload re-imports)
     formatter = logging.Formatter(_FORMAT, datefmt=_DATEFMT)
+    # A Windows console (cp1252) cannot print Hindi / Tamil questions: escape what it cannot
+    # show instead of a logging traceback per line (backend.log below is UTF-8 and keeps them).
+    try:
+        sys.stdout.reconfigure(errors="backslashreplace")
+    except (AttributeError, ValueError):
+        pass
     handler = logging.StreamHandler(sys.stdout)
     handler.setFormatter(formatter)
     root.addHandler(handler)

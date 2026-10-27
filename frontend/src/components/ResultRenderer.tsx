@@ -11,12 +11,15 @@ import { WarningBox } from "./WarningBox";
 import { SuggestedQuestions } from "./SuggestedQuestions";
 import { resultToPayload } from "../utils/clipboard";
 import { resultToSpeech } from "../utils/speech";
+import { uiText } from "../i18n/languages";
 
 const DRILLDOWN_CHART_TYPES = new Set(["bar", "horizontal_bar", "stacked_bar"]);
 
 interface ResultRendererProps {
   result: AIQueryResponse;
-  onFollowUp?: (question: string) => void;
+  /** question = the text shown (and sent); canonical = the verified English follow-up behind
+   * a translated chip, when there is one. */
+  onFollowUp?: (question: string, canonical?: string) => void;
   showFollowups?: boolean;
 }
 
@@ -29,6 +32,9 @@ interface ResultRendererProps {
 export const ResultRenderer: React.FC<ResultRendererProps> = ({ result, onFollowUp, showFollowups }) => {
   const [expandedChart, setExpandedChart] = useState<AIChartSpec | null>(null);
   const followups = result.suggested_followups?.length && showFollowups ? result.suggested_followups : [];
+  // Shown in the answer's language when the backend translated them; a click still runs the
+  // verified English question behind each one.
+  const followupLabels = followups.map((q, i) => result.suggested_followup_labels?.[i] || q);
   // Rendered exactly as the backend sent them. There used to be a
   // `filterDisplayKpis` pass here that silently dropped any KPI whose label
   // contained "total reconciliation difference" unless the *question* happened
@@ -38,6 +44,8 @@ export const ResultRenderer: React.FC<ResultRendererProps> = ({ result, onFollow
   const displayKpis = result.kpis ?? [];
   const charts = result.charts ?? [];
   const tables = result.tables ?? [];
+  // Section headings follow the language the answer is written in.
+  const lang = result.answer_language;
 
   // Only bar-family charts label their x-axis with an actual entity name
   // (project/customer/unit/etc) -- pie/donut slices are usually categorical
@@ -45,7 +53,7 @@ export const ResultRenderer: React.FC<ResultRendererProps> = ({ result, onFollow
   // wouldn't resolve to anything, so those stay hover-only.
   const drilldownHandler = (chart: AIChartSpec) =>
     onFollowUp && DRILLDOWN_CHART_TYPES.has(chart.type)
-      ? (label: string) => onFollowUp(`Tell me about ${label}`)
+      ? (label: string) => onFollowUp(uiText(lang, "drillDown", { x: label }))
       : undefined;
 
   return (
@@ -56,6 +64,7 @@ export const ResultRenderer: React.FC<ResultRendererProps> = ({ result, onFollow
         interpretedQuery={result.interpreted_query}
         getFullCopyPayload={() => resultToPayload(result)}
         speechText={resultToSpeech(result)}
+        lang={lang}
       />
 
       {displayKpis.length > 0 ? (
@@ -63,14 +72,14 @@ export const ResultRenderer: React.FC<ResultRendererProps> = ({ result, onFollow
           className="chat-result-section result-stagger"
           style={{ "--stagger": 0 } as React.CSSProperties}
         >
-          <h4 className="chat-section-heading">Key Metrics</h4>
+          <h4 className="chat-section-heading">{uiText(lang, "keyMetrics")}</h4>
           <div className="kpi-grid chat-kpi-grid">
             {displayKpis.map((kpi) => (
               <MetricCard
                 key={kpi.label}
-                label={kpi.label}
+                label={kpi.display_label || kpi.label}
                 formattedValue={kpi.formatted_value}
-                subtitle={kpi.description}
+                subtitle={kpi.display_description || kpi.description}
               />
             ))}
           </div>
@@ -86,8 +95,8 @@ export const ResultRenderer: React.FC<ResultRendererProps> = ({ result, onFollow
             {charts.map((chart) => (
               <ChartCard
                 key={chart.id}
-                title={chart.title}
-                subtitle={chart.description}
+                title={chart.display_title || chart.title}
+                subtitle={chart.display_description || chart.description}
                 onExpand={() => setExpandedChart(chart)}
               >
                 <ChartVisualization chart={chart} height={340} onPointClick={drilldownHandler(chart)} />
@@ -103,29 +112,34 @@ export const ResultRenderer: React.FC<ResultRendererProps> = ({ result, onFollow
           className="chat-result-section result-stagger"
           style={{ "--stagger": 2 + index } as React.CSSProperties}
         >
-          <h4 className="chat-section-heading">{table.heading || (index === 0 ? "Result Preview" : table.title)}</h4>
-          <ResultTable table={table} traceId={result.debug?.trace_id} tableIndex={index} />
+          <h4 className="chat-section-heading">
+            {table.display_heading || table.heading || (index === 0 ? uiText(lang, "resultPreview") : table.display_title || table.title)}
+          </h4>
+          <ResultTable table={table} traceId={result.debug?.trace_id} tableIndex={index} lang={lang} />
         </section>
       ))}
 
-      <InsightList title="Insights" items={result.insights ?? []} />
+      <InsightList title={uiText(lang, "insights")}items={result.insights ?? []} />
 
       {followups.length && onFollowUp ? (
         <section
           className="chat-result-section result-stagger"
           style={{ "--stagger": 2 + tables.length } as React.CSSProperties}
         >
-          <h4 className="chat-section-heading">Suggested Follow-ups</h4>
-          <SuggestedQuestions questions={followups} onPick={onFollowUp} />
+          <h4 className="chat-section-heading">{uiText(lang, "followups")}</h4>
+          <SuggestedQuestions
+            questions={followupLabels}
+            onPick={(label, i) => onFollowUp(label, label !== followups[i] ? followups[i] : undefined)}
+          />
         </section>
       ) : null}
 
-      <WarningBox warnings={result.warnings ?? []} />
+      <WarningBox warnings={result.warnings ?? []} title={uiText(lang, "warnings")} />
 
       <ExpandableChartModal
         open={expandedChart !== null}
-        title={expandedChart?.title || "Chart"}
-        subtitle={expandedChart?.description}
+        title={expandedChart?.display_title || expandedChart?.title || "Chart"}
+        subtitle={expandedChart?.display_description || expandedChart?.description}
         onClose={() => setExpandedChart(null)}
       >
         {expandedChart ? (

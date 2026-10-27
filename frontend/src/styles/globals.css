@@ -34,7 +34,9 @@
 
 body {
   font-family: 'Inter', -apple-system, BlinkMacSystemFont, 'Segoe UI', 'Roboto',
-    'Oxygen', 'Ubuntu', 'Cantarell', 'Fira Sans', 'Droid Sans', 'Helvetica Neue', sans-serif;
+    'Oxygen', 'Ubuntu', 'Cantarell', 'Fira Sans', 'Droid Sans', 'Helvetica Neue',
+    /* Indic scripts (Hindi, Tamil, Bengali ... answers): Windows, then Android / Linux */
+    'Nirmala UI', 'Noto Sans', sans-serif;
   background: var(--page-bg);
   color: var(--text-main);
   -webkit-font-smoothing: antialiased;
@@ -569,6 +571,71 @@ button {
   color: var(--bhel-navy);
   border-radius: var(--radius-pill);
   padding: 6px 11px 6px 9px;
+}
+
+/* Answer-language dropdown (header, top right): a native <select> styled like
+   .chat-header-btn, with the icon and chevron laid over it. */
+.chat-language-select {
+  position: relative;
+  display: inline-flex;
+  align-items: center;
+  height: 32px;
+  color: var(--text-main);
+}
+
+.chat-language-select > svg {
+  position: absolute;
+  left: 10px;
+  pointer-events: none;
+  color: var(--text-muted);
+}
+
+.chat-language-select .chat-language-chevron {
+  left: auto;
+  right: 9px;
+}
+
+.chat-language-select select {
+  appearance: none;
+  height: 32px;
+  max-width: 13rem;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  background: var(--card-bg);
+  padding: 0 28px 0 30px;
+  font: inherit;
+  font-size: 13px;
+  color: var(--text-main);
+  cursor: pointer;
+  text-overflow: ellipsis;
+}
+
+.chat-language-select select:hover {
+  background: #f8fafc;
+}
+
+.chat-language-select select:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 1px;
+}
+
+.chat-visually-hidden {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  overflow: hidden;
+  clip: rect(0 0 0 0);
+  white-space: nowrap;
+}
+
+.chat-translation-note {
+  font-size: 12px;
+  color: var(--text-muted);
+  margin-bottom: 8px;
+}
+
+.chat-translation-note.failed {
+  color: var(--warning);
 }
 
 .chat-active-badge::before {
@@ -2047,6 +2114,15 @@ button {
 
   .chat-msg-col.user {
     max-width: 92%;
+  }
+
+  /* Room for the language dropdown: the badge goes, the dropdown stays top right. */
+  .chat-header .chat-active-badge {
+    display: none;
+  }
+
+  .chat-language-select select {
+    max-width: 9.5rem;
   }
 
   .querylog-modal {

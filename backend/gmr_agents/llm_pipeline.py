@@ -45,7 +45,7 @@ from gmr_agents.schema.catalog import get_catalog
 from gmr_agents.schema.schema_brief import build as build_schema
 from gmr_agents.schema.table_metadata import SCHEMA_RE
 from gmr_agents.sql import executor, hierarchy
-from gmr_agents import answer_cache, context_manager
+from gmr_agents import answer_cache, context_manager, language
 from gmr_agents.guards import injection
 from gmr_agents.validation import entity_check, extreme_check, grounding, number_check, query_encoder, sql_guard
 from gmr_agents.validation import scope as place_scope
@@ -100,17 +100,17 @@ Data available:
 Known values: OEMs (make/vendor) are only AEW, CAP, HPL, SEIPL; SAT batches are SAT-1 .. SAT-13 (no SAT-14 yet); 'varanasi'/'kasi' = kashi project, 'trivei'/'triveni' = triveni. SAT = Site Acceptance Test; MI = meter installation; DT/DTR = distribution transformer meter; PMPM = per meter per month payment.
 Decide everything about the user's message and reply with JSON only:
 {"kind": "data" | "explain" | "chitchat" | "out_of_scope",
- "question": "one standalone English question: translate Hindi/Hinglish and fix spelling. A garbled or cut-off KPI name is completed to the reading that keeps the characters the user typed (e.g. '&M productivity' = O&M productivity, not MI) -- never swap it for a different KPI -- and that reading goes in assumption so the user sees it. Keep the form of the ask: 'tickets on meter X' / 'complaints of consumer X' / 'details of ticket X' ask to SEE the records ('Show the tickets on meter X'), never rewrite them as 'how many'. ONLY if the message is an incomplete follow-up ('and in agra?', 'same for SAT', 'break it down by zone', 'which OEM?', 'only in kashi', 'and three months ago?', 'draft a message about it') fill in what it refers to from the conversation, keeping ALL its filters and entities. A follow-up continues the LATEST TURN: keep its topic/measure (e.g. 'what about agra' after a SAT question = Agra's SAT figure, not an earlier turn's topic) and its place/OEM/period unless the message replaces them; take something from an earlier turn only when the message names it. 'that/it/this/there' points at what the PREVIOUS ANSWER singled out (e.g. the project it named as worst) -- carry that entity as a filter: 'Which project is worst?' -> A: 'Triveni ...' then 'Break that down by age' = 'Break down Triveni's eligible pending SAT meters by age'. A message that is complete on its own is a NEW question: never add places, periods or filters the user did not say (a question naming a technician / person plus a measure is complete -- never carry the previous turn's place onto it)",
+ "question": "one standalone English question: translate Hindi/Hinglish/any Indian language and fix spelling. Translate literally, in plain fixed wording, so the same ask in any language becomes the same English question: periods as 'last N days/weeks/months' / 'yesterday' / 'this month' with N in digits (never 'past six months'), breakdowns as '<x>-wise' (month-wise, zone-wise, OEM-wise) -- never drop a breakdown the user asked for. A garbled or cut-off KPI name is completed to the reading that keeps the characters the user typed (e.g. '&M productivity' = O&M productivity, not MI) -- never swap it for a different KPI -- and that reading goes in assumption so the user sees it. Keep the form of the ask: 'tickets on meter X' / 'complaints of consumer X' / 'details of ticket X' ask to SEE the records ('Show the tickets on meter X'), never rewrite them as 'how many'. ONLY if the message is an incomplete follow-up ('and in agra?', 'same for SAT', 'break it down by zone', 'which OEM?', 'only in kashi', 'and three months ago?', 'draft a message about it') fill in what it refers to from the conversation, keeping ALL its filters and entities. A follow-up continues the LATEST TURN: keep its topic/measure (e.g. 'what about agra' after a SAT question = Agra's SAT figure, not an earlier turn's topic) and its place/OEM/period unless the message replaces them; take something from an earlier turn only when the message names it. 'that/it/this/there' points at what the PREVIOUS ANSWER singled out (e.g. the project it named as worst) -- carry that entity as a filter: 'Which project is worst?' -> A: 'Triveni ...' then 'Break that down by age' = 'Break down Triveni's eligible pending SAT meters by age'. A message that is complete on its own is a NEW question: never add places, periods or filters the user did not say (a question naming a technician / person plus a measure is complete -- never carry the previous turn's place onto it). A request about the reply language ('Hindi mein batao', 'explain in English') is not part of the question -- leave it out",
  "followup": true only for such an incomplete follow-up,
  "parts": ["only when the message asks SEVERAL things ('X and Y', 'also tell me', a list of asks): each ask as its own standalone English question, in order"] or [],
  "examples": [0-3 ids from EXAMPLES whose question MEANS the same as (an ask in) this message, even if worded very differently, best first],
- "language": "en" | "hinglish" | "hi" -- the language the user wrote in,
+ "language": "en" | "hinglish" | "hi" | "bn" | "mr" | "ta" | "te" | "gu" | "pa" | "kn" | "ml" -- the language the user wrote in (hinglish = Hindi written in Roman script, often mixed with English),
  "assumption": "only when the message is ambiguous (e.g. 'how many meters?', 'show me last month', 'top performer', 'compare agra'): the sensible default you chose, as one short clause the user will be shown (e.g. 'installed meters, all time'); never contradict what the message states -- if it names a period, place or category, the assumption keeps it (no 'all time' when a year or month is given); else ''",
  "domain": "wfm" | "mdm" | null,
  "named": "the technician / person name or meter serial the question is about, exactly as written (e.g. 'ABHAY'), else ''",
  "topics": [1-3 topic keys whose rules apply, most relevant first],
  "tables": [1-5 table names the SQL will need, from TABLES; all from ONE engine],
- "reply": "only for chitchat/out_of_scope: a short, friendly answer in the user's language (for out_of_scope, say what IS available)"}
+ "reply": "only for chitchat/out_of_scope: a short, friendly answer in REPLY LANGUAGE when given, else in the user's language (for out_of_scope, say what IS available)"}
 kind=data: needs numbers/lists from the data -- including 'why', 'is X rising', 'should we', 'which to focus on', summaries, what-ifs, and DRAFTING a message/email/note/report to someone (the chatbot writes it from the numbers -- never refuse a draft), and asks to show/open/download/export data (the answer table can be downloaded as CSV). Superlatives and rankings over the data -- best / worst / most / least / highest / lowest / top / bottom / most reliable / fastest / which X is ... -- are kind=data (they need the numbers), even when phrased like a judgement ('Which OEM is the most reliable?' = lowest defect rate). Plain arithmetic on numbers the user gives ('what is 12% of 4,214,678?', 'difference between 1,277,180 and 1,106,912') is kind=data -- a calculator tool computes it. kind=explain: asks only what a term/KPI/dashboard label means, how it is calculated, or where its data comes from (how a KPI / table is built or refreshed: SmartEMS reports, silver / gold layers, the ETL) -- these ARE in scope.
 Guardrails (never break them):
 - Personal data of consumers/technicians (names with phone numbers, mobile, address, Aadhaar) -> out_of_scope: privacy; offer counts instead. A technician's WORK figures by name (productivity, closed tickets, installations) are kind=data, not personal data.
@@ -221,7 +221,9 @@ def _triage(state: dict, prior_turns: list[dict] | None) -> dict | None:
               # Only the best hybrid-retrieval candidates (BM25 + embeddings) -- the LLM picks by meaning.
               f"EXAMPLES:\n{business_rules.example_menu(state['question'], config.TRIAGE_EXAMPLE_MENU_SIZE)}\n\n"
               f"TABLE CARDS (most relevant to this message -- where the data lives):\n{knowledge.table_hints(state['question'], config.TABLE_HINTS)}\n\n"
-              f"USER MESSAGE: {state['question']}")
+              + (f"REPLY LANGUAGE: {language.prompt_line(language.writing_language(state['forced_language']))}\n\n"
+                 if state.get("forced_language") else "")
+              + f"USER MESSAGE: {state['question']}")
     res = llm_gateway.chat_json("triage", prompt, system=_TRIAGE_SYSTEM, max_tokens=config.LLM_MAX_TOKENS_TRIAGE)
     if res is None:
         _step(state, "triage", t0, outcome="no model available")
@@ -256,7 +258,7 @@ def _parse_triage(d: dict, state: dict, model: str) -> dict:
     triage = {
         "kind": kind, "question": str(d.get("question") or state["question"]).strip(),
         "followup": bool(d.get("followup")), "domain": domain,
-        "language": d.get("language") if d.get("language") in {"en", "hinglish", "hi"} else "en",
+        "language": d.get("language") if d.get("language") in language.CODES else "en",
         "parts": [str(p).strip() for p in d.get("parts") or [] if str(p).strip()][:4],
         "examples": [str(e) for e in d.get("examples") or []][:3],
         # Checked against the message AND its resolved form: a follow-up ('and in Agra?') carries
@@ -915,7 +917,7 @@ Terms: SAT = Site Acceptance Test (a batch acceptance of installed meters, SAT-1
 - Snapshot data (SAT, non-SAT, stock, current stage, receivables) has no history: if the question asks for a past date ('as of 20 Sep') and RESULT is the current snapshot, say the figure is as on the latest refresh and that day-by-day history is not stored -- never present it as the past date's value.
 - 'why', 'should we', 'which to focus on', what-if: reason from the numbers -- compare, name the driver, give a clear verdict. Summaries/drafts/messages: write them fully (bullets allowed), up to ~10 lines.
 - If rows were cut off, answer from what is shown and point to the full table below the answer -- never say a month or item is 'missing' because it was cut off. If the result is empty, say no matching data was found and suggest why.
-- Write summary, insights and followups in LANGUAGE: en = English; hinglish = Hinglish in Roman script (like the user); hi = Hindi.
+- Write summary and insights in LANGUAGE (follow its description). In every language, numbers, dates, IDs and amounts are copied exactly as in RESULT, in Western digits 0-9 -- never in words.
 Reply with JSON only:
 {"summary": "the answer (1-3 sentences, longer only for summaries/drafts/why)", "insights": ["0-2 short, specific observations from the data"], "followups": [3 numbers from FOLLOW-UP OPTIONS: the most useful next questions after this answer, best first]}"""
 
@@ -1202,7 +1204,8 @@ def _write_answer(state: dict, triage: dict, plan: dict, result: dict, extras: l
     state["result_preview_tokens"] = llm_gateway.estimate_tokens(preview)  # tool-result size fed back to the LLM
     more = f", first {_ANSWER_ROWS} shown" if n > _ANSWER_ROWS else ""
     memory = state.get("memory_turns") or []
-    parts = [f"Today: {_today()}", f"LANGUAGE: {triage.get('language', 'en')}",
+    writing = language.writing_language(triage.get("language", "en"))  # other targets: English, then translated
+    parts = [f"Today: {_today()}", f"LANGUAGE: {language.prompt_line(writing)}",
              *(["CONVERSATION SO FAR (build on it naturally when relevant): " + " || ".join(
                  f"Q: {t.get('resolved_question') or t.get('question')} -> A: {str(t.get('summary') or '')[:160]}"
                  for t in memory[-2:])] if memory else []),
@@ -1247,8 +1250,9 @@ def _write_answer(state: dict, triage: dict, plan: dict, result: dict, extras: l
     parts.append(f"ANSWER THIS QUESTION FROM RESULT (and FACTS): {triage['question']}")
     prompt = "\n".join(parts)
     _emit(state, "status", message="Writing the answer")
-    if state.get("emit") is not None:
-        # Streaming client: pass the summary on word by word as it is written.
+    if state.get("emit") is not None and writing == triage.get("language", "en"):
+        # Streaming client: pass the summary on word by word as it is written (not when it is
+        # written in English for a later translation -- the user would see the English first).
         res = llm_gateway.chat_json_stream("answer", prompt, system=_ANSWER_SYSTEM,
                                            on_text=lambda text: _emit(state, "summary_delta", text=text),
                                            max_tokens=config.LLM_MAX_TOKENS_ANSWER)
@@ -1260,8 +1264,9 @@ def _write_answer(state: dict, triage: dict, plan: dict, result: dict, extras: l
                            "free-tier rate limit -- ask again in a minute for a written answer.)",
                 "insights": [], "followups": [], "source": "none (AI busy)"}
     d = res.data
-    summary = str(d["summary"]).strip()
-    insights = [str(i) for i in d.get("insights") or [] if str(i).strip()][:3]
+    # Native-script digits (४२) as 0-9, so the number check below reads every figure.
+    summary = language.ascii_digits(str(d["summary"])).strip()
+    insights = [language.ascii_digits(str(i)) for i in d.get("insights") or [] if str(i).strip()][:3]
 
     # Number check: every figure written must come from the results (or a simple
     # sum / difference / share within a row or column). A slip goes back to the LLM
@@ -1291,8 +1296,8 @@ def _write_answer(state: dict, triage: dict, plan: dict, result: dict, extras: l
                   "digit-for-digit from RESULT (or computing it exactly from RESULT values). Same JSON format.",
                 system=_ANSWER_SYSTEM, max_tokens=config.LLM_MAX_TOKENS_ANSWER)
             if fix is not None and str(fix.data.get("summary") or "").strip():
-                summary = str(fix.data["summary"]).strip()
-                insights = [str(i) for i in fix.data.get("insights") or [] if str(i).strip()][:3]
+                summary = language.ascii_digits(str(fix.data["summary"])).strip()
+                insights = [language.ascii_digits(str(i)) for i in fix.data.get("insights") or [] if str(i).strip()][:3]
             fixed, left = number_check.repair(summary, allowed, frames)
         else:
             log.info("answer: unsupported numbers %s repaired in code", bad)
@@ -1325,26 +1330,30 @@ def _write_answer(state: dict, triage: dict, plan: dict, result: dict, extras: l
               "for every highest / lowest claim. Same JSON format.",
             system=_ANSWER_SYSTEM, max_tokens=config.LLM_MAX_TOKENS_ANSWER)
         if fix is not None and str(fix.data.get("summary") or "").strip():
-            new = str(fix.data["summary"]).strip()
+            new = language.ascii_digits(str(fix.data["summary"])).strip()
             if not number_check.unsupported(new, allowed):
                 summary = new
         summary = extreme_check.drop_sentences(summary, result.get("result"), period_col, partial) or summary
         if state.get("emit") is not None:
             _emit(state, "summary_replace", text=summary)
-    if _PERIOD_RE.search(state["question"]) and _ALL_TIME_LEAD_RE.match(summary):
+    if _PERIOD_RE.search(f"{state['question']} {triage['question']}") and _ALL_TIME_LEAD_RE.match(summary):
         # The user named a period: an 'all time' assumption contradicts the question -- drop the clause.
+        # The English question too: 'ਪਿਛਲੇ ਮਹੀਨੇ' (last month) never matched the English period words.
         rest = _ALL_TIME_LEAD_RE.sub("", summary, count=1)
         summary = rest[:1].upper() + rest[1:]
     # Sources of a data answer: built by code from what actually ran (never by the LLM).
     refreshed = answer_cache.current_version().split("|")[0]
     state["citations"] = grounding.data_citations(plan, triage, f"{_tidy_ts(refreshed)} IST" if refreshed else None)
+    # What the answer is really written in (models skip the LANGUAGE line now and then); a
+    # mismatch with the target is translated afterwards (main._in_language).
+    state["answer_language"] = language.written_in(" ".join([summary, *insights]), writing)
     return {"summary": summary, "insights": insights,
             "followups": _pick_followups(d.get("followups"), options), "source": res.model}
 
 
 _EXPLAIN_SYSTEM = """You explain GMR smart-meter programme KPIs, dashboard labels and data terms to a business user (SAT = Site Acceptance Test). Answer using ONLY the RETRIEVED CONTEXT chunks -- they are the exact definitions the dashboard uses; explain in business words, not SQL/column names.
 Rules: do not use outside knowledge for facts; every fact must come from a chunk, and list the chunk_ids you used in "citations" (only ids shown in RETRIEVED CONTEXT); copy numbers (thresholds, days, %) exactly from the chunks; if the chunks do not answer the question, set "abstain": true and say what is missing instead of guessing; if two chunks disagree, do not pick one -- describe both in "conflicts".
-Write in LANGUAGE: en = English; hinglish = Hinglish in Roman script; hi = Hindi.
+Write in LANGUAGE (follow its description); numbers stay exactly as in the chunks, in Western digits 0-9.
 Reply with JSON only: {"summary": "clear explanation, 2-6 sentences, include the formula in words", "insights": ["0-3 useful details/caveats"], "citations": ["chunk ids used"], "supported": true, "abstain": false, "conflicts": [], "followups": [3 numbers from FOLLOW-UP OPTIONS: the most useful next questions, best first]}"""
 
 
@@ -1353,13 +1362,14 @@ def _explain(state: dict, triage: dict) -> dict:
     # Grounding (validation/grounding.py): only rule / glossary chunks relevant enough to
     # the question are shown; with none, abstain without calling the LLM.
     evidence = grounding.collect_explain_evidence(triage["question"], triage["topics"], k=config.GROUNDING_TOP_K)
+    writing = language.writing_language(triage.get("language", "en"))  # other targets: English, then translated
     if not evidence:
         _step(state, "explain", t0, outcome="abstained: no relevant evidence")
         state["grounding"] = {"abstained": True, "confidence": 0.0, "problems": ["no evidence above threshold"]}
         return {"summary": grounding.ABSTAIN_NO_EVIDENCE, "insights": [], "followups": _followup_options(triage)[:3],
                 "refused": True, "source": "grounding"}
     prompt = ("RETRIEVED CONTEXT:\n" + grounding.context_block(evidence, config.GROUNDING_MAX_CONTEXT_CHARS)
-              + f"\n\nLANGUAGE: {triage.get('language', 'en')}\nUSER QUERY: {triage['question']}")
+              + f"\n\nLANGUAGE: {language.prompt_line(writing)}\nUSER QUERY: {triage['question']}")
     options = _followup_options(triage)
     if options:
         prompt += "\n\n" + _options_text(options)
@@ -1368,7 +1378,11 @@ def _explain(state: dict, triage: dict) -> dict:
     if res is None or not str(res.data.get("summary") or "").strip():
         return {"summary": _BUSY, "insights": [], "followups": [], "refused": True, "source": "none (AI busy)"}
     d = res.data
+    d["summary"] = language.ascii_digits(str(d.get("summary") or ""))
+    d["insights"] = [language.ascii_digits(str(i)) for i in d.get("insights") or []]
     checked = grounding.verify(d, evidence)
+    if not checked.abstained:
+        state["answer_language"] = language.written_in(" ".join([checked.summary, *checked.insights]), writing)
     state["citations"] = checked.citations
     state["grounding"] = {"abstained": checked.abstained, "confidence": checked.confidence,
                           "problems": checked.problems, "conflicts": checked.conflicts,
@@ -1423,13 +1437,17 @@ def _finish(state: dict, summary: str, *, refused: bool, source: str, followups:
 
 
 def run_agent(question: str, *, prior_questions: list[str] | None = None, prior_turns: list[dict] | None = None,
-              trace_id: str | None = None, session_id: str | None = None, emit=None) -> dict:
+              trace_id: str | None = None, session_id: str | None = None, emit=None,
+              response_language: str = language.AUTO) -> dict:
     """Never raises: a failure becomes an honest error answer, and is logged.
-    emit(event) -- optional: receives progress events for a streaming client."""
+    emit(event) -- optional: receives progress events for a streaming client.
+    response_language -- the dropdown preference ('auto' = answer in the user's language)."""
     tid = trace_id or new_trace_id()
     t_start = time.perf_counter()
     state: dict[str, Any] = {"question": question, "trace_id": tid, "trace": [], "warnings": [],
-                             "prior_questions": prior_questions or [], "emit": emit, "t_start": t_start}
+                             "prior_questions": prior_questions or [], "emit": emit, "t_start": t_start,
+                             "language_pref": language.normalize_preference(response_language),
+                             "forced_language": language.forced(question, response_language)}
     log.info("[%s] QUERY  %r", tid, question)
     signals = injection.scan(question)
     if signals:
@@ -1483,6 +1501,7 @@ def run_agent(question: str, *, prior_questions: list[str] | None = None, prior_
     append_jsonl("questions", {
         "at": datetime.now(_IST).strftime("%Y-%m-%dT%H:%M:%S"), "trace_id": tid, "session_id": session_id,
         "question": question, "resolved_question": state.get("resolved_question"), "kind": triage.get("kind"),
+        "language": state.get("target_language"),
         "domain": state.get("agent"), "topics": triage.get("topics"), "tables": plan.get("tables"),
         "sql": plan.get("sql"), "extra_sql": plan.get("extra_sql"), "reasoning": plan.get("reasoning"),
         "rows": state.get("row_count"),
@@ -1499,8 +1518,6 @@ def run_agent(question: str, *, prior_questions: list[str] | None = None, prior_
     return state
 
 
-_HINGLISH = {"kitne", "kitna", "kitni", "kya", "hai", "hain", "mein", "ka", "ki", "ke", "ko", "kal", "aaj", "sabse",
-             "zyada", "kab", "kaun", "kis", "kaha", "kahan", "lage", "lagaye", "chalega", "bana", "nahi", "abhi", "batao"}
 _FOLLOWUP_WORDS = {"that", "it", "this", "those", "these", "them", "same", "also", "there", "only", "and"}
 
 
@@ -1537,7 +1554,7 @@ def _route(state: dict, prior_turns: list[dict] | None) -> dict | None:
     if domain == "wfm" and _METER_SERIAL_RE.search(question):
         topics = ["meter_lookup"]  # one named meter = a lookup (see _parse_triage)
     triage = {"kind": "data", "question": question, "followup": False, "domain": domain,
-              "language": "hinglish" if len(_HINGLISH & set(words)) >= 2 else "en",
+              "language": language.detect(question) or "en",
               "parts": [], "examples": [f"e{example_id}"], "assumption": "", "topics": topics, "tables": [],
               "reply": "", "source": "router"}
     _step(state, "route", t0, matched_example=example_id, ratio=round(hits[0][1] - 10, 3), topics=topics)
@@ -1583,6 +1600,7 @@ chart graph list top bottom highest lowest best worst rank ranking ranked what a
 side kar karo do dikhao batao sab overall only just more detail details view see over time vs. us than other others
 consumer consumers dt dtr feeder feeders meter meters type types wise? category-wise zone-wise project-wise
 has have had many much get got there their there's can could would should will be been being with
+english hindi hinglish language mein me main explain samjhao
 """.split())
 
 

@@ -26,6 +26,7 @@ from typing import Any
 
 from langchain_core.runnables import RunnableConfig
 
+from gmr_agents import language
 from gmr_agents import llm_pipeline as P
 from gmr_agents.graph import context
 from gmr_agents.graph.state import AgentState
@@ -60,6 +61,11 @@ def understand_node(state: AgentState, config: RunnableConfig) -> dict[str, Any]
         P._finish(ps, P._BUSY, refused=True, source="none (AI busy)")
         return {"route": "busy", "status": "busy", "refused": True, "step_count": _tick(state)}
     P.fix_question(ps, triage, prior)  # place scope + the user's own category words, by code
+    # Response language by code (gmr_agents/language.py): explicit request > dropdown > the
+    # message's own language. Routing, SQL and checks only ever see the English question.
+    triage["language"], ps["detected_language"] = language.resolve(
+        state["question"], ps.get("language_pref") or language.AUTO, triage.get("language"), prior)
+    ps["target_language"] = triage["language"]
     ps["triage"] = triage
     ps["routing"] = {"domain": triage["domain"], "topics": triage["topics"], "tables": triage["tables"],
                      "source": triage["source"]}
@@ -75,8 +81,13 @@ def understand_node(state: AgentState, config: RunnableConfig) -> dict[str, Any]
 def reply_node(state: AgentState, config: RunnableConfig) -> dict[str, Any]:
     """Who controls it: application code returns the reply the triage LLM wrote."""
     triage = state["triage"]
-    P._finish(context.get(config).pipeline_state, triage["reply"] or "How can I help with GMR's meter programme data?",
+    ps = context.get(config).pipeline_state
+    P._finish(ps, triage["reply"] or "How can I help with GMR's meter programme data?",
               refused=triage["kind"] == "out_of_scope", source=triage["source"])
+    # The triage LLM was asked for REPLY LANGUAGE (explicit / dropdown) or the user's own language,
+    # but does not always comply: record what the reply really is in. A mismatch -- and the canned
+    # English fallback -- is translated afterwards (main._in_language).
+    ps["answer_language"] = language.written_in(triage["reply"], triage["language"]) if triage["reply"] else "en"
     return {"status": "refused" if triage["kind"] == "out_of_scope" else "answered", "step_count": _tick(state)}
 
 

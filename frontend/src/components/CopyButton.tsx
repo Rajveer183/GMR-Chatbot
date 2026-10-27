@@ -7,6 +7,8 @@ interface CopyButtonProps {
   getPayload: () => CopyPayload;
   label?: string;
   title?: string;
+  /** "Copied" in the screen language. */
+  copiedLabel?: string;
   /** Icon only, for tight spots like a metric card header. */
   compact?: boolean;
   className?: string;
@@ -16,6 +18,7 @@ export const CopyButton: React.FC<CopyButtonProps> = ({
   getPayload,
   label = "Copy",
   title = "Copy",
+  copiedLabel = "Copied",
   compact = false,
   className = "summary-audio-btn",
 }) => {
@@ -39,11 +42,11 @@ export const CopyButton: React.FC<CopyButtonProps> = ({
       type="button"
       className={`${className} ${copied ? "copied" : ""}`}
       onClick={onClick}
-      aria-label={copied ? "Copied" : title}
-      title={copied ? "Copied" : title}
+      aria-label={copied ? copiedLabel : title}
+      title={copied ? copiedLabel : title}
     >
       {copied ? <Check size={compact ? 13 : 16} /> : <Copy size={compact ? 13 : 16} />}
-      {compact ? null : <span>{copied ? "Copied" : label}</span>}
+      {compact ? null : <span>{copied ? copiedLabel : label}</span>}
     </button>
   );
 };

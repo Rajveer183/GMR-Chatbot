@@ -2,6 +2,7 @@ import React from "react";
 import { BarChart3, Languages, MousePointerClick, Sparkles } from "lucide-react";
 import { SuggestedQuestions } from "./SuggestedQuestions";
 import gmrLogo from "../assets/gmr_logo.png";
+import { uiText } from "../i18n/languages";
 
 interface EmptyStateProps {
   title?: string;
@@ -9,7 +10,9 @@ interface EmptyStateProps {
   /** When provided, the empty state renders clickable starter questions
    * that run immediately -- turning the first screen into a usable
    * jumping-off point instead of a static placeholder card. */
-  onSuggestedQuestion?: (question: string) => void;
+  onSuggestedQuestion?: (question: string, canonical?: string) => void;
+  /** Screen language: the cards, the intro and the starter questions follow it. */
+  lang?: string;
 }
 
 /* Starters verified against the live backend (WFM KPI tables + MDM feeder
@@ -17,13 +20,7 @@ interface EmptyStateProps {
  * and together they cover headline stats, project ranking (a drillable bar
  * chart), monthly trend, the supply-to-collection funnel and auto-indexing.
  * Re-check with backend/eval/question_bank/run_bank.py before changing them. */
-const STARTER_QUESTIONS = [
-  "Give me installed so far, SAT percentage and remaining stock in one go.",
-  "Which project installed the most meters in the last 30 days?",
-  "Describe the installation trend over the last 12 months.",
-  "Build the full funnel from supply to collection with conversion at each stage.",
-  "What share of auto-indexing is complete?",
-];
+const STARTER_KEYS = ["starter1", "starter2", "starter3", "starter4", "starter5"] as const;
 
 // Each card gets its own accent (drawn from the same brand chart palette as
 // ChartVisualization -- frontend/src/components/chartOptions.ts) so this
@@ -32,32 +29,35 @@ const STARTER_QUESTIONS = [
 const CAPABILITY_CARDS = [
   {
     icon: Languages,
-    title: "Ask in English or Hinglish",
-    text: "Type it the way you'd ask a colleague -- \"Kal kitne meter lage?\" works too, and follow-ups like \"only in Kashi\" keep the context.",
+    title: "es_card1Title",
+    text: "es_card1Text",
     accent: "#0b3c6d",
     accentBg: "rgba(11, 60, 109, 0.1)",
   },
   {
     icon: MousePointerClick,
-    title: "Click to drill down",
-    text: "Click a project, OEM or division bar in a chart to get its full breakdown.",
+    title: "es_card2Title",
+    text: "es_card2Text",
     accent: "#1baf7a",
     accentBg: "rgba(27, 175, 122, 0.1)",
   },
   {
     icon: BarChart3,
-    title: "KPIs, charts & data",
-    text: "Answers come with a plain-language summary, KPI tiles or a dashboard-style chart, and the underlying table to verify it.",
+    title: "es_card3Title",
+    text: "es_card3Text",
     accent: "#4a3aa7",
     accentBg: "rgba(74, 58, 167, 0.1)",
   },
-];
+] as const;
 
 export const EmptyState: React.FC<EmptyStateProps> = ({
   title = "GMR AI Intelligence",
-  message = "Ask a question to start the conversation. Your insights and summaries will appear here.",
+  message,
   onSuggestedQuestion,
+  lang = "en",
 }) => {
+  // Starters verified in English: shown in the screen language, a click runs the English one.
+  const starters = STARTER_KEYS.map((key) => ({ shown: uiText(lang, key), verified: uiText("en", key) }));
   return (
     <div className="empty-state">
       <div className="empty-state-glow" aria-hidden="true" />
@@ -65,14 +65,17 @@ export const EmptyState: React.FC<EmptyStateProps> = ({
         <img src={gmrLogo} alt="GMR" />
       </div>
       <h3 className="empty-state-title">{title}</h3>
-      <p className="empty-state-message">{message}</p>
+      <p className="empty-state-message">{message ?? uiText(lang, "es_message")}</p>
 
       {onSuggestedQuestion ? (
         <div className="empty-state-starters">
           <div className="empty-state-starters-label">
-            <Sparkles size={11} /> Try asking
+            <Sparkles size={11} /> {uiText(lang, "tryAsking")}
           </div>
-          <SuggestedQuestions questions={STARTER_QUESTIONS} onPick={onSuggestedQuestion} />
+          <SuggestedQuestions
+            questions={starters.map((s) => s.shown)}
+            onPick={(q, i) => onSuggestedQuestion(q, q !== starters[i].verified ? starters[i].verified : undefined)}
+          />
         </div>
       ) : null}
 
@@ -83,8 +86,8 @@ export const EmptyState: React.FC<EmptyStateProps> = ({
               <Icon size={14} />
             </div>
             <div>
-              <div className="empty-state-capability-title">{cardTitle}</div>
-              <div className="empty-state-capability-text">{text}</div>
+              <div className="empty-state-capability-title">{uiText(lang, cardTitle)}</div>
+              <div className="empty-state-capability-text">{uiText(lang, text)}</div>
             </div>
           </div>
         ))}

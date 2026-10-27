@@ -1,7 +1,10 @@
 import React, { useEffect, useMemo, useRef, useState } from "react";
 import { Menu, Plus, MessageSquare, Pencil, Trash2, Send, Mic, Search, X, User, Bot, ChevronDown, FileSpreadsheet } from "lucide-react";
 import { apiClient } from "../api/client";
-import type { AIQueryResponse, AIStreamEvent, DatasetSummary, FilterRequest, SessionSummary, SessionDetail, SessionMessage } from "../api/client";
+import type { AIQueryResponse, AIStreamEvent, DatasetSummary, FilterRequest, SessionSummary, SessionDetail, SessionMessage, TranslatedAnswer } from "../api/client";
+import { LanguageSelect } from "./LanguageSelect";
+import { langTag, readStoredLanguage, screenLanguage, speechLocale, statusText, storeLanguage, uiText } from "../i18n/languages";
+import type { LanguagePreference } from "../i18n/languages";
 import SpeechRecognition, { useSpeechRecognition } from "react-speech-recognition";
 import { ResultRenderer } from "./ResultRenderer";
 import { LoadingStatus } from "./LoadingStatus";
@@ -120,6 +123,15 @@ export const AIWorkspace: React.FC<AIWorkspaceProps> = ({ filters }) => {
   const inputRef = useRef<HTMLTextAreaElement>(null);
   const prevLoadingRef = useRef(false);
   const [enteringMessageId, setEnteringMessageId] = useState<string | null>(null);
+  // Answer language (header dropdown). New questions are answered in it; changing it
+  // re-presents the latest answer through POST /api/translate -- the stored answer is never
+  // changed, so switching back and forth always starts from the original.
+  const [responseLanguage, setResponseLanguage] = useState<LanguagePreference>(readStoredLanguage);
+  // "<trace_id>:<language>" -> its translated text, or the request's state
+  const [translations, setTranslations] = useState<Record<string, TranslatedAnswer | "pending" | "failed">>({});
+  // message index -> the language that answer is shown in (absent / "auto" = as written)
+  const [shownLanguage, setShownLanguage] = useState<Record<number, LanguagePreference>>({});
+  const translationsInFlight = useRef<Set<string>>(new Set());
 
   const loadSessions = async () => {
     const list = await apiClient.listSessions();
@@ -291,7 +303,59 @@ export const AIWorkspace: React.FC<AIWorkspaceProps> = ({ filters }) => {
 
   useEffect(() => {
     if (activeSession?.session_id) storeSessionId(activeSession.session_id);
+    setShownLanguage({});  // another chat: every answer as written
   }, [activeSession?.session_id]);
+
+  const requestTranslation = (response: AIQueryResponse, language: LanguagePreference) => {
+    const traceId = response.debug?.trace_id;
+    if (!traceId || !activeSession || language === "auto" || (response.answer_language ?? "en") === language) return;
+    const key = `${traceId}:${language}`;
+    const known = translations[key];
+    if ((known && known !== "failed") || translationsInFlight.current.has(key)) return;
+    translationsInFlight.current.add(key);
+    setTranslations((t) => ({ ...t, [key]: "pending" }));
+    apiClient
+      .translate(activeSession.session_id, traceId, language)
+      .then((r) => setTranslations((t) => ({ ...t, [key]: r.translation.status === "failed" ? "failed" : r })))
+      .catch((err) => {
+        console.warn("[ui] translation failed -- showing the original answer:", err);
+        setTranslations((t) => ({ ...t, [key]: "failed" }));
+      })
+      .finally(() => translationsInFlight.current.delete(key));
+  };
+
+  const changeLanguage = (language: LanguagePreference) => {
+    setResponseLanguage(language);
+    storeLanguage(language);
+    // The answer on screen follows the new language straight away (no new question, no SQL).
+    const messages = activeSession?.messages ?? [];
+    let latest = -1;
+    for (let i = messages.length - 1; i >= 0; i--) {
+      if (messages[i].role === "assistant" && messages[i].response) {
+        latest = i;
+        break;
+      }
+    }
+    if (latest < 0) return;
+    setShownLanguage((s) => ({ ...s, [latest]: language }));
+    requestTranslation(messages[latest].response!, language);
+  };
+
+  /** The answer as shown: its translation when one was chosen and is ready, else the original. */
+  const displayed = (index: number, response: AIQueryResponse): { result: AIQueryResponse; note: "translating" | "failed" | null } => {
+    const language = shownLanguage[index];
+    if (!language || language === "auto" || (response.answer_language ?? "en") === language) return { result: response, note: null };
+    const t = translations[`${response.debug?.trace_id}:${language}`];
+    if (t === "pending") return { result: response, note: "translating" };
+    if (t === "failed" || !t) return { result: response, note: t === "failed" ? "failed" : null };
+    return {
+      result: {
+        ...response, summary: t.summary, insights: t.insights, warnings: t.warnings, answer_language: t.answer_language,
+        kpis: t.kpis, charts: t.charts, tables: t.tables, suggested_followup_labels: t.suggested_followup_labels,
+      },
+      note: null,
+    };
+  };
 
   useEffect(() => {
     // Reflects whatever datasets the backend already has loaded at page load
@@ -300,7 +364,7 @@ export const AIWorkspace: React.FC<AIWorkspaceProps> = ({ filters }) => {
     refreshDatasets();
   }, []);
 
-  const runQuery = async (q: string, page = 1, pageSize = ALL_ROWS, viaSuggestion = false) => {
+  const runQuery = async (q: string, page = 1, pageSize = ALL_ROWS, viaSuggestion = false, canonical?: string) => {
     if (!q.trim() || !activeSession || loading) return;
     const trimmed = q.trim();
     console.log(`%c[ui] submitting query: "${trimmed}"`, "color:#5e35b1");
@@ -333,6 +397,8 @@ export const AIWorkspace: React.FC<AIWorkspaceProps> = ({ filters }) => {
           page,
           page_size: pageSize,
           via_followup: viaSuggestion,
+          response_language: responseLanguage,
+          canonical_question: canonical,
         },
         onEvent
       );
@@ -437,6 +503,19 @@ export const AIWorkspace: React.FC<AIWorkspaceProps> = ({ filters }) => {
   };
 
 
+  // The screen's own text follows the dropdown, or with Auto-detect the latest answer's language.
+  let latestAnswerLanguage: string | undefined;
+  const allMessages = activeSession?.messages ?? [];
+  for (let i = allMessages.length - 1; i >= 0; i--) {
+    const response = allMessages[i].response;
+    if (allMessages[i].role === "assistant" && response) {
+      latestAnswerLanguage = displayed(i, response).result.answer_language;
+      break;
+    }
+  }
+  const uiLang = screenLanguage(responseLanguage, latestAnswerLanguage);
+  const t = (key: Parameters<typeof uiText>[1], vars?: Record<string, string | number>) => uiText(uiLang, key, vars);
+
   const activeSessionName = useMemo(() => activeSession?.session_name || "Project Workspace", [activeSession]);
 
   const filteredSessions = useMemo(() => {
@@ -465,13 +544,13 @@ export const AIWorkspace: React.FC<AIWorkspaceProps> = ({ filters }) => {
     setSpeechError(null);
     resetTranscript();
     setQuestion("");
-    SpeechRecognition.startListening({ continuous: true, language: "en-US" }).catch(() => {
+    SpeechRecognition.startListening({ continuous: true, language: speechLocale(responseLanguage) }).catch(() => {
       setSpeechError("Unable to start speech recognition.");
     });
   };
 
   return (
-    <div className="chat-app-layout">
+    <div className="chat-app-layout" lang={langTag(uiLang)}>
       <aside className="chat-sidebar">
         <div className="chat-sidebar-top">
           <img className="chat-brand-logo" src={gmrLogo} alt="GMR" />
@@ -481,12 +560,12 @@ export const AIWorkspace: React.FC<AIWorkspaceProps> = ({ filters }) => {
         </div>
 
         <button className="chat-new-btn" onClick={createNewSession} type="button">
-          <Plus size={14} /> New Chat
+          <Plus size={14} /> {t("newChat")}
         </button>
 
         <div className="chat-menu">
           <button className="chat-menu-item active" type="button">
-            <MessageSquare size={14} /> Chat
+            <MessageSquare size={14} /> {t("chat")}
           </button>
         </div>
 
@@ -498,14 +577,14 @@ export const AIWorkspace: React.FC<AIWorkspaceProps> = ({ filters }) => {
             aria-expanded={filesExpanded}
           >
             <FileSpreadsheet size={14} />
-            Data Sources
+            {t("dataSources")}
             <span className="chat-files-count">{datasets.length}</span>
             <ChevronDown size={14} className={`chat-files-chevron ${filesExpanded ? "expanded" : ""}`} />
           </button>
           {filesExpanded ? (
             <div className="chat-files-list">
               {datasets.length === 0 ? (
-                <div className="chat-files-empty">No files loaded yet.</div>
+                <div className="chat-files-empty">{t("noFiles")}</div>
               ) : (
                 datasets.map((ds) => (
                   <div key={ds.dataset_id} className="chat-files-item">
@@ -515,7 +594,7 @@ export const AIWorkspace: React.FC<AIWorkspaceProps> = ({ filters }) => {
                         {ds.display_name}
                       </div>
                       <div className="chat-files-item-meta">
-                        {ds.row_count.toLocaleString()} rows
+                        {ds.row_count.toLocaleString()} {t("rows")}
                       </div>
                     </div>
                   </div>
@@ -531,26 +610,26 @@ export const AIWorkspace: React.FC<AIWorkspaceProps> = ({ filters }) => {
             type="text"
             value={sessionSearch}
             onChange={(e) => setSessionSearch(e.target.value)}
-            placeholder="Search chat history..."
-            aria-label="Search chat history"
+            placeholder={t("searchHistory")}
+            aria-label={t("searchHistory")}
           />
           {sessionSearch ? (
             <button
               type="button"
               className="chat-session-search-clear"
               onClick={() => setSessionSearch("")}
-              aria-label="Clear search"
-              title="Clear search"
+              aria-label={t("clearSearch")}
+              title={t("clearSearch")}
             >
               <X size={12} />
             </button>
           ) : null}
         </div>
-        <div className="chat-sessions-title">RECENT SESSIONS</div>
+        <div className="chat-sessions-title">{t("recentSessions")}</div>
         <div className="chat-sessions-list">
           {filteredSessions.length === 0 ? (
             <div className="chat-sessions-empty">
-              {sessionSearch ? `No chats match "${sessionSearch}"` : "No sessions yet"}
+              {sessionSearch ? t("noChatsMatch", { q: sessionSearch }) : t("noSessions")}
             </div>
           ) : (
             filteredSessions.map((s) => (
@@ -589,8 +668,10 @@ export const AIWorkspace: React.FC<AIWorkspaceProps> = ({ filters }) => {
         </div>
 
         <div className="chat-sidebar-footer">
-          <div className="role">{datasets.length} file{datasets.length === 1 ? "" : "s"} loaded</div>
-          <div className="subrole">Refreshed automatically</div>
+          <div className="role">
+            {uiLang === "en" ? `${datasets.length} file${datasets.length === 1 ? "" : "s"} loaded` : t("filesLoaded", { n: datasets.length })}
+          </div>
+          <div className="subrole">{t("refreshedAuto")}</div>
         </div>
       </aside>
 
@@ -600,14 +681,15 @@ export const AIWorkspace: React.FC<AIWorkspaceProps> = ({ filters }) => {
             <h2>{activeSessionName}</h2>
             <p>
               {datasets.length > 1
-                ? `${datasets.length} files loaded -- each question is auto-routed to the right one`
+                ? t("filesRouted", { n: datasets.length })
                 : datasets.length === 1
-                ? `Connected to: ${datasets[0].display_name}`
-                : "No data loaded yet"}
+                ? t("connectedTo", { name: datasets[0].display_name })
+                : t("noData")}
             </p>
           </div>
           <div className="chat-header-controls">
-            <span className="chat-active-badge">Active Session</span>
+            <span className="chat-active-badge">{t("activeSession")}</span>
+            <LanguageSelect value={responseLanguage} onChange={changeLanguage} label={t("answerLanguage")} />
           </div>
         </header>
 
@@ -616,7 +698,10 @@ export const AIWorkspace: React.FC<AIWorkspaceProps> = ({ filters }) => {
             {(() => {
               const assistantMessages = (activeSession?.messages || []).filter((m) => m.role === "assistant");
               const lastAssistantId = assistantMessages.length ? assistantMessages[assistantMessages.length - 1].id : undefined;
-              return (activeSession?.messages || []).map((msg: SessionMessage) => (
+              return (activeSession?.messages || []).map((msg: SessionMessage, index: number) => {
+                const shown = msg.response ? displayed(index, msg.response) : null;
+                const answerLanguage = shown?.result.answer_language;
+                return (
                 <div key={msg.id} className={`chat-msg-row ${msg.role}`}>
                   {msg.role === "user" ? (
                     <div
@@ -630,7 +715,7 @@ export const AIWorkspace: React.FC<AIWorkspaceProps> = ({ filters }) => {
                         <span className="chat-msg-avatar user">
                           <User size={12} />
                         </span>
-                        <span className="chat-msg-meta-name">You</span>
+                        <span className="chat-msg-meta-name">{t("you")}</span>
                         <span className="chat-msg-meta-time">{formatMessageTime(msg.timestamp)}</span>
                       </div>
                       <div className="chat-user-bubble chat-bubble-enter">{msg.content}</div>
@@ -641,7 +726,7 @@ export const AIWorkspace: React.FC<AIWorkspaceProps> = ({ filters }) => {
                         <span className="chat-msg-avatar assistant">
                           <Bot size={12} />
                         </span>
-                        <span className="chat-msg-meta-name">Assistant</span>
+                        <span className="chat-msg-meta-name">{t("assistant")}</span>
                         <span className="chat-msg-meta-time">{formatMessageTime(msg.timestamp)}</span>
                       </div>
                       <div
@@ -652,18 +737,26 @@ export const AIWorkspace: React.FC<AIWorkspaceProps> = ({ filters }) => {
                         className={`chat-assistant-card${
                           enteringMessageId === msg.id ? " chat-response-enter" : ""
                         }`}
+                        lang={langTag(answerLanguage)}
                       >
                         {msg.response?.debug?.resolved_question &&
                         msg.response.debug.resolved_question.trim().toLowerCase() !==
                           (msg.response.question || "").trim().toLowerCase() ? (
                           <div className="chat-interpreted-as">
-                            Interpreted as: <span>{msg.response.debug.resolved_question}</span>
+                            {uiText(answerLanguage, "interpretedAs")} <span lang="en">{msg.response.debug.resolved_question}</span>
                           </div>
                         ) : null}
-                        {msg.response ? (
+                        {shown?.note ? (
+                          <div className={`chat-translation-note ${shown.note}`} role="status" aria-live="polite">
+                            {shown.note === "translating"
+                              ? uiText(shownLanguage[index], "translating")
+                              : uiText(shownLanguage[index], "translationFailed")}
+                          </div>
+                        ) : null}
+                        {shown ? (
                           <ResultRenderer
-                            result={msg.response}
-                            onFollowUp={(q) => runQuery(q, 1, ALL_ROWS, true)}
+                            result={shown.result}
+                            onFollowUp={(q, canonical) => runQuery(q, 1, ALL_ROWS, true, canonical)}
                             showFollowups={msg.id === lastAssistantId}
                           />
                         ) : (
@@ -673,7 +766,8 @@ export const AIWorkspace: React.FC<AIWorkspaceProps> = ({ filters }) => {
                     </div>
                   )}
                 </div>
-              ));
+                );
+              });
             })()}
 
             {pendingQuery ? (
@@ -683,7 +777,7 @@ export const AIWorkspace: React.FC<AIWorkspaceProps> = ({ filters }) => {
                     <span className="chat-msg-avatar user">
                       <User size={12} />
                     </span>
-                    <span className="chat-msg-meta-name">You</span>
+                    <span className="chat-msg-meta-name">{t("you")}</span>
                     <span className="chat-msg-meta-time">{formatMessageTime(new Date().toISOString())}</span>
                   </div>
                   <div className="chat-user-bubble chat-bubble-enter">{pendingQuery}</div>
@@ -698,10 +792,10 @@ export const AIWorkspace: React.FC<AIWorkspaceProps> = ({ filters }) => {
                     <span className="chat-msg-avatar assistant">
                       <Bot size={12} />
                     </span>
-                    <span className="chat-msg-meta-name">Assistant</span>
+                    <span className="chat-msg-meta-name">{t("assistant")}</span>
                   </div>
                   <div className="chat-assistant-card chat-bubble-enter" ref={loadingPlaceholderRef}>
-                    {streamStatus ? <LoadingStatus message={streamStatus} /> : null}
+                    {streamStatus ? <LoadingStatus message={statusText(uiLang, streamStatus)} /> : null}
                     <ResultRenderer result={streamDraft} showFollowups={false} />
                   </div>
                 </div>
@@ -715,11 +809,11 @@ export const AIWorkspace: React.FC<AIWorkspaceProps> = ({ filters }) => {
                     <span className="chat-msg-avatar assistant">
                       <Bot size={12} />
                     </span>
-                    <span className="chat-msg-meta-name">Assistant</span>
+                    <span className="chat-msg-meta-name">{t("assistant")}</span>
                   </div>
                   <div className="chat-loading-placeholder chat-thinking-card chat-bubble-enter" ref={loadingPlaceholderRef}>
                     <TypingIndicator />
-                    <LoadingStatus message={streamStatus || loadingStatus || ""} />
+                    <LoadingStatus message={statusText(uiLang, streamStatus || loadingStatus || "")} />
                   </div>
                 </div>
               </div>
@@ -729,15 +823,15 @@ export const AIWorkspace: React.FC<AIWorkspaceProps> = ({ filters }) => {
               <div className="chat-msg-row empty">
                 <EmptyState
                   title="GMR AI Intelligence"
-                  message="Start the conversation by asking a question. Your AI insights, summaries, and charts will appear here."
-                  onSuggestedQuestion={(q) => runQuery(q, 1, ALL_ROWS, true)}
+                  lang={uiLang}
+                  onSuggestedQuestion={(q, canonical) => runQuery(q, 1, ALL_ROWS, true, canonical)}
                 />
               </div>
             ) : null}
 
             {error ? (
               <div className="chat-msg-row assistant">
-                <div className="chat-error" ref={errorMessageRef}><strong>Query Error:</strong> {error}</div>
+                <div className="chat-error" ref={errorMessageRef}><strong>{t("queryError")}</strong> {error}</div>
               </div>
             ) : null}
           </div>
@@ -751,7 +845,7 @@ export const AIWorkspace: React.FC<AIWorkspaceProps> = ({ filters }) => {
                 className="chat-textarea"
                 value={question}
                 disabled={loading}
-                placeholder="Ask anything about your data... (e.g., 'Which areas have the highest theft risk?')"
+                placeholder={t("askPlaceholder")}
                 onChange={(e) => setQuestion(e.target.value)}
                 onKeyDown={(e) => {
                   if (e.key === "Enter" && !e.shiftKey) {
@@ -764,7 +858,7 @@ export const AIWorkspace: React.FC<AIWorkspaceProps> = ({ filters }) => {
                 className={`chat-icon-btn mic-btn ${speechActive ? "active" : ""}`}
                 type="button"
                 onClick={toggleSpeech}
-                title={speechActive ? "Turn mic off" : "Turn mic on"}
+                title={speechActive ? t("micOff") : t("micOn")}
               >
                 <Mic size={18} />
               </button>
@@ -777,10 +871,10 @@ export const AIWorkspace: React.FC<AIWorkspaceProps> = ({ filters }) => {
         </div>
         <ConfirmDialog
           open={confirmDelete.open}
-          title="Confirm Delete"
-          message={`Delete the session "${confirmDelete.sessionName ?? "this chat"}"? This action cannot be undone.`}
-          confirmLabel="Delete"
-          cancelLabel="Cancel"
+          title={t("confirmDelete")}
+          message={t("deleteMessage", { name: confirmDelete.sessionName ?? "this chat" })}
+          confirmLabel={t("del")}
+          cancelLabel={t("cancel")}
           onCancel={cancelDeleteSession}
           onConfirm={() => confirmDeleteSession(confirmDelete.sessionId)}
         />
