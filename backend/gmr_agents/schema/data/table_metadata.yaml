@@ -869,8 +869,8 @@ table_descriptions:
     Per-project SAT eligibility cutoff date (eligibility_cutoff_date) -- meters installed after it are not yet
     eligible for SAT; used by the MI vs SAT and Non-SAT ageing KPIs.
   gold_om_closed_tickets_day_agg: >-
-    O&M tickets closed per day (closed_date) by place, feeder, dtr, complaint_type -- FEEDER and DT meters only
-    (no consumer closures); SUM(closed_tickets). Place values lower-case.
+    O&M tickets closed per day (closed_date) by place, feeder, dtr, category (CONSUMER / DT / FEEDER), meter_type,
+    complaint_type -- the Ticket Closed Analysis card, every category; SUM(closed_tickets). Place values lower-case.
   gold_om_open_ticket_detail_snapshot: >-
     Open O&M tickets in detail (Never / Non-comm card): complaint type, status, is_escalated, technician remark
     (remark_bucket), age band, SAT status, is_sm_replaced (meter already replaced SM to SM), repeat_ticket_count.

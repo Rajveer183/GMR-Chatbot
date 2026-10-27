@@ -228,7 +228,7 @@ topics:
     rules:
       - "gmr_wfm_silver.sat_milestones (Athena, ~34 rows): one row per project + sat_number ('SAT-n'; stage = CAST(regexp_extract(sat_number, '(\\d+)') AS INTEGER)) with sat_date, lumpsum_invoice_date, pmpm_invoice_date, lumpsum_collection_date, pmpm_collection_date. Compare LOWER(project)."
       - "SAT -> first invoice lag per batch = GREATEST(date_diff('day', sat_date, LEAST(lumpsum_invoice_date, pmpm_invoice_date)), 0) (whichever is set); the average is weighted by batch meters (snapshot SUM(meter_count) per project, sat_stage) - a second, Postgres query. Say how many meters lack dates."
-      - "Not invoiced (Postgres): snapshot sat_stage IS NOT NULL AND NOT has_pmpm_invoice / NOT has_lumpsum_invoice / neither. Cross-check gold_meter_revenue_pending_stage_snapshot current_stage = 'sat_done_revenue_pending' and gold_revenue_ageing_snapshot SUM(outstanding_count). Reasons in the data: invoicing is per SAT batch, milestone dates are operator-entered, unparsable SAT numbers."
+      - "Not invoiced (Postgres): snapshot sat_stage IS NOT NULL AND NOT has_pmpm_invoice / NOT has_lumpsum_invoice / neither. This is NOT the current-stage 'SAT done, revenue pending' (that one = SAT number but no PMPM COLLECTION, whatever the invoice status) nor revenue ageing (SAT date, no PMPM collection) -- never explain one with the other. Reasons in the data: invoicing is per SAT batch, milestone dates are operator-entered, unparsable SAT numbers."
       - "PMPM rate (Rs/meter/month) = latest pmpm_invoiced (cr) * 1e7 / meter-months billed (each batch's lumpsum-invoiced meters x months since its pmpm_invoice_date, as of the receivables row). Estimate for a month = rate x PMPM-invoiced meters (has_pmpm_invoice). Lumpsum rate = latest lumpsum_invoiced * 1e7 / lumpsum-invoiced meters. Steady-state estimate, no month column exists."
     example:
       question: "Days between SAT and first invoice for each SAT batch"
@@ -281,6 +281,7 @@ topics:
     tables: [revenue_receivables]
     answer_notes:
       - "Collection efficiency = realised / invoiced (rupees, crore)."
+      - "Amounts are to-date balances: never add them across days or submissions ('Rs 57.5 crore per day', 'a combined Rs 370.2 crore') -- give the latest figure and its change since the first day shown."
       - "Amounts are filed per project only. When the question asks for a category (consumer / DT / feeder), meter type, zone or date split, open with one plain sentence that this split is not recorded, then give the project-level figures as the closest answer."
     rules:
       - "public.revenue_receivables: operator-entered amounts already in crore; columns lumpsum_/pmpm_/cable_ x invoiced, realised, within_timeline; project lower-case; created_at."
@@ -288,6 +289,9 @@ topics:
       - "Dashboard card (Receivables summary - Delay analysis), per stream: Invoice Amount (Net) = <stream>_invoiced; Realised = <stream>_realised; Within Timeline = <stream>_within_timeline = UNPAID money that is not yet due; Overdue = invoiced - realised - within_timeline (unpaid and past due). Realised + Within Timeline + Overdue = Invoice Amount. Outstanding (all unpaid) = invoiced - realised = Within Timeline + Overdue; % realised = realised / invoiced x 100. Never 'realised - within_timeline' and never call within_timeline 'realised on time'."
       - "Default answer and 'delay analysis' / 'overdue' / 'invoice vs revenue released': per stream (Lumpsum, PMPM, Cable) plus All streams -- invoice_amount_net, realised, within_timeline, overdue, % realised. A negative overdue means the operator's figures do not add up (within_timeline larger than the unpaid amount): show it and say so."
       - "History/trend/change: every row ORDER BY project, created_at (latest vs previous submission per project). To-date amounts should not fall - flag a decrease as a correction."
+      - "Totals over time ('growth', 'trend', 'daily', 'over time', 'history' for all projects): amounts are TO-DATE, so never SUM rows of a day / month (that adds repeat submissions: 420.4 cr) and never difference single rows (-100 cr). For each as-of day = DISTINCT (created_at AT TIME ZONE 'Asia/Kolkata')::date, take each project's latest row filed on or before it (ROW_NUMBER() OVER (PARTITION BY as_of, project ...)) and SUM those; growth = LAG over as-of days. Submissions exist only from 1 Sep 2026: say a range with no filing has no data."
+      - "% on time / % within timeline = <stream>_within_timeline / <stream>_invoiced x 100 (the card's Within Timeline bar %; card rounds to whole %), never % realised. 'Realised late' is not recorded: realised money is not split into on-time / late. Say so, then give Overdue (invoiced - realised - within_timeline, unpaid past due) and Within Timeline."
+      - "Amounts are already in crore: never divide or multiply them by 10^5 / 10^7. Outstanding / pending amount / 'highest outstanding' = invoiced - realised per stream (all three streams summed for a project ranking), never the revenue ageing meter counts."
       - "Discom = its projects: PUVVNL = kashi + triveni, DVVNL = agra -- filter LOWER(project) IN (...) for a discom. Project-wise keeps every stream separate (lumpsum, PMPM, cable columns), never one merged amount."
       - "Filed per project only: no category, zone, meter type or date split. Such a question is NOT unanswerable: drop that filter, return the asked stream/measure per project plus Total (the answer writer says the split is not recorded). Never use meter-count tables for money."
     example:
@@ -318,6 +322,8 @@ topics:
       - "Average age = SUM(age * n) / SUM(n) with n = SUM(outstanding_count) per sat_date in a subquery; oldest = MIN(sat_date)."
       - "Breakdowns: place, category (DT label 'DT'), meter_type, sat_date. Not Non-SAT ageing, not rupees (receivables), not the current-stage tables."
       - "A project / place with no rows has 0 outstanding (its PMPM collection arrived -- Agra today): answer 0 and say why, never 'no data'. Show every band, empty ones as 0."
+      - "'outstanding older than N days' / 'outstanding for N-M days' = this table with GREATEST(today - sat_date, 0) > N (or BETWEEN): never gold_non_sat_ageing_snapshot (meters waiting for SAT)."
+      - "Why it differs from the current-stage 'SAT done, revenue pending' (540,367 vs 157,979 on 27 Oct 2026): both mean 'SAT batch has no PMPM collection date', but this ageing table keeps only meters whose SAT batch has a SAT date in sat_milestones (an age needs a start date); the current-stage count keeps every installed meter carrying a SAT number with no PMPM collection recorded, including batches with no milestone row / SAT date (all of Agra's 188,688)."
     example:
       question: "Revenue not realized ageing band-wise"
       sql: |
@@ -342,6 +348,7 @@ topics:
     rules:
       - "Source = (SELECT project, discom, zone, category, meter_type, current_stage, meter_count FROM public.gold_meter_installation_pending_stage_snapshot UNION ALL SELECT project, discom, zone, UPPER(category), meter_type, current_stage, meter_count FROM public.gold_meter_revenue_pending_stage_snapshot) n; every figure SUM(meter_count). Both have discom and zone (the first four stages take the zone of the warehouse holding the meter, like stock), so a zone / discom filter or zone-wise breakdown goes on the outer query over n."
       - "current_stage order: 'inventory','agency','supervisor','technician' (not yet installed), 'installation_done_sat_pending','sat_done_revenue_pending' (installed, revenue pending). Total = all six. The app shows them as the dashboard's workflow stages: DI to Agency, Agency to Supervisor, Supervisor to Technician, Technician to Installation, Installation to SAT, SAT to Revenue -- answer with THESE names, never 'installation pending' / 'SAT pending' wording."
+      - "Stage definitions (gold ETL): the first four = meters in stock not yet installed, by the furthest hand-off reached; 'installation_done_sat_pending' = installed meter with no SAT number; 'sat_done_revenue_pending' = installed meter with a SAT number whose SAT batch has no PMPM collection date (invoicing does not matter). 'Not (yet) installed' = SUM of the first four from gold_meter_installation_pending_stage_snapshot (109,837 on 27 Oct 2026), never blank serials in unified_installations."
       - "'revenue not realized meters' (any count or breakdown: total, project / zone / category wise) = dashboard KPI 16 = ALL SIX stages from the UNION source (both tables): meters not installed yet are revenue-not-realized too. The revenue-pending table alone (installed meters only) is used only when the question names an installed stage ('installed but SAT pending', 'SAT done but revenue pending'); 'revenue not realized ageing' is the revenue_ageing topic."
       - "'stage wise' / 'each stage' / 'revenue not realized stage wise' = ALL SIX stages from the UNION source above (both tables), one row per stage in workflow order (ORDER BY CASE current_stage ...) plus Total -- never the revenue-pending table alone (that is only the last two stages)."
       - "Circle / division / sub_division exist only for stages 5-6 (gold_meter_revenue_pending_stage_snapshot); for a circle or division question give stages 5-6 for it and say the first four stages are tracked per warehouse / zone. No dates."
@@ -377,7 +384,9 @@ topics:
       - "Stages do not add up to Total Journey (different denominators) - say so when showing all."
       - "Always include total meters (SUM(meter_count)) -- the card's Total Meters tile -- beside the stage averages (a 'Total meters' row or a total_meters column)."
       - "WORDING: 'levels' / 'stages' / 'steps' / 'across the levels' / 'stage wise' of the meter journey = the SIX stages (DI to Agency, Agency to Supervisor, Supervisor to Technician, Technician to Installation, Installation to SAT, SAT to Revenue) plus Total Journey -- one row per stage in that order, never only the total. 'for revenue realized' = the usual figures (SAT to Revenue and Total Journey are over revenue-realized meters). The journey starts at DI (receipt into stock), not at installation. Stages BY another dimension ('zone wise', 'category wise', 'by division', 'project wise'): ONE ROW PER that dimension (ROLLUP Total row) with the six stages + total_journey as COLUMNS (di_to_agency ... total_journey) -- never one row per zone x stage (35 rows the answer cannot cover)."
-      - "Replacements included; add NOT is_replacement only when asked to exclude them. Only time filter: installation_year (integer)."
+      - "Replacements included; add NOT is_replacement only when asked to exclude them (the home-page headline tile is the one exception). Only time filter: installation_year (integer) -- 'meters installed in 2025' / 'for 2026' = WHERE installation_year = 2025, never supply_month."
+      - "'Total & Category wise' / 'category wise' / 'by category' = the card's comparison: one row per category (CONSUMER, DT, FEEDER) plus a Total row (GROUP BY ROLLUP (category)), the six stages + total_journey as columns. Never the home tile's Consumer vs Non-consumer split."
+      - "Every figure is in DAYS -- never hours."
       - "'time to revenue realization' alone = Total Journey. Slowest/fastest = rank by the asked stage. Category label 'DT'; consumer types via meter_type."
     example:
       question: "Average journey time per stage zone-wise for Agra"
@@ -527,28 +536,27 @@ topics:
   om_closed_tickets:
     domain: wfm
     title: "O&M ticket closed analysis (closed date)"
-    description: "Non-QC O&M tickets closed by closed date (IST) per day/week/month, place, category, complaint type or technician, and the closed ticket rows."
+    description: "O&M tickets closed per day/week/month, place, category, complaint type (the Ticket Closed Analysis card), closures by technician, and the closed ticket rows."
     keywords: [closed tickets, tickets closed, closed analysis, closure, closures, closed date, daily closures, resolved tickets, non qc, ticket closed analysis, band hua]
-    tables: [gold_om_closed_tickets_day_agg, unified_non_qc_complaints, gold_om_technician_productivity_day_agg]
+    tables: [gold_om_closed_tickets_day_agg, gold_om_technician_productivity_day_agg, unified_non_qc_complaints, unified_complaints]
     answer_notes:
-      - "Two closure counts, always both: 'closed by closed date' (the dashboard card; only DT / feeder tickets carry a closed date) and 'work completed' (operational closures, every category incl. consumer). Lead with the work-completed total, then the closed-date figure, and say in one plain sentence that consumer tickets have no closed date -- never give the closed-date figure alone as 'the closed tickets'."
+      - "One closure figure: the card's closed tickets (every category, consumers included). Do not add a second 'work completed' figure or say consumer tickets have no closed date -- in today's data the card's count equals work completed (18,320 both for 25 Aug - 24 Sep 2026)."
     rules:
-      - "Any closed-ticket count = TWO queries, always: main = closed by closed date, extra_queries = work completed for the same place / period: SUM(complaint_count) FROM public.gold_om_technician_productivity_day_agg WHERE category <> 'ALL' (period_start = work completion date), by category."
-      - "Closed by closed date: public.gold_om_closed_tickets_day_agg, SUM(closed_tickets) by closed_date (columns project..sub_division lower-case, feeder, dtr, category 'FEEDER'/'DT', meter_type, complaint_type) -- identical to the silver count, and fast. Only DT / feeder tickets carry a closed date (the silver table has none for consumers either), so this IS the all-category closed-date count; use the Athena table below only for ticket rows or columns this table lacks."
-      - "Athena gmr_wfm_silver.unified_non_qc_complaints WHERE closed_date IS NOT NULL; day = CAST(closed_date AT TIME ZONE 'Asia/Kolkata' AS DATE); closed = COUNT(*). Dimensions: project/zone/... (LOWER(TRIM(col))), category = CASE WHEN UPPER(TRIM(complaint_entity_type)) IN ('DT','DTR') THEN 'DT' WHEN UPPER(TRIM(complaint_entity_type)) = 'FEEDER' THEN 'FEEDER' ELSE 'CONSUMER' END, complaint type TRIM(sub_complaint_type), technician_name."
-      - "No date given = last 30 days ending yesterday (CURRENT_DATE - 31 .. CURRENT_DATE - 1) unless 'all time'; say the default was used."
+      - "Card counts: public.gold_om_closed_tickets_day_agg, SUM(closed_tickets) by closed_date (columns project..sub_division lower-case, feeder, dtr, category 'CONSUMER'/'DT'/'FEEDER', meter_type, complaint_type upper-case). Every category is in it. One query; no extra work-completed query."
+      - "Closures by technician (no technician column on the card table): public.gold_om_technician_productivity_day_agg WHERE category = 'ALL', SUM(complaint_count) by technician_name (a named one: technician_name ILIKE '%<name>%'), period_start = closing day."
+      - "Closed ticket ROWS ('list the closures', 'show the complaints closed on <day>'): Athena unified_non_qc_complaints (helpdesk_ticket_id) UNION ALL unified_complaints (QC) WHERE CAST(work_completed_at AT TIME ZONE 'Asia/Kolkata' AS date) in the window, place LOWER(TRIM(project)) = 'x', LIMIT 200 -- by work completion (silver closed_date is mostly empty: 4 Triveni rows in Sep 2026 against the card's 2,333). Category = CASE WHEN UPPER(TRIM(complaint_entity_type)) IN ('DT','DTR') THEN 'DT' WHEN UPPER(TRIM(complaint_entity_type)) = 'FEEDER' THEN 'FEEDER' ELSE 'CONSUMER' END; complaint type TRIM(sub_complaint_type)."
+      - "No date given = last 30 days ending yesterday (CURRENT_DATE - 31 .. CURRENT_DATE - 1) unless 'all time' / 'month wise' over all data; say the default was used."
     example:
       question: "Closed tickets month-wise in Kashi this year"
       sql: |
-        SELECT date_trunc('month', CAST(closed_date AT TIME ZONE 'Asia/Kolkata' AS DATE)) AS closed_month,
-               COUNT(*) AS closed_tickets
-        FROM gmr_wfm_silver.unified_non_qc_complaints
-        WHERE closed_date IS NOT NULL
-          AND LOWER(TRIM(project)) = 'kashi'
-          AND CAST(closed_date AT TIME ZONE 'Asia/Kolkata' AS DATE)
-              BETWEEN date_trunc('year', current_date) AND current_date
-        GROUP BY 1
-        ORDER BY 1
+        SELECT CASE WHEN GROUPING(date_trunc('month', closed_date)) = 1 THEN 'Total'
+                    ELSE to_char(date_trunc('month', closed_date), 'Mon YYYY') END AS month,
+               SUM(closed_tickets) AS closed_tickets
+        FROM public.gold_om_closed_tickets_day_agg
+        WHERE LOWER(project) = 'kashi'
+          AND closed_date BETWEEN date_trunc('year', CURRENT_DATE)::date AND CURRENT_DATE - 1
+        GROUP BY ROLLUP (date_trunc('month', closed_date))
+        ORDER BY GROUPING(date_trunc('month', closed_date)) DESC, date_trunc('month', closed_date)
 
   meter_complaints:
     domain: wfm
@@ -667,7 +675,9 @@ topics:
       - "'O&M productivity' / 'per team' = the team measure (pooled closed tickets / pooled technician-days), per project with a ROLLUP 'Total' row -- never one row per technician. Per-technician rows only when technicians, top / bottom performers or a named technician are asked."
       - "A named technician: technician_name ILIKE '%<name>%' (stored names carry prefixes / suffixes / IDs), no place filter unless the question states one; GROUP BY project, technician_name so every matching technician is listed with closed tickets, technician-days and productivity."
       - "Top performer / requires support: GROUP BY technician_name ORDER BY productivity DESC (ASC), closed tickets DESC (ASC), name; default 10."
-      - "Ticket rows (Athena): unified_complaints (QC) and unified_non_qc_complaints (non-QC) WHERE work_completed_at IS NOT NULL AND NULLIF(TRIM(technician_name), '') IS NOT NULL - one query per table, need a technician or <= 31 days."
+      - "Ticket rows (Athena) -- 'list the tickets closed by technician X', 'show all complaints closed in <place> on <day>': unified_non_qc_complaints (helpdesk_ticket_id) UNION ALL unified_complaints (QC, no ticket number) WHERE CAST(work_completed_at AT TIME ZONE 'Asia/Kolkata' AS date) in the window AND LOWER(technician_name) LIKE '%<name lower-case>%' (Athena has no ILIKE) -- by work completion, never closed_date (mostly empty); need a technician or <= 31 days; LIMIT 200. Never the gold productivity table for a ticket list."
+      - "'Requires support' = the LOWEST productivity technician(s) (the dashboard's insight): name them, never 'no outlier'. Ties at the bottom: say how many share it and name the first by closed tickets."
+      - "Active technicians over a period = COUNT(DISTINCT technician_name) over the whole period, so it is less than the monthly counts added up: a technician active in several months is one person in the total but counted once in every month they worked."
       - "Not MI productivity tables."
     example:
       question: "Top 10 O&M technicians in Agra last month"
@@ -743,7 +753,7 @@ topics:
     rules:
       - "ONE identifier = look in EVERY table that holds that kind of identifier together (UNION ALL of per-table SELECTs with the same columns, a found_in label in plain words), never one table only: 'not found' is said only when none of them has it. Identifiers are stored as TEXT: compare TRIM(col) = '<value exactly as typed>' -- never add prefixes (no 'TKT-') or change the value. Digits-only values (consumer / ticket numbers) can carry leading zeros ('0061239000'): match regexp_replace(TRIM(col), '^0+', '') = regexp_replace('<value>', '^0+', '')."
       - "Ticket / complaint number: gmr_wfm_silver.unified_active_complaints (ticket_id or complaint_no; complaint_status, complaint_type, complaint_created_date = raised on) UNION ALL gmr_wfm_silver.unified_non_qc_complaints (helpdesk_ticket_id or complaint_no; status from dates: closed_date -> 'Closed', work_completed_at -> 'Work completed'; sub_complaint_type). Both: project, zone, division, consumer_number, old_meter_serial_number, technician_name. created_at / ingested_at are load times, never the raised date. A ticket in both = current status from the active feed, completion from non-QC."
-      - "Tickets / complaints of one meter / consumer / technician: the same two tables PLUS gmr_wfm_silver.unified_complaints (QC complaint work: sub_complaint_type, work_completed_at, no ticket number), by meter (TRIM(old_meter_serial_number) = 'X' OR TRIM(new_meter_serial_number) = 'X' where the table has both; non-QC has only old) / TRIM(consumer_number) = 'X' or technician_name ILIKE '%<name>%', newest first, LIMIT 200. Return the ticket ROWS (status, type, technician, dates), never only a count -- the answer gives the count and the latest status from them."
+      - "Tickets / complaints of one meter / consumer / technician: the same two tables PLUS gmr_wfm_silver.unified_complaints (QC complaint work: sub_complaint_type, work_completed_at, no ticket number), by meter (TRIM(old_meter_serial_number) = 'X' OR TRIM(new_meter_serial_number) = 'X' where the table has both; non-QC has only old) / TRIM(consumer_number) = 'X' or LOWER(technician_name) LIKE '%<name lower-case>%' (Athena has no ILIKE), newest first, LIMIT 200. Return the ticket ROWS (status, type, technician, dates), never only a count -- the answer gives the count and the latest status from them."
       - "Athena gmr_wfm_silver tables, exact match first: new_meter_serial_number (letters + digits, e.g. 'CA6028422') vs consumer_number (digits only) - match the column to the value's format; latest row by updated_at DESC. Normalised fallback: regexp_replace(upper(trim(col)), '[^A-Z0-9]+', '') = 'X'."
       - "Installation: unified_installations (mi_date, report_category, new_meter_type, new_meter_make, project..sub_division, technician_name, agency). SAT: sat_meter_mappings.meter_serial_number -> sat_number; batch dates from sat_milestones on project + sat_number (declared joins); eligible if mi_date <= project cutoff (Postgres sat_eligibility_config, separate query)."
       - "Stock/custody: unified_smart_meter_inventory (meter_serial_number, di_date, warehouse, sku, manufacturer, meter_status, gmr_to_agency_ts, agency_to_sup_ts, sup_to_tech_ts, installed_ts)."
@@ -854,7 +864,7 @@ explain_only:
   receivables: "Operator-entered rupee amounts (crore) per project and stream: invoiced, realised, realised within timeline; outstanding = invoiced - realised."
   om_open_ticket: "Any row in the active complaints feed (RESOLVED included), aged from complaint creation at the last refresh."
   om_productivity: "Closed QC + non-QC complaints by work completion / technician-day rows."
-  om_closed_analysis: "Non-QC tickets counted by closed_date in IST; closed_date is rarely filled, so it understates closures."
+  om_closed_analysis: "Tickets closed per day (gold_om_closed_tickets_day_agg), every category; in today's data equal to work completed."
   confirmed: "Auto-indexing: the consumer's declared feeder matches the outage evidence."
   reassign: "Auto-indexing: evidence points to a different feeder (re_tag_to)."
   review: "Auto-indexing: evidence exists but is inconclusive; needs manual check."

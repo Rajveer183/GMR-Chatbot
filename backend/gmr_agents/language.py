@@ -232,10 +232,14 @@ def resolve(message: str, preference: str = AUTO, llm_language: str | None = Non
     """(target language, detected language) for one message -- see the module docstring."""
     detected = detect(message)
     script = script_of(message)
-    if script == "latin" and detected == "en" and llm_language in ("hinglish", "hi"):
+    words = set(re.findall(r"[a-z]+", str(message or "").lower()))
+    if (script == "latin" and detected == "en" and llm_language in ("hinglish", "hi")
+            and (words & _HINGLISH_WEAK or not words & _ENGLISH_HINTS)):
         # Roman script: Hinglish when EITHER reading sees it -- the word list misses rarer
         # Hindi words, and the triage LLM was seen live calling 'kitna hai' English.
-        # Hindi written in Roman script IS Hinglish.
+        # Hindi written in Roman script IS Hinglish. But not against English grammar words
+        # with no Hindi word at all: 'how many meters installed in kashi in july 2026' was
+        # called Hinglish by the LLM live (place names read as Hindi).
         detected = "hinglish"
     elif script == "deva" and llm_language in ("hi", "mr"):
         detected = llm_language

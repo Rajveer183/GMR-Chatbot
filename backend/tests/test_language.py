@@ -185,6 +185,12 @@ class ResolveTests(unittest.TestCase):
         # Script is certain: an LLM 'en' for Devanagari text is ignored.
         self.assertEqual(L.resolve("काशी में कितने मीटर?", "auto", "en")[0], "hi")
 
+    def test_llm_cannot_make_plain_english_hinglish(self):
+        # Seen live: English with place names only, the LLM said Hinglish.
+        q = "key check: how many meters installed in kashi in july 2026"
+        self.assertEqual(L.resolve(q, "auto", "hinglish")[0], "en")
+        self.assertEqual(L.resolve(q, "auto", "hi")[0], "en")
+
 
 class WrittenLanguageTests(unittest.TestCase):
     """What an answer is really written in -- the cases below were all seen live."""

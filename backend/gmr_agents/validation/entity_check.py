@@ -289,7 +289,8 @@ def _om_problems(question: str, low: str, asked: str | None = None) -> list[str]
     # 'Tickets closed per technician per day' for a place is the team figure. Live 26 Oct: Triveni came back as
     # one row per technician-day, averaged to 1.67 instead of the card's 1.94.
     if ("gold_om_technician_productivity_" in low and _grouped_by(low, "technician_name")
-            and not re.search(r"\b(top|best|worst|lowest|highest|bottom|each technician|technician[- ]?wise|"
+            and not re.search(r"\b(top|best|worst|lowest|highest|bottom|most|least|which technician|each technician|"
+                              r"technician[- ]?wise|"
                               r"by technician|per technician (?:list|wise)|technicians|named|support|performer)\b",
                               asked, re.I)):
         problems.append("O&M productivity for a place is the team figure: one row (or one per place) of SUM(complaint_count) "
@@ -306,6 +307,135 @@ def _om_problems(question: str, low: str, asked: str | None = None) -> list[str]
         problems.append("the O&M Active Ticket Ageing card shows SAT Done and SAT Pending beside the bands: add "
                         "SUM(ticket_count) FILTER (WHERE sat_status = 'SAT DONE') AS sat_done and ... 'SAT PENDING' "
                         "AS sat_pending")
+    # The productivity table holds roll-up rows ('ALL' + one per category x meter type). Live 27 Oct: ARYENDRA's
+    # September closures came back as 26 (13 counted twice) with no category filter.
+    if "gold_om_technician_productivity_day_agg" in low and not re.search(r"\bcategory\s*(?:=|<>|!=|in\s*\()", low):
+        problems.append("gold_om_technician_productivity_day_agg holds roll-up rows: filter category = 'ALL' (every "
+                        "ticket once) or one category -- with no category filter every ticket counts twice")
+    # Month wise on the day table needs a month bucket. Live 27 Oct: 'O&M productivity month wise for DT complaints
+    # in 2026' grouped by period_start and returned 105 day rows labelled by month.
+    if ("gold_om_technician_productivity_day_agg" in low
+            and re.search(r"\bmonth(?:ly|[- ]?wise)\b|\beach month\b|\bby month\b|\btrend\b", question, re.I)
+            and not re.search(r"\bdaily\b|\bday[- ]?wise\b|\bweekly\b|\bweek[- ]?wise\b", question, re.I)
+            and re.search(r"\bgroup\s+by\b[^;]*\bperiod_start\b", low)
+            and not re.search(r"date_trunc\s*\(\s*'month'", low)):
+        problems.append("month wise = one row per month: GROUP BY date_trunc('month', period_start) (period_start is "
+                        "the day here), technician-days still COUNT(DISTINCT (technician_name, period_start))")
+    # Tickets closed by a technician are ticket rows by work completion: QC tickets have no closed_date and most
+    # non-QC ones none either. Live 27 Oct: ARYENDRA's tickets 'not found' via closed_date (11 non-QC + 2 QC exist).
+    if (re.search(r"\b(?:list|show|which)\b.*\btickets?\b.*\bclosed by\b|\btickets? closed by technician\b", asked, re.I)
+            and "work_completed_at" not in low):
+        problems.append("tickets a technician closed = ticket rows by work completion: unified_non_qc_complaints UNION "
+                        "ALL unified_complaints WHERE work_completed_at in the window AND technician_name ILIKE "
+                        "'%<name>%' (closed_date is mostly empty)")
+    return problems
+
+
+_CR_SCALE_RE = re.compile(r"/\s*(?:10{5,}(?:\.0)?|1e[5-9])\b|\*\s*1e-?[5-9]\b")
+_MONEY_RE = re.compile(r"\b(?:amount|crore|cr|rs|rupees?|money|invoiced amount|realised amount|realized amount)\b", re.I)
+
+
+def _revenue_journey_problems(question: str, low: str, sql_texts: list[str], asked: str | None = None) -> list[str]:
+    """Meter journey / current stage / receivables / revenue ageing mistakes seen live on 27 Oct 2026, each
+    against the WFM dashboard's own SQL."""
+    asked = asked or question
+    words = f"{question} {asked}"
+    problems: list[str] = []
+    journey = "gold_meter_journey_stage_agg" in low
+    # The journey card counts replacements; only the home tile drops them. Live 27 Oct: 'journey avg time category
+    # wise' copied the tile's NOT is_replacement (Consumer 181.22 instead of the card's 181.38).
+    if (journey and re.search(r"\bis_replacement\b", low)
+            and not re.search(r"\breplace|\bheadline|\bnew install|\bhome\b", words, re.I)):
+        problems.append("the meter journey card counts replacements: remove the is_replacement filter (only "
+                        "'excluding replacements' or the home-page headline drops them)")
+    # Consumer vs non-consumer is the home tile only. Live 27 Oct: 'journey avg time for meters installed in 2025'
+    # came back as two columns, Consumer and Non-consumer.
+    if (journey and re.search(r"upper\(category\)\s*<>\s*'consumer'|non[_ -]?consumer", low)
+            and not re.search(r"\bnon[- ]?consumer|\bheadline|\bhome\b", words, re.I)):
+        problems.append("journey answers are Total (or per category Consumer / DT / Feeder via GROUP BY ROLLUP "
+                        "(category)) -- the Consumer vs Non-consumer split is the home tile only")
+    # The year is the installation year. Live 27 Oct: 'total journey by category for 2026' filtered supply_month.
+    if journey and re.search(r"\b20\d\d\b", question) and "installation_year" not in low:
+        problems.append("the journey card's only year filter is installation_year (integer): WHERE installation_year = "
+                        "<year> -- not supply_month")
+    # Each stage keeps its own denominator. Live 27 Oct: 'slowest SAT to revenue circle in agra' divided by
+    # meter_count (Agra 50.87 instead of the card's 64.35).
+    if journey:
+        for col, den in (("installation_to_sat_days_sum", "sat_meter_count"),
+                         ("sat_to_revenue_realized_days_sum", "revenue_realized_meter_count"),
+                         ("total_journey_days_sum", "revenue_realized_meter_count")):
+            if re.search(rf"{col}\s*\)\s*(?:::\w+\s*)?/\s*nullif\s*\(\s*sum\s*\(\s*meter_count\s*\)", low):
+                problems.append(f"{col} is averaged over {den}: ROUND(SUM({col}) / NULLIF(SUM({den}), 0), 2) -- "
+                                "never over meter_count")
+    # Several meters asked: every one is a row. Live 27 Oct: 'journey of meters AL1151970 and AL3188371' used
+    # LIMIT 1 in each lookup and showed one meter (then described the second from the first's dates).
+    serials = set(_SERIAL_RE.findall(question))
+    if len(serials) > 1 and re.search(r"\blimit\s+1\b", low):
+        problems.append(f"the question names {len(serials)} meters: return one row per meter (ROW_NUMBER() OVER "
+                        "(PARTITION BY serial ORDER BY updated_at DESC) = 1), never LIMIT 1")
+    # One meter lives in the silver tables; the gold snapshots hold counts only. Live 27 Oct: 'where is meter
+    # SC10196043 stuck' filtered meter_serial_number on the stage snapshots and was rejected.
+    if serials and re.search(r"gold_meter_(?:installation|revenue)_pending_stage_snapshot|gold_meter_journey_stage_agg|"
+                             r"gold_revenue_ageing_snapshot", low):
+        problems.append("one meter is looked up in the silver tables (unified_smart_meter_inventory, "
+                        "unified_installations, sat_meter_mappings + sat_milestones) -- the gold stage / journey "
+                        "tables hold counts only, with no meter serial")
+    # Current stage: 'not installed' = the first four stages. Live 27 Oct: 'how many meters are not yet installed'
+    # counted blank serials in unified_installations (0 instead of 109,837).
+    if (re.search(r"\bnot (?:yet )?installed\b|\buninstalled\b", question, re.I)
+            and "unified_installations" in low and "gold_meter_installation_pending_stage_snapshot" not in low):
+        problems.append("meters not yet installed = SUM(meter_count) FROM public.gold_meter_installation_pending_stage_"
+                        "snapshot (stages inventory, agency, supervisor, technician) -- the current-stage card")
+    # Stage wise = all six stages. Live 27 Oct: both tables were read but filtered to the last two stages.
+    if (re.search(r"\bstages?[- ]?wise\b|\bby stage\b|\beach stage\b", question, re.I)
+            and "gold_meter_installation_pending_stage_snapshot" in low
+            and re.search(r"current_stage\s+in\s*\(\s*'installation_done_sat_pending'\s*,\s*'sat_done_revenue_pending'\s*\)",
+                          low)
+            and not re.search(r"\binstalled\b|\bsat done\b|\bsat pending\b", question, re.I)):
+        problems.append("stage wise = all six stages (inventory, agency, supervisor, technician, "
+                        "installation_done_sat_pending, sat_done_revenue_pending) -- remove the current_stage filter")
+    # Receivables are stored in crore already. Live 27 Oct: 'total invoiced amount in crore' divided by 1e8 (0 cr).
+    if "revenue_receivables" in low and _CR_SCALE_RE.search(low):
+        problems.append("revenue_receivables amounts are already in crore: never divide (or multiply) them by "
+                        "10^5 / 10^7 -- SUM(lumpsum_invoiced) is the crore figure")
+    # Outstanding = invoiced - realised (within timeline is unpaid too). Live 27 Oct: 'PMPM revenue outstanding'
+    # subtracted within_timeline as well.
+    if ("revenue_receivables" in low and re.search(r"\boutstanding\b|\bunpaid\b|\bpending amount\b", question, re.I)
+            and not re.search(r"\boverdue\b", question, re.I)
+            and re.search(r"_invoiced\s*-\s*\w*_realised\s*-\s*\w*_within_timeline", low)):
+        problems.append("outstanding = invoiced - realised (Within Timeline + Overdue, all unpaid); "
+                        "invoiced - realised - within_timeline is only the Overdue part")
+    # Money questions are receivables (crore), never meter-count tables. Live 27 Oct: 'which project has the highest
+    # outstanding amount' read the revenue ageing meter counts and said 'Rs 82,496 crore'.
+    if (_MONEY_RE.search(question) and "revenue_receivables" not in low
+            and re.search(r"gold_revenue_ageing_snapshot|gold_meter_revenue_pending_stage_snapshot", low)):
+        problems.append("an amount (Rs / crore) is the receivables topic: public.revenue_receivables, latest row per "
+                        "project, outstanding = invoiced - realised per stream -- the ageing table counts meters")
+    # 'Outstanding' / 'revenue' meters are the revenue ageing snapshot, never the non-SAT ageing one. Live 27 Oct:
+    # 'meters outstanding older than 90 days in triveni' read gold_non_sat_ageing_snapshot (91,805 vs 82,496).
+    if (re.search(r"\boutstanding\b|\brevenue\b", question, re.I) and not re.search(r"\bnon[- ]?sat\b|\bsat pending\b",
+                                                                                     question, re.I)
+            and "gold_non_sat_ageing_snapshot" in low):
+        problems.append("revenue outstanding meters = public.gold_revenue_ageing_snapshot (SUM(outstanding_count), age "
+                        "from sat_date) -- gold_non_sat_ageing_snapshot is installed meters waiting for SAT")
+    # GROUP BY LOWER(x) while the label shows x itself: Postgres rejects it, and grouping x and LOWER(x) together
+    # (ROLLUP / GROUPING SETS) prints blank-label rows. Live 27 Oct: 'which project has the most meters pending with
+    # agency' showed '' projects; 'revenue not realized ageing zone wise for kashi' failed twice.
+    for col in set(re.findall(r"grouping\s*\(\s*lower\s*\(\s*(\w+)\s*\)\s*\)", low)):
+        if re.search(rf"(?:upper|initcap)\s*\(\s*{col}\s*\)", low) or re.search(
+                rf"(?:rollup|grouping\s+sets)\s*\([^;]*?\(\s*{col}\s*\)", low):
+            problems.append(f"group by the column itself: GROUP BY ROLLUP ({col}) with CASE WHEN GROUPING({col}) = 1 "
+                            f"THEN 'Total' ELSE UPPER({col}) END -- not LOWER({col}) beside {col}")
+    # Every query carries the place the question names. Live 27 Oct: 'closures in triveni in September 2026' gave
+    # the extra work-completed query for every project (17,475 called Triveni's).
+    named = _named(words, _PROJECTS)
+    if named and len(named) < len(_PROJECTS) and not _COMPARE_RE.search(question.lower()):
+        for s in [t for t in sql_texts if t][1:]:
+            ls = s.lower()
+            if "gold_" in ls and not any(a in ls for p in named for a in _PROJECTS[p] + [p]):
+                problems.append(f"every query needs the same project filter as the question "
+                                f"({', '.join(sorted(named))}) -- an extra query has none")
+                break
     return problems
 
 
@@ -492,6 +622,16 @@ def check(question: str, sql_texts: list[str], columns: set[str] | None = None, 
         problems.append("a stage-wise answer needs all six stages: UNION ALL gold_meter_installation_pending_stage_snapshot "
                         "(inventory, agency, supervisor, technician) with gold_meter_revenue_pending_stage_snapshot "
                         "(installation_done_sat_pending, sat_done_revenue_pending)")
+    # Live 27 Oct: 'revenue not realized meters project wise' (no age words) read the revenue ageing table
+    # (157,979) instead of the current-stage card's six stages (1,132,826).
+    elif (re.search(r"\brevenue (not|un)[- ]?reali[sz]ed\b", question, re.I)
+            and not re.search(r"\b(sat done|sat pending|installed|ageing|aging|age|aged|days|old|older|outstanding|band)\b",
+                              question, re.I)
+            and "gold_revenue_ageing_snapshot" in low
+            and "gold_meter_installation_pending_stage_snapshot" not in low):
+        problems.append("'revenue not realized meters' (no age asked) = the current-stage card: all six stages from "
+                        "gold_meter_installation_pending_stage_snapshot UNION ALL gold_meter_revenue_pending_stage_snapshot "
+                        "-- the revenue ageing table is only for ageing / days questions")
 
     # '<level> wise' / 'by <level>' = one row per value of that column. Seen live: 'each step of the
     # meter journey in agra zone wise' ran as one row for zone = 'agra' (the breakdown was dropped).
@@ -600,6 +740,7 @@ def check(question: str, sql_texts: list[str], columns: set[str] | None = None, 
                                 f"discom column, so filter LOWER(project) IN ({', '.join(repr(p) for p in projects)})")
 
     problems += _om_problems(question, low, asked)
+    problems += _revenue_journey_problems(question, low, sql_texts, asked)
 
     # A meter-type exclusion nobody asked for. Live 26 Oct: 'invoice funnel zone wise in Triveni' added
     # meter_type <> 'OTHER-Consumer_meter' AND meter_type IS NOT NULL and lost 44 meters.
@@ -635,12 +776,23 @@ def check(question: str, sql_texts: list[str], columns: set[str] | None = None, 
         if year not in sql:
             problems.append(f"the question names the year {year} but the SQL has no {year} date")
 
-    top = re.search(r"\b(?:top|best|worst|first|bottom|lowest|highest)\s+(\d{1,3}|three|five|ten|fifteen|twenty)\b",
+    top = re.search(r"\b(?:top|best|worst|first|bottom|lowest|highest|oldest|newest|latest)\s+"
+                    r"(\d{1,3}|three|five|ten|fifteen|twenty)\b",
                     question.lower())
     if top:
         n = _NUM_WORDS.get(top.group(1)) or int(top.group(1))
         if not re.search(rf"(limit\s+{n}\b|<=\s*{n}\b|<\s*{n + 1}\b)", low):
             problems.append(f"the question asks for {n} items but the SQL has no LIMIT {n}")
+
+    # 'Last month' is the previous calendar month. Live 27 Oct: 'which technician closed the most complaints in agra
+    # last month' ran for 1-31 October (the current month) while the answer said September.
+    if re.search(r"\blast month\b|\bprevious month\b|\bpichhle mahine\b", question, re.I):
+        import datetime as _dt
+        this_month = _dt.date.today().replace(day=1).isoformat()
+        if f"'{this_month}'" in low and "interval '1 month'" not in low:
+            problems.append(f"'last month' is the previous calendar month -- {this_month} is the current month's first "
+                            "day; use period_start >= (date_trunc('month', CURRENT_DATE) - INTERVAL '1 month')::date "
+                            "AND period_start < date_trunc('month', CURRENT_DATE)::date")
 
     # Leak: a specific calendar date in the SQL when the question names no period at all
     # (no year / month / date / 'yesterday' / 'last N days' ...) -- 'No date = all time'.
