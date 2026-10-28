@@ -1,6 +1,6 @@
 # How the GMR DISCOM Chatbot Works
 
-This document explains the design of the chatbot: the problem, the agent workflow, the safety layers and the main trade-offs. Setup and API details are in [README.md](README.md).
+This document explains the design of the chatbot: the problem, the agent workflow, the safety layers and the main trade-offs. Setup and API details are in [README.md](../README.md).
 
 ## 1. The problem
 

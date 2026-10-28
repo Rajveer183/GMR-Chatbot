@@ -45,7 +45,7 @@ flowchart LR
     E --> UI
 ```
 
-See [EXPLANATION.md](EXPLANATION.md) for the reasoning behind each stage and the safety guards.
+See [docs/EXPLANATION.md](docs/EXPLANATION.md) for the reasoning behind each stage and the safety guards.
 
 ## Key design points
 
@@ -60,6 +60,7 @@ See [EXPLANATION.md](EXPLANATION.md) for the reasoning behind each stage and the
 
 ```
 .
+├── docs/                        design notes (EXPLANATION.md)
 ├── backend/                     FastAPI service (Python)
 │   ├── gmr_agents/              the chatbot
 │   │   ├── main.py              API: /api/ai-query (+ /stream), sessions, table paging, TTS, history, metrics
@@ -285,4 +286,4 @@ _TODO: add a screenshot or short GIF of a question producing KPI cards, a chart,
 
 ## Further reading
 
-- [EXPLANATION.md](EXPLANATION.md) — how the agent works and why it is built this way
+- [docs/EXPLANATION.md](docs/EXPLANATION.md) — how the agent works and why it is built this way

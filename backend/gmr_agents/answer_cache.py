@@ -29,6 +29,7 @@ fall back to the file transparently. Settings live in .env.
 
 from __future__ import annotations
 
+import atexit
 import copy
 import hashlib
 import json
@@ -140,14 +141,55 @@ def _entries() -> dict:
 
 
 def _save() -> None:
-    entries = _entries()
-    if len(entries) > config.ANSWER_CACHE_MAX_ENTRIES:  # drop the oldest
-        for key in sorted(entries, key=lambda k: entries[k]["at"])[: len(entries) - config.ANSWER_CACHE_MAX_ENTRIES]:
-            entries.pop(key, None)
+    """Write the entries to the file. Pruned and copied under _LOCK, written outside it: a whole-file
+    write took ~175 ms at 1,500 entries (11 MB, measured 28 Oct) and blocked every get()."""
+    with _LOCK:
+        entries = _entries()
+        if len(entries) > config.ANSWER_CACHE_MAX_ENTRIES:  # drop the oldest
+            for key in sorted(entries, key=lambda k: entries[k]["at"])[: len(entries) - config.ANSWER_CACHE_MAX_ENTRIES]:
+                entries.pop(key, None)
+        snapshot = dict(entries)  # entries are replaced on put(), never changed in place
     tmp = _PATH + ".tmp"
-    with open(tmp, "w", encoding="utf-8") as fh:
-        json.dump(entries, fh, ensure_ascii=False, default=str)
-    os.replace(tmp, _PATH)
+    with _IO_LOCK:
+        with open(tmp, "w", encoding="utf-8") as fh:
+            json.dump(snapshot, fh, ensure_ascii=False, default=str)
+        os.replace(tmp, _PATH)
+
+
+# The file is written in the background, off the answer's path; puts within _WRITE_DELAY share one write.
+_WRITE_DELAY = 1.0
+_IO_LOCK = threading.Lock()
+_PENDING = threading.Event()
+_WRITER: list[threading.Thread] = []
+
+
+def _write_loop() -> None:
+    while True:
+        _PENDING.wait()
+        time.sleep(_WRITE_DELAY)
+        flush()
+
+
+def flush() -> None:
+    """Write pending entries now (also run at shutdown)."""
+    if not _PENDING.is_set():
+        return
+    _PENDING.clear()
+    try:
+        _save()
+    except OSError:
+        log.warning("answer cache: could not save", exc_info=True)
+
+
+def _schedule_save() -> None:
+    _PENDING.set()
+    with _LOCK:
+        if not _WRITER or not _WRITER[0].is_alive():
+            _WRITER[:] = [threading.Thread(target=_write_loop, name="answer-cache-writer", daemon=True)]
+            _WRITER[0].start()
+
+
+atexit.register(flush)
 
 
 def _keys(question: str, prior_turns: list[dict] | None) -> tuple[str, str | None]:
@@ -221,10 +263,7 @@ def put(question: str, prior_turns: list[dict] | None, state: dict, entry: dict)
     payload = {"version": version, "at": time.time(), "response": entry}
     with _LOCK:
         _entries()[key] = payload
-        try:
-            _save()
-        except OSError:
-            log.warning("answer cache: could not save", exc_info=True)
+    _schedule_save()
     # Best-effort mirror -- the local file above is already the durable write;
     # this just makes a repeat hit fast without touching disk, and self-expires.
     redis_client.set(_redis_key(key), json.dumps(payload, ensure_ascii=False, default=str),

@@ -24,6 +24,11 @@ shortly after a change (one write for a question and its answer), and once
 more at shutdown. Measured live with a 5 MB file (710 sessions): reading it
 ~5 times and rewriting it twice per question added ~3 s to every answer
 whose own pipeline took 0.2 s.
+
+Each session's JSON text is kept between writes and only the sessions that
+changed are serialised again; the file is the same bytes json.dumps would
+write. Measured 28 Oct with a 47 MB file (5,357 sessions): a full json.dumps
+took ~560 ms per write, holding the lock every request needs.
 """
 
 from __future__ import annotations
@@ -56,6 +61,9 @@ class SessionStore:
         self._lock = threading.RLock()
         self._io_lock = threading.Lock()
         self._data: dict | None = None
+        # session_id -> its json.dumps text, valid until the session changes (_dirty)
+        self._frags: dict[str, str] = {}
+        self._dirty: set[str] = set()
         self._pending = threading.Event()
         self._writer: threading.Thread | None = None
         os.makedirs(os.path.dirname(path), exist_ok=True)
@@ -83,10 +91,15 @@ class SessionStore:
                 self._data = self._load()
             return self._data
 
-    def _write(self, data: dict) -> None:
-        """Record a change; the file is written by the background writer."""
+    def _write(self, data: dict, changed: str | None = None) -> None:
+        """Record a change (to session `changed`, or to any session when None); the file is
+        written by the background writer."""
         with self._lock:
             self._data = data
+            if changed is None:
+                self._frags.clear()
+            else:
+                self._dirty.add(changed)
         self._pending.set()
         if self._writer is None or not self._writer.is_alive():
             self._writer = threading.Thread(target=self._write_loop, name="session-store-writer", daemon=True)
@@ -106,7 +119,21 @@ class SessionStore:
             self._pending.clear()
             if self._data is None:
                 return
-            text = json.dumps(self._data, ensure_ascii=False, default=str)  # snapshot: requests may change _data next
+            # Snapshot: requests may change _data next. Unchanged sessions reuse their text.
+            for sid in self._dirty:
+                self._frags.pop(sid, None)
+            self._dirty.clear()
+            parts = []
+            for s in self._data["sessions"]:
+                sid = s.get("session_id")
+                if sid not in self._frags:
+                    self._frags[sid] = json.dumps(s, ensure_ascii=False, default=str)
+                parts.append(self._frags[sid])
+            if len(self._frags) > len(parts):  # deleted sessions
+                live = {s.get("session_id") for s in self._data["sessions"]}
+                self._frags = {k: v for k, v in self._frags.items() if k in live}
+        # Same bytes as json.dumps({"sessions": [...]}) with its default separators.
+        text = '{"sessions": [' + ", ".join(parts) + "]}"
         try:
             self._write_file(text)
         except OSError as exc:
@@ -174,7 +201,7 @@ class SessionStore:
                 "messages": [],
             }
             data["sessions"].insert(0, session)
-            self._write(data)
+            self._write(data, session["session_id"])
         return {
             "session_id": session["session_id"],
             "session_name": session["session_name"],
@@ -216,7 +243,7 @@ class SessionStore:
                     if session_name:
                         session["session_name"] = session_name
                     session["updated_at"] = _now()
-                    self._write(data)
+                    self._write(data, session_id)
                     return self._summarize(session)
         return None
 
@@ -229,7 +256,7 @@ class SessionStore:
             ]
             if len(data["sessions"]) == before:
                 return False
-            self._write(data)
+            self._write(data, session_id)
         redis_client.delete(self._mirror_key(session_id))
         return True
 
@@ -279,7 +306,7 @@ class SessionStore:
                         "New Session",
                     ):
                         session["session_name"] = content.strip()[:60] or "New Session"
-                    self._write(data)
+                    self._write(data, session_id)
                     self._mirror_to_redis(session)
                     return message
         return None

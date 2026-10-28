@@ -20,6 +20,11 @@ is warmed only with PREWARM_BANK=1, a run answers at most PREWARM_MAX_QUESTIONS,
 a new version must stay unchanged PREWARM_SETTLE_SECONDS (a burst of edits warms
 once), and a run stops at the first "AI busy" answer -- it resumes on the next
 check, skipping what is already cached.
+
+Real users first. A warm-up question waits while a user's question is running or
+one finished in the last _IDLE_SECONDS, so warm-ups never take a model's free
+minute bucket out from under a user; when users stay active for a whole
+PREWARM_CHECK_SECONDS the run stops and resumes on a later check.
 """
 
 from __future__ import annotations
@@ -28,8 +33,10 @@ import json
 import logging
 import os
 import re
+import threading
 import time
 from collections import Counter
+from contextlib import contextmanager
 
 import yaml
 
@@ -41,6 +48,34 @@ log = logging.getLogger(__name__)
 
 _STORE_PATH = os.path.join(config.OUTPUT_DIR, "prewarm_sessions.json")
 _STATE = {"warmed_version": None, "running": False, "last": {}, "seen_version": None, "seen_at": 0.0}
+
+# Live (user) questions: how many are running and when the last one finished.
+_IDLE_SECONDS = 20
+_LIVE = {"running": 0, "last": 0.0}
+_LIVE_LOCK = threading.Lock()
+
+
+@contextmanager
+def live_question():
+    """Wrap a user's question so warm-ups wait for it (and for _IDLE_SECONDS after it)."""
+    with _LIVE_LOCK:
+        _LIVE["running"] += 1
+    try:
+        yield
+    finally:
+        with _LIVE_LOCK:
+            _LIVE["running"] -= 1
+            _LIVE["last"] = time.monotonic()
+
+
+def _wait_for_idle(limit: float) -> bool:
+    """Sleep until no user question ran for _IDLE_SECONDS; False when that took over `limit` seconds."""
+    start = time.monotonic()
+    while _LIVE["running"] or time.monotonic() - _LIVE["last"] < _IDLE_SECONDS:
+        if time.monotonic() - start > limit:
+            return False
+        time.sleep(1.0)
+    return True
 
 
 def _bank_groups() -> list[list[str]]:
@@ -131,6 +166,9 @@ def warm(answer_fn) -> dict:
                         continue
                 if config.PREWARM_MAX_QUESTIONS and stats["asked"] >= config.PREWARM_MAX_QUESTIONS:
                     stop = f"run cap of {config.PREWARM_MAX_QUESTIONS} questions reached"
+                    break
+                if not _wait_for_idle(config.PREWARM_CHECK_SECONDS):
+                    stop = "AI models busy -- users kept asking, warming later"
                     break
                 try:
                     resp = answer_fn(q, session_id, store=store)

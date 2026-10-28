@@ -53,8 +53,7 @@ from gmr_agents.schema.catalog import MAX_CACHE_AGE_SECONDS, get_catalog
 configure_logging()
 log = logging.getLogger(__name__)
 
-# Own storage file, separate from backend/main.py's chat_sessions.json -- the
-# two apps' chat histories are unrelated and must never mix.
+# Chat sessions (the pre-warmer keeps its throwaway sessions in a store of its own).
 sessions = SessionStore(os.path.join(config.OUTPUT_DIR, "gmr_chat_sessions.json"))
 
 
@@ -450,9 +449,10 @@ def ai_query(req: AIQueryRequest, request: Request) -> dict:
     if not question:
         raise HTTPException(status_code=400, detail="Question must not be empty.")
     _check_rate_limit(req, request)
-    return answer_question(question, req.session_id, prior_questions=req.prior_questions,
-                           via_followup=bool(req.via_followup), response_language=req.response_language,
-                           canonical_question=req.canonical_question)
+    with prewarm.live_question():
+        return answer_question(question, req.session_id, prior_questions=req.prior_questions,
+                               via_followup=bool(req.via_followup), response_language=req.response_language,
+                               canonical_question=req.canonical_question)
 
 
 @app.post("/api/ai-query/stream")
@@ -471,10 +471,11 @@ def ai_query_stream(req: AIQueryRequest, request: Request) -> StreamingResponse:
 
     def work() -> None:
         try:
-            response = answer_question(question, req.session_id, prior_questions=req.prior_questions,
-                                       via_followup=bool(req.via_followup), emit=events.put,
-                                       response_language=req.response_language,
-                                       canonical_question=req.canonical_question)
+            with prewarm.live_question():
+                response = answer_question(question, req.session_id, prior_questions=req.prior_questions,
+                                           via_followup=bool(req.via_followup), emit=events.put,
+                                           response_language=req.response_language,
+                                           canonical_question=req.canonical_question)
             events.put({"type": "done", "response": response})
         except Exception as exc:  # answer_question already turns pipeline failures into answers
             log.exception("stream request failed")
@@ -514,7 +515,8 @@ def translate_answer(req: TranslateRequest, request: Request) -> dict:
         raise HTTPException(status_code=404, detail="That answer is not in this chat any more.")
     original = message["response"]
     target = language.normalize_preference(req.target_language)
-    out = original if target == language.AUTO else language.translate_response(original, target)
+    with prewarm.live_question():
+        out = original if target == language.AUTO else language.translate_response(original, target)
     return {"trace_id": req.trace_id, "target_language": target,
             "answer_language": out.get("answer_language") or "en",
             "summary": out.get("summary") or "", "insights": out.get("insights") or [],
