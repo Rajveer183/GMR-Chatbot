@@ -54,11 +54,14 @@ mdm_tables:
   # questions about them are refused. The previous full list is in this
   # file's history; add tables back here to re-enable them.
   hes_gold:
-    # Meter-to-feeder auto-indexing (KPI 50) -- source of truth for this
-    # concept (supersedes the retired mapping_audit* family).
-    - hierarchy_summary_autoindexing
-    - consumer_detail_autoindexing
-    - feeder_ranking_autoindexing
+    # Consumer-to-feeder mapping audit (KPI 50) -- the dashboard's own tables
+    # (Advanced Analytics card); the autoindexing copies are no longer used.
+    - mapping_audit
+    - mapping_audit_feeder
+    - mapping_audit_summary
+    # the evidence behind one consumer's verdict (the dashboard's consumer drawer and proof-pack export)
+    - mapping_audit_candidates
+    - mapping_audit_evidence
 
 wfm_tables:
   gmr_wfm_silver:
@@ -220,122 +223,101 @@ column_hints:
     against consumer_number returned zero rows even though that exact value is a real row's
     new_meter_serial_number). If you cannot tell which identifier column a value belongs to, filter with OR across
     every plausible candidate column instead of guessing a single one from wording alone.
-  # Verified live (SELECT status, COUNT(*) ... GROUP BY status): the four real
-  # stored values, spelled exactly this way -- "NO DATA" has a literal space,
-  # not an underscore, and there is no "PENDING VERIFICATION" value stored (that
-  # term only exists as a derived CONFIRMED+REASSIGN/REVIEW+NO DATA rollup in
-  # hierarchy_summary_autoindexing, never as a literal status here).
-  "consumer_detail_autoindexing.status": &hint8 >-
-    Exactly one of: 'CONFIRMED', 'REASSIGN', 'REVIEW', 'NO DATA' (verified live -- use one of these literal strings
-    for an equality filter, not a value you construct).
-  "consumer_detail_autoindexing.outage_match": &hint9 >-
-    "matched/total" dark-window ratio for the consumer's DECLARED feeder (e.g. '5/10'). A string, not a number --
-    don't try to filter/aggregate on it numerically without parsing it first.
-  "consumer_detail_autoindexing.evidence": &hint10 >-
-    "matched/total" dark-window ratio for the WINNING candidate feeder (same format as outage_match, but for the
-    best-scoring feeder, not necessarily the declared one). Literally '-' when status != REASSIGN.
-  "consumer_detail_autoindexing.re_tag_to": &hint11 >-
-    The feeder name this consumer should be RE-TAGGED to. Literally '-' (verified live, not NULL) on every row where
-    status != 'REASSIGN' -- only meaningful/non-placeholder on REASSIGN rows.
-  # Verified live: feeder NAMES are NOT unique -- 'TOWN' alone is the
-  # declared system_feeder for 47,287 consumers across 26 DIFFERENT
-  # feeder_code values (SELECT system_feeder, COUNT(DISTINCT feeder_code)
-  # ... GROUP BY system_feeder). A plan that filters WHERE system_feeder =
-  # '<name>' expecting one feeder can silently span many unrelated real
-  # feeders (different substations, even different projects) -- this is
-  # the root cause of a live-observed failure where a generic feeder name
-  # (e.g. "SUBSTATION") made the planner give up on the name filter
-  # entirely and return an unrelated whole-table aggregate instead of
-  # refusing or listing the matches.
-  "consumer_detail_autoindexing.system_feeder": &hint12 >-
-    When the question names a feeder ONLY by this column (no feeder_code given), ALWAYS write: filter system_feeder
-    = '<name>', GROUP BY feeder_code (and system_feeder), SELECT feeder_code + the requested metric. NEVER
-    answer_kind="clarify"/"unanswerable" for this -- this exact query shape is ALWAYS a complete, correct answer by
-    itself, with no extra scoping needed: it returns exactly one row for an unambiguous name (verified live: most
-    names, e.g. 'METHAPAR', map to exactly one feeder_code -- treat that single row as the normal, expected
-    single_value case), or several rows for a colliding one (verified live: e.g. 'TOWN' maps to 26 different
-    feeder_code values, 'WORLD BANK' to 17 -- show these as separate rows, a list_records/ranking answer, not a
-    request for clarification). Never SUM across multiple feeder_code rows as if they were one feeder, and never
-    fall back to an unrelated whole-table aggregate.
-  # Verified live against the source ETL job (kpi_50_mapping_autoindexing.py):
-  # reassign_out and reassign_in are the SAME reassign population counted by
-  # origin vs destination feeder, not two separate pools -- see this table's
-  # own TABLE_DESCRIPTIONS entry for the full explanation. Repeated here
-  # because a column-level hint renders right next to the column itself in
-  # the prompt, where it's most likely to be seen before a SUM/filter is written.
-  # Verified live: same feeder-name collision problem as consumer_detail_
-  # autoindexing.system_feeder above (they're the same name space) --
-  # 'SUBSTATION' alone is the feeder name on 91 different rows here,
-  # spanning 91 different substations and 3 different projects (SELECT
-  # feeder, COUNT(DISTINCT substation), COUNT(DISTINCT project) ... WHERE
-  # feeder='SUBSTATION'). Live-observed failure: asking "how many
-  # consumers connected to the SUBSTATION feeder" made the planner drop
-  # the name filter entirely and return SUM(mi) over the WHOLE table
-  # (4,047,001 -- every consumer in the dataset) instead of filtering to
-  # that name or refusing/listing the matches -- feeder_code is the fix.
-  "feeder_ranking_autoindexing.feeder": &hint13 >-
-    When the question names a feeder ONLY by this column (no feeder_code given), ALWAYS write: filter feeder =
-    '<name>', GROUP BY feeder_code (and feeder), SELECT feeder_code + the requested metric (e.g. mi). NEVER
-    answer_kind="clarify"/"unanswerable" for this -- this exact query shape is ALWAYS a complete, correct answer by
-    itself, with no extra scoping needed: it returns exactly one row for an unambiguous name (verified live: most
-    names, e.g. 'METHAPAR', map to exactly one row here -- treat that single row as the normal, expected
-    single_value case, same as if feeder_code had been given directly), or several rows for a colliding one
-    (verified live: e.g. 'SUBSTATION' is the name on 91 different rows here, spanning 91 different substations and 3
-    different projects; 'TOWN'/'WORLD BANK' are similarly repeated -- show these as separate rows, a
-    list_records/ranking answer, not a request for clarification). Never SUM across multiple feeder_code rows as if
-    they were one feeder, and never fall back to an unrelated whole-table aggregate. VERIFIED LIVE: a small share of rows
-    have this column NULL -- a real feeder_code with real mi/confidence data whose human-readable name just hasn't
-    been resolved yet, NOT a rollup/total row. A plain listing of feeder (and/or substation) names -- e.g. "list
-    feeders and substations" with no aggregation -- MUST add `feeder IS NOT NULL` (and `substation IS NOT NULL`,
-    same 99 rows) so these show as real feeder_code rows with no name instead of a nonsense-looking 'Feeder: 0' in
-    the answer; only drop that filter if the question is specifically about unmapped/unresolved feeders.
-  "feeder_ranking_autoindexing.feeder_code": &hint14 >-
-    The one column that reliably identifies a SINGLE feeder (verified live: unlike the `feeder` name column,
-    feeder_code has no observed collisions). Prefer filtering on this over `feeder` (name) whenever the question
-    gives a feeder_code-looking value.
-  "feeder_ranking_autoindexing.substation": &hint15 >-
-    Substation name -- unlike `feeder` (see its own hint), this is well-behaved: verified live, a given substation
-    name never spans more than one project, and one substation legitimately having several feeder rows here (13-16
-    is common) reflects a real one-substation-to-many-feeders relationship, not a naming collision. Summing/grouping
-    mi (or other measures) by substation is safe. Same 99-row NULL caveat as `feeder` above (always the same 99
-    rows, both columns NULL together) -- see its hint.
-  "feeder_ranking_autoindexing.mi": &hint16 >-
-    TOTAL consumers DECLARED to this feeder regardless of verdict (mi = correct_tagging + reassign_out + review +
-    no_data, verified live) -- this IS the answer to "how many consumers/meters are connected to this feeder" for
-    one feeder_code. "MI" means "meters indexed" here, not "Meter Installation" the way the WFM gold_mi_* tables use
-    the same two letters.
-  "feeder_ranking_autoindexing.correct_tagging": &hint17 >-
-    Consumers declared to this feeder whose evidence CONFIRMS that declaration is correct (the feeder-level rollup
-    of consumer_detail_autoindexing.status='CONFIRMED' for this feeder_code).
-  "feeder_ranking_autoindexing.review": &hint18 >-
-    Consumers declared to this feeder whose evidence was inconclusive and needs manual review (the feeder-level
-    rollup of consumer_detail_autoindexing.status='REVIEW' for this feeder_code) -- not the same thing as no_data
-    (no evidence at all).
-  "feeder_ranking_autoindexing.no_data": &hint19 >-
-    Consumers declared to this feeder with no outage-coincidence evidence available at all to make ANY determination
-    (the feeder-level rollup of consumer_detail_autoindexing.status='NO DATA' for this feeder_code) -- not the same
-    thing as review (evidence exists but was inconclusive).
-  "feeder_ranking_autoindexing.reassign_out": &hint20 >-
-    Consumers DECLARED to this feeder whose evidence says they should move elsewhere. SUM(reassign_out) over the
-    WHOLE, UNFILTERED table equals the true total REASSIGN count -- but once you filter/group by project (or
-    anything else), it can drift slightly from the true count for that scope (verified live: a project-level SUM here was off by one meter from
-    hierarchy_summary_autoindexing/consumer_detail_autoindexing, because a feeder's OWN project here is a separate
-    join, not always identical to each consumer's own project attribute). For anything scoped to
-    project/discom/zone/circle/division, use hierarchy_summary_autoindexing.reassign_number instead -- it's exact.
-    Do NOT add this to reassign_in expecting "total reassigns" either way -- that double-counts.
-  "feeder_ranking_autoindexing.reassign_in": &hint21 >-
-    Consumers declared to OTHER feeders whose evidence recommends THIS feeder. Same caveat as reassign_out: only
-    equals the true total REASSIGN count over the whole, unfiltered table -- once scoped by project (or anything
-    else) prefer hierarchy_summary_autoindexing.reassign_number instead. Do NOT add this to reassign_out expecting
-    "total reassigns" -- that double-counts.
-  "feeder_ranking_autoindexing.confidence": &hint22 >-
-    NOT an accuracy/correctness score. It's coverage: % of this feeder's declared consumers that got ANY decisive
-    verdict (CONFIRMED+REASSIGN) rather than REVIEW/NO DATA. NULL (not 0) when mi=0.
-  "feeder_ranking_autoindexing.project": &hint23 >-
-    Titlecase as of the last live check (e.g. 'Kashi', matching the other two autoindexing tables) -- but this
-    specific column has drifted casing before (was lowercase 'kashi' in an earlier data refresh), so don't assume
-    either casing is permanent; if an equality filter here returns 0 rows unexpectedly, check the real stored casing
-    rather than assuming the filter logic is wrong.
+  # Consumer-to-feeder mapping audit (KPI 50) -- the WFM dashboard's own tables (Advanced Analytics ->
+  # Consumer-to-Feeder Mapping Audit; HES-BACKEND-GMR reads mapping_audit / _feeder / _summary, written by
+  # gmr-etl kpi_50_mapping_audit.py). Verified live 27 Oct 2026; months 2026-06-01 .. 2026-08-01.
+  "mapping_audit.verdict": >-
+    Exactly one of 'CONFIRMED', 'REASSIGN', 'REVIEW', 'NO DATA' (upper-case, 'NO DATA' with a space). CONFIRMED =
+    the declared feeder matches the outage evidence; REASSIGN = the evidence points to another feeder (re-tag);
+    REVIEW = evidence seen but not decisive (field check); NO DATA = never in a feeder-specific outage window.
+  "mapping_audit.data_date": >-
+    The audit MONTH (first of the month, e.g. DATE '2026-08-01'); one full copy of every consumer per month. ALWAYS
+    pin one month: data_date = (SELECT MAX(data_date) FROM hes_gold.mapping_audit_summary) for 'now' / no month
+    named, or DATE '2026-07-01' for July -- never mix months.
+  "mapping_audit.meter_no": >-
+    The consumer meter serial (e.g. 'AL1157049') -- 'consumer', 'meter' and 'consumer meter' all mean this column.
+  "mapping_audit.declared_feeder": >-
+    feeder_code the consumer is tagged to in the records = the INDEX-BASED / system / current / declared / original
+    feeder. NULL only for the 51,102 consumers with no hierarchy at all.
+  "mapping_audit.auto_feeder": >-
+    feeder_code the audit says is correct = the AI-BASED / recommended / auto-indexed / corrected feeder: the
+    declared feeder when CONFIRMED, the new feeder when REASSIGN, NULL when REVIEW or NO DATA (undecided).
+  "mapping_audit.best_feeder": >-
+    The candidate feeder with the strongest outage evidence (the re-tag target for REASSIGN). Not the recommended
+    feeder for REVIEW rows -- use auto_feeder for 'AI feeder'.
+  "mapping_audit.declared_dark": >-
+    Outage windows of the DECLARED feeder in which this consumer also went dark (evidence FOR the declared feeder).
+    Outage match of the declared feeder = declared_dark || ' of ' || (declared_dark + declared_powered).
+  "mapping_audit.declared_powered": >-
+    Outage windows of the DECLARED feeder in which this consumer stayed powered (evidence AGAINST it).
+  "mapping_audit.best_dark": >-
+    Outage windows of best_feeder in which this consumer went dark. Outage match of the recommended feeder =
+    best_dark || ' of ' || (best_dark + best_powered). The correction queue ranks by best_dark DESC.
+  "mapping_audit.cluster": >-
+    The PROJECT: 'Agra', 'Kashi', 'Triveni' (title case; compare LOWER(cluster) = 'kashi'). NULL for the 51,102
+    consumers with no hierarchy (they are NO DATA and are part of the all-project totals).
+  "mapping_audit.zone": >-
+    Upper-case zone name ('AGRA', 'VARANASI II', 'PRAYAGRAJ I' ...); compare UPPER(zone) = 'VARANASI II'.
+  "mapping_audit.sub_station": >-
+    Substation name with its code ('ETMADPUR SS_22238', 'SIKRARA_416382'); match a named substation with
+    UPPER(sub_station) LIKE '%ETMADPUR%' and show the full name.
+  "mapping_audit.mapping_confidence": >-
+    How the DECLARED tag was sourced in the meter master ('high', 'declared_only', 'cross_substation', ...) -- NOT
+    the audit's confidence. was_cross_substation = declared feeder belongs to another substation (always REASSIGN).
+  "mapping_audit_feeder.feeder_code": >-
+    One row per feeder_code per month; the reliable feeder key. The row with feeder_code NULL is not a feeder: it
+    holds the 51,103 consumers with no feeder -- exclude it (feeder_code IS NOT NULL) from feeder listings/rankings.
+  "mapping_audit_feeder.feeder_name": >-
+    Feeder name with its code appended ('METHAPAR_41638210383MET'). A named feeder: UPPER(feeder_name) LIKE
+    '%METHAPAR%' -- one row per feeder_code (a short name can match several feeders; list them, never SUM them).
+  "mapping_audit_feeder.mi": >-
+    MI = consumers DECLARED (tagged in the records) to this feeder = correct_tagging + out + review + nodata. 'MI'
+    here means meters indexed, not Meter Installation.
+  "mapping_audit_feeder.ci": >-
+    CI = consumers indexed to this feeder in the field indexing register (WFM unified_indexing) -- a separate count
+    from MI; MI vs CI gaps show register mismatches.
+  "mapping_audit_feeder.auto": >-
+    Consumers the EVIDENCE places on this feeder (correct_tagging + inc) = the AI-based consumer count.
+  "mapping_audit_feeder.correct_tagging": >-
+    Consumers declared here and CONFIRMED (correct tagging). Same value as `correct`.
+  "mapping_audit_feeder.out": >-
+    REASSIGN OUT: consumers declared to this feeder that the evidence moves to another feeder.
+  "mapping_audit_feeder.inc": >-
+    REASSIGN IN: consumers declared to other feeders that the evidence moves TO this feeder. SUM(out) = SUM(inc)
+    over all feeders (the same reassignments counted at each end) -- never add out + inc as 'total reassignments'.
+  "mapping_audit_feeder.review": >-
+    Consumers declared here whose evidence is inconclusive (REVIEW).
+  "mapping_audit_feeder.nodata": >-
+    Consumers declared here with no outage evidence at all (NO DATA). Pending for a feeder = review + nodata.
+  "mapping_audit_feeder.confidence_pct": >-
+    Feeder confidence % = determined (correct_tagging + out) * 100 / mi, one decimal: the share of the feeder's
+    consumers the audit could DECIDE -- coverage, not 'correctly tagged %' (that is correct_tagging * 100 / mi).
+    Lowest-accuracy / least-confident feeder = lowest confidence_pct (with a meaningful mi, e.g. mi >= 100).
+  "mapping_audit_feeder.zone": >-
+    Upper-case zone; this table has NO project column -- a project is its zones: Agra = AGRA, ALIGARH, ETAH,
+    FIROZABAD, MATHURA; Kashi = AZAMGARH, VARANASI I, VARANASI II; Triveni = MIRZAPUR, PRAYAGRAJ I, PRAYAGRAJ II.
+  "mapping_audit_candidates.candidate_feeder": >-
+    One row per (consumer meter_no, candidate feeder, month): every feeder of the consumer's substation the audit
+    scored it against. is_declared = TRUE marks the consumer's current (index-based) feeder. ALWAYS filter meter_no
+    (or one feeder) and data_date -- ~15-20M rows a month.
+  "mapping_audit_candidates.supporting": >-
+    Outages of this candidate feeder in which the consumer ALSO went dark (evidence FOR this feeder);
+    contradicting = its outages in which the consumer stayed powered (evidence AGAINST); net_score = supporting -
+    contradicting. The dashboard ranks candidates ORDER BY supporting DESC, net_score DESC -- the top one is the
+    feeder the evidence points to.
+  "mapping_audit_evidence.slot": >-
+    One 30-minute block (UTC timestamp) inside an outage of candidate_feeder; event_id numbers the outages of that
+    feeder for this consumer (an outage = its slots; start = MIN(slot), end = MAX(slot)). consumer_dark = the
+    consumer had no supply in that slot; consumer_comm = FALSE means the consumer sent no reading. Show times in
+    IST: slot AT TIME ZONE 'Asia/Kolkata'. Written for REASSIGN consumers only (others have no rows). HUGE (~90-500M
+    rows a month): ALWAYS filter meter_no (or declared_feeder / candidate_feeder) and data_date.
+  "mapping_audit_summary.verdict": >-
+    'CONFIRMED', 'REASSIGN', 'REVIEW', 'NO DATA' -- one row per (substation, verdict) with consumer_count.
+  "mapping_audit_summary.consumer_count": >-
+    Consumers with this verdict at this substation. SUM over the month = meters audited (4,162,914 for Aug 2026).
+  "mapping_audit_summary.zone": >-
+    Upper-case zone; no project column -- a project is its zones (see mapping_audit_feeder.zone). The row with
+    zone / sub_station NULL holds the 51,102 consumers with no hierarchy (NO DATA): keep it in all-project totals.
   # --------------------------------------------------------------------- #
   # WFM full audit (gmr_wfm_silver Athena tables + WFM Postgres gold_*
   # tables) -- unlike the Postgres gold_* tables below (auto-sampled by
@@ -612,26 +594,23 @@ column_hints:
 # In" read as the status they actually are. Keyed (table_name, column_name),
 # consulted in refresh() when building each Athena column's ColumnMeta.
 header_label_overrides:
-  "hierarchy_summary_autoindexing.reassign_number": Reassigned
-  "hierarchy_summary_autoindexing.reassign_pct": Reassigned %
-  "feeder_ranking_autoindexing.reassign_out": Reassigned Out
-  "feeder_ranking_autoindexing.reassign_in": Reassigned In
-  # Without an override these title-case into "Mi"/"Correct Tagging" --
-  # the bare column names read badly as a KPI label once title-cased with
-  # no other context (same reasoning as the reassign_out/reassign_in
-  # overrides above).
-  "feeder_ranking_autoindexing.mi": Consumers Connected (MI)
-  "feeder_ranking_autoindexing.correct_tagging": Correctly Tagged
-  # "outage_match" and "evidence" read as meaningless jargon on their own --
-  # verified live, they're specifically the DECLARED (system) feeder's own
-  # ratio and the WINNING CANDIDATE (re_tag_to) feeder's ratio respectively
-  # (see this table's own description) -- naming that directly is what
-  # makes "why was this consumer retagged" answerable just by reading the
-  # two figures side by side, without the reader needing to already know
-  # this table's internal convention.
-  "consumer_detail_autoindexing.outage_match": System Feeder Outage Match
-  "consumer_detail_autoindexing.evidence": Retagged Feeder Outage Match
-  "consumer_detail_autoindexing.re_tag_to": Retagged To
+  "mapping_audit.declared_feeder": Index-based Feeder
+  "mapping_audit.auto_feeder": AI-based Feeder
+  "mapping_audit.best_feeder": Best Evidence Feeder
+  "mapping_audit_candidates.candidate_feeder": Candidate Feeder
+  "mapping_audit_candidates.supporting": Outages Dark With Feeder
+  "mapping_audit_candidates.contradicting": Outages Stayed Powered
+  "mapping_audit_candidates.net_score": Net Score
+  "mapping_audit_candidates.is_declared": Current (Index-based) Feeder
+  "mapping_audit_evidence.consumer_dark": Consumer Went Dark
+  "mapping_audit_evidence.consumer_comm": Consumer Reporting
+  "mapping_audit_feeder.mi": Consumers Declared (MI)
+  "mapping_audit_feeder.ci": Consumers Indexed (CI)
+  "mapping_audit_feeder.correct_tagging": Correctly Tagged
+  "mapping_audit_feeder.out": Reassigned Out
+  "mapping_audit_feeder.inc": Reassigned In
+  "mapping_audit_feeder.nodata": No Data
+  "mapping_audit_feeder.confidence_pct": Confidence %
 
 # One-sentence, per-table description -- derived from each table's own
 # column composition (verified: every claim below is directly readable off
@@ -727,60 +706,45 @@ table_descriptions:
   _stage_pq_voltage: >-
     ETL staging table (intermediate build artifact) for voltage power-quality metrics -- not a finished business
     table.
-  # hes_gold -- meter-to-feeder auto-indexing (KPI 50). REPLACES the
-  # retired mapping_audit/mapping_audit_candidates/mapping_audit_evidence/
-  # mapping_audit_feeder/mapping_audit_summary family -- those are no
-  # longer in this catalog at all, do not reference them.
-  #
-  # WHICH OF THESE 3 TABLES TO USE (verified against the source ETL job
-  # and the dashboard backend's own query-routing code, autoindexing_repo.py):
-  #   - A count/percentage scoped to project/discom/zone/circle/division
-  #     (including a plain grand total, or no scope at all) -> ALWAYS read
-  #     it directly off hierarchy_summary_autoindexing's matching row.
-  #     Never recompute this from consumer_detail_autoindexing -- both
-  #     agree exactly, but hierarchy_summary_autoindexing is the cheap,
-  #     pre-aggregated, authoritative source for this shape of question.
-  #   - A count scoped to ONE SPECIFIC FEEDER -> read it off
-  #     feeder_ranking_autoindexing's columns for that feeder_code row
-  #     (see that table's own note on reassign_out vs reassign_in).
-  #   - Anything else (a substation, a specific consumer, an arbitrary
-  #     filter/search, or a breakdown by a column that ISN'T one of the 5
-  #     hierarchy levels) -> query consumer_detail_autoindexing directly,
-  #     filtering/grouping on its literal `status` column.
-  hierarchy_summary_autoindexing: |-
-    CUBE rollup (project > discom > zone > circle > division, outermost to innermost) of auto-indexing outcomes -- every 5-column combo set/NULL is a real row (NULL = "all values at this level"); grand total = all 5 NULL. PREFERRED/authoritative for ANY question scoped to project(Agra/Kashi/Triveni)/discom/zone/circle/division, incl. a plain grand total -- don't recompute from consumer_detail_autoindexing or feeder_ranking_autoindexing (both agree, this is the cheap pre-aggregated read; see feeder_ranking_autoindexing's hint for why ITS sums drift slightly at this scope).
-    Metric columns (select any subset together in one query, plain columns, never a CASE WHEN pivot): meters_audited, feeder_count, substation_count; confirmed_number, reassign_number, review_number, no_data_number ("no data" means no_data_number, not a NULL value); auto_indexing_concluded_number (=confirmed+reassign, i.e. "autoindexing/concluded count"); pending_verification_number (=review+no_data, i.e. "pending count"). Each of the last 6 has a _pct sibling for a share/percentage ask.
-    CRITICAL -- this is a genuine CUBE, not a hierarchical rollup: for one real leaf combination, EVERY combination of its ANCESTOR columns being their real value or independently NULL'd out is ALSO its own stored row, carrying the SAME numbers duplicated. Verified live: filtering only division='EDD Ballia Nagar' with no constraint on project/discom/zone/circle matched 16 rows, not 1 -- every one of the 2^4 combinations of those 4 ancestor columns being NULL or real-valued, all sharing identical figures. Selecting the ONE real row for a level L therefore needs BOTH ends pinned: every level ABOVE L (nearer project) constrained NOT NULL (or pinned to a specific value, to scope further), AND every level BELOW L (nearer division) constrained IS NULL. Never leave an ancestor unconstrained -- that pulls in every one of its duplicate rollup rows and any downstream SUM/recompute then overcounts by a multiple of 2^(unconstrained ancestor count).
-    EXCEPTION -- "project" is NOT a strict ancestor of discom/zone/circle/division the way those 4 nest inside each other: verified live, the single discom "PuVVNL" has real, DIFFERENT totals stored under BOTH project='Kashi' AND project='Triveni' (Kashi's PuVVNL figures + Triveni's PuVVNL figures == the project IS NULL PuVVNL row, exactly -- e.g. auto_indexing_concluded_number for Kashi + for Triveni == the project IS NULL value). So whenever "project" would otherwise be filled in as an ancestor (NOT NULL) for some OTHER scoped/broken-down level, it must instead be: pinned to a specific value if the question actually names a project, OR "project IS NULL" if it doesn't (this gives the correct, already-computed total combined across every project touching that discom/zone/circle/division -- NEVER leave it as a bare "project IS NOT NULL", which silently picks just one of possibly several different real answers). discom/zone/circle/division have no such exception -- they keep the NOT NULL ancestor-fill rule below.
-    SINGLE NAMED VALUE at level L (e.g. "reassign cases in Kashi" -> L=project; "...in EDD BALLIA NAGAR division" -> L=division; "...for discom PuVVNL" -> L=discom): L=value AND every level ABOVE L NOT NULL (project excepted -- see above: NULL unless the question also names a project) AND every level BELOW L IS NULL. project='Kashi' AND discom IS NULL AND zone IS NULL AND circle IS NULL AND division IS NULL (project has no ancestor, nothing to require NOT NULL); division='EDD Ballia Nagar' AND project IS NULL AND discom IS NOT NULL AND zone IS NOT NULL AND circle IS NOT NULL (project rolled up since not named; discom/zone/circle still required NOT NULL); discom='PuVVNL' AND project IS NULL AND zone IS NULL AND circle IS NULL AND division IS NULL (discom has nothing below it to NULL here beyond zone/circle/division, and project rolls up since not named -- this is the query that gives the true combined PuVVNL figures, not project='Kashi' alone). Same pattern for zone/circle.
-    BREAKDOWN BY LEVEL L (e.g. "division-wise meters audited/confirmed/..."): same bracket, but L IS NOT NULL instead of pinned to one value -- one row per real value at L. division IS NOT NULL AND project IS NULL AND discom IS NOT NULL AND zone IS NOT NULL AND circle IS NOT NULL; circle IS NOT NULL AND project IS NULL AND discom IS NOT NULL AND zone IS NOT NULL AND division IS NULL; zone IS NOT NULL AND project IS NULL AND discom IS NOT NULL AND circle IS NULL AND division IS NULL; discom IS NOT NULL AND project IS NULL AND zone IS NULL AND circle IS NULL AND division IS NULL; project IS NOT NULL AND discom IS NULL AND zone IS NULL AND circle IS NULL AND division IS NULL. Optionally PIN project to a specific value instead of leaving it NULL (e.g. project='Kashi') to scope the breakdown to just that project's own divisions/circles/zones/discoms; select L's own column alongside the metrics so each row is identifiable.
-  consumer_detail_autoindexing: |-
-    Per-consumer auto-indexing verdict (large table, ~4.0M rows -- needs a date/geo filter): for each consumer, whether their DECLARED feeder (system_feeder) matches the feeder the outage-coincidence evidence actually points to. status is one of CONFIRMED (declared feeder is correct), REASSIGN (a different feeder scored better -- re_tag_to names it; RARE exception: a "cross_substation"-flagged consumer can be REASSIGN even when the recommended feeder equals the declared one, since that flag blocks CONFIRMED outright), REVIEW (evidence inconclusive), or "NO DATA" (consumer never seen in any feeder-specific outage window -- this is the ONLY reliable way to identify a NO DATA consumer; do NOT infer it from outage_match=='0/0', since CONFIRMED/REASSIGN/REVIEW rows can also show '0/0' there). outage_match/evidence are "matched/total" dark-window ratios (declared feeder's own ratio, and the winning candidate's ratio, respectively) -- both literally "-" (not NULL) when status is not REASSIGN; re_tag_to is likewise "-" except on REASSIGN rows. Use THIS table (never hierarchy_summary_autoindexing or feeder_ranking_autoindexing) for anything scoped below the project/discom/zone/circle/division hierarchy -- a substation, a specific consumer, an arbitrary filter, or a breakdown by a non-hierarchy column.
-    "AI feeder"/"recommended feeder" is NOT a stored column -- it means whichever feeder the model's own verdict actually recommends for this consumer, i.e. CASE WHEN status='CONFIRMED' THEN system_feeder WHEN status='REASSIGN' THEN re_tag_to ELSE NULL END. For a single named consumer, this is a bare CASE expression alongside the other requested columns, never wrapped in an aggregate.
-    "Why was consumer X retagged to this feeder" (or any similar reasoning-about-a-reassignment question) is answered by showing, side by side, the SAME comparison this data verdict is actually built from: system_feeder (the declared feeder) with its own outage_match ratio, against re_tag_to (the recommended feeder) with evidence (that feeder's own ratio) -- e.g. a consumer with outage_match='0/8' on their declared feeder and evidence='3/3' on the recommended one was retagged because the recommended feeder's dark-window coincidence rate is decisively higher. Select status, system_feeder, outage_match, re_tag_to, and evidence together (a plain SELECT, WHERE consumer='<value>', answer_kind="detail_record" since this is one row of several descriptive fields, not a numeric KPI) -- do not attempt to compute or explain this for a REVIEW/NO DATA/CONFIRMED consumer, since re_tag_to/evidence are just "-" there (no retag happened to explain).
-    A bare, unqualified "feeder" for a named consumer (e.g. "which feeder is this consumer connected to") means system_feeder specifically (the DECLARED feeder) -- "connected to" is exactly what that column is. ANY single-named-consumer lookup (by consumer id) is a plain SELECT ... WHERE consumer='<value>' -- NEVER wrap it in SUM/COUNT/MAX/AVG/etc; this table's large-table bounding-filter rule (a date/geo filter required before an AGGREGATE) exists for a genuinely unbounded scan, not for reading the one row a consumer id already pins down exactly -- wrapping a single-consumer lookup in an aggregate needlessly trips that rule and gets the whole query rejected for a filter it never needed.
-  feeder_ranking_autoindexing: >-
-    Per-feeder rollup of consumer_detail_autoindexing's verdicts (one row per feeder). mi = TOTAL consumers DECLARED
-    to this feeder regardless of verdict (verified live: mi = correct_tagging+reassign_out+review+no_data exactly)
-    -- here "MI" means "meters indexed", NOT "Meter Installation" the way gold_mi_* WFM tables use it. A feeder can
-    legitimately have mi=0 (nobody's declared feeder, but still someone else's reassign_in target) -- confidence is
-    NULL in that case, not 0. correct_tagging = consumers CONFIRMED at this feeder. reassign_out = consumers
-    DECLARED to this feeder whose evidence says they should move elsewhere; reassign_in = consumers declared to
-    OTHER feeders whose evidence points TO this one. VERIFIED LIVE: reassign_out and reassign_in are two DIFFERENT
-    VIEWS (origin vs destination) of the SAME reassign population, not two separate pools -- SUM(reassign_out) over
-    the WHOLE, UNFILTERED table == SUM(reassign_in) over the whole table == the true total REASSIGN count; ADDING
-    the two columns together (reassign_out+reassign_in) DOUBLE-COUNTS and is wrong regardless of scope. For "how
-    many reassign cases" scoped to ONE FEEDER, reassign_out (consumers currently there needing action) is usually
-    what's meant, but say which one you used. USE hierarchy_summary_autoindexing INSTEAD -- not this table -- for
-    anything scoped to a project/discom/zone/circle/division rather than one feeder: verified live, this table's
-    SUM(reassign_out) for project='Kashi' came out one short of the true total (a feeder's own project
-    here comes from a separate join, not always identical to each consumer's project attribute) -- small, but real,
-    and avoidable by reading the exact number off hierarchy_summary_autoindexing instead. confidence is 0-100 but is
-    NOT an accuracy/correctness score -- it's coverage: the % of this feeder's declared consumers that got ANY
-    decisive verdict (CONFIRMED+REASSIGN) rather than REVIEW/NO DATA, same concept as
-    hierarchy_summary_autoindexing's auto_indexing_concluded_pct one level up. project on THIS table was titlecase
-    (e.g. 'Kashi') as of the last live check, matching the other two tables, but has drifted casing before -- verify
-    rather than assume if a filter unexpectedly returns 0 rows.
+  # hes_gold -- Consumer-to-Feeder Mapping Audit (KPI 50): the WFM dashboard's own tables (Advanced Analytics
+  # card; HES-BACKEND-GMR routes kpi_code=mapping_audit to these three; written by gmr-etl
+  # kpi_50_mapping_audit.py). One full copy per month (data_date); the dashboard opens on the LATEST month.
+  # WHICH TABLE:
+  #   - counts / % for all, a project (its zones), discom, zone, circle, division, sub-division or substation
+  #     -> mapping_audit_summary (small): SUM(consumer_count) by verdict.
+  #   - one feeder, feeder rankings, MI / CI / reassign in / out / confidence -> mapping_audit_feeder (small).
+  #   - one consumer / meter, the correction queue (REASSIGN list), per-meter attributes -> mapping_audit (large:
+  #     always data_date pinned, plus a meter_no / place filter).
+  mapping_audit: >-
+    Consumer-to-feeder mapping audit, one row per consumer meter per month (~4.16M rows a month, large): verdict
+    (CONFIRMED / REASSIGN / REVIEW / NO DATA), declared_feeder (index-based / system feeder), auto_feeder (AI-based /
+    recommended feeder; NULL when undecided), best_feeder (strongest candidate), outage evidence counts
+    (declared_dark / declared_powered for the declared feeder, best_dark / best_powered for best_feeder),
+    cluster (= project), discom_code, zone, circle, division, sub_division, sub_station. Use for one consumer
+    (WHERE meter_no = 'X' AND data_date = latest month) and for correction-queue lists (verdict = 'REASSIGN').
+  mapping_audit_feeder: >-
+    Per-feeder roll-up of the mapping audit per month (one row per feeder_code): feeder_name, sub_station, zone ..
+    sub_division, mi (consumers declared), ci (consumers in the field indexing register), auto (consumers the
+    evidence places here), correct_tagging (confirmed), out (reassign OUT), inc (reassign IN), review, nodata,
+    determined (correct_tagging + out), confidence_pct (determined / mi). No project column (project = its zones).
+  mapping_audit_candidates: >-
+    Mapping-audit evidence scores, one row per consumer meter x candidate feeder x month (large): meter_no,
+    declared_feeder, candidate_feeder, supporting (its outages in which the consumer went dark), contradicting (its
+    outages in which the consumer stayed powered), net_score, is_declared (the current feeder), discom_code .. sub_station.
+    Use for 'which feeders was meter X scored against / why was it reassigned / evidence for meter X': WHERE meter_no =
+    'X' AND data_date = latest, ORDER BY supporting DESC, net_score DESC.
+  mapping_audit_evidence: >-
+    Mapping-audit outage log behind each REASSIGN verdict, one row per consumer x candidate feeder x 30-minute outage
+    slot (UTC) x month (huge): meter_no, sub_station, declared_feeder, candidate_feeder, event_id (the outage), slot,
+    consumer_dark, consumer_comm. Use for 'when did feeder Y go dark and did meter X go dark with it' / the proof pack
+    of one feeder's re-tags -- always WHERE meter_no or a feeder AND data_date. Outages = GROUP BY candidate_feeder,
+    event_id (start MIN(slot), end MAX(slot), dark = BOOL_OR(consumer_dark)).
+  mapping_audit_summary: >-
+    Per-substation verdict counts of the mapping audit per month: one row per (sub_station, verdict) with
+    consumer_count, declared_feeders and cross_substation_count, plus discom_code, zone, circle, division,
+    sub_division. The headline source: meters audited = SUM(consumer_count); confirmed / reassign / review /
+    no data = SUM FILTER (verdict = ...); substations = COUNT(DISTINCT sub_station). No project column (project =
+    its zones).
   # hes_silver
   billing: 'Per-meter billing-cycle record: cumulative energy (import/export, tariff-zone-wise) and max-demand readings.'
   block_usage: Per-meter block-interval (sub-daily) usage, voltage, and current readings.

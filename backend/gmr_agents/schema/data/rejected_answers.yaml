@@ -89,3 +89,23 @@ rejected:
   - {trace_id: 455e03f5, question: "eligible sat % in kashi", reason: "SAT(eligible) / eligible = 94.18% instead of the card's ALL SAT / eligible = 95.33%"}
   - {trace_id: cf747569, question: "is meter HP9000628 invoiced", reason: "said 'not invoiced' without reading invoice dates (SAT-5 invoiced 4 Nov 2025)"}
   - {trace_id: bb936e35, question: "was meter HP8500592 replaced and why", reason: "replacement direction reversed (HP8500592 replaced old meter XD31655, it was not replaced)"}
+  - {trace_id: 568b570b, question: "What has changed since last week on the headline KPIs?", reason: "this month vs last 7 days, not now vs a week ago (stock -18,302)"}
+  - {trace_id: 7e9b87c9, question: "Where is the biggest drop-off in the supply-to-collection funnel?", reason: "biggest drop picked by ORDER BY loss DESC LIMIT 1 (NULL first step returned)"}
+  - {trace_id: cce36caa, question: "Is supply keeping pace with installation over the last three months?", reason: "LIMIT 3 on an ascending series kept May-Jul 2024"}
+  - {trace_id: 8ee5c534, question: "Supplied minus installed is about 1.68 lakh, but stock shows 1.21 lakh. Where are the other ≈47,500 meters?", reason: "stock gap mixed up (garbled)"}
+  - {trace_id: ec6f3b8c, question: "What is the MI productivity per team by project for the last 30 days?", reason: "last 30 days read as 31 days (105,190 instead of 104,088)"}
+  - {trace_id: a9d37ccc, question: "How many eligible meters in Kashi are still to pass SAT?", reason: "eligible pending from SAT flags (75,070) not the Non-SAT card (75,066)"}
+  - {trace_id: 75dc3671, question: "Estimate PMPM billing value for this month.", reason: "crore x meter count (Rs 48.4 crore total)"}
+  - {trace_id: 0d130059, question: "Which project is worst?", reason: "eligible pending from SAT flags, not the Non-SAT card"}
+  - {trace_id: a2175562, question: "How many consumers need re-tagging?", reason: "re-tagging read as pending verification (1,587,500)"}
+  - {trace_id: cde8634b, question: "Agra mein SAT kitna pending hai?", reason: "eligible pending figure mislabelled as eligible MI"}
+  - {trace_id: 895ab130, question: "Only in Kashi.", reason: "defect rate by OEM instead of burnt meters"}
+  - {trace_id: e307f158, question: "And three months ago?", reason: "defect rates for one month (130.93%) instead of burnt meters"}
+  - {trace_id: d74b2572, question: "Supplied minus installed is about 1.68 lakh, but stock shows 1.21 lakh. Where are the other ≈47,500 meters?", reason: "stock gap columns wrong"}
+  - {trace_id: 6ee08e46, question: "Where is the biggest drop-off in the supply-to-collection funnel?", reason: "biggest drop picked by ORDER BY loss LIMIT 1"}
+  - {trace_id: ba3fde97, question: "Is supply keeping pace with installation over the last three months?", reason: "LIMIT 3 on an ascending series kept May-Jul 2024"}
+  - {trace_id: dfb70852, question: "How many eligible meters in Kashi are still to pass SAT?", reason: "eligible pending from SAT flags (75,070)"}
+  - {trace_id: d83ef02a, question: "How many consumers need re-tagging?", reason: "re-tagging read as pending verification (1,587,089)"}
+  - {trace_id: 84b4243e, question: "Supplied minus installed is about 1.68 lakh, but stock shows 1.21 lakh. Where are the other ≈47,500 meters?", reason: "stock gap: supplied - consumed - replacements - installs (-4,239,410)"}
+  - {trace_id: fbaef48a, question: "Which project is worst?", reason: "eligible pending from SAT flags (96,373) not the Non-SAT card"}
+  - {trace_id: 08386d90, question: "Which technician is responsible for Triveni's low productivity?", reason: "named one technician as lowest instead of the team view"}

@@ -96,11 +96,13 @@ def _step(state: dict, name: str, t0: float, **detail: Any) -> None:
 _TRIAGE_SYSTEM = """You are the front desk of GMR's smart-meter analytics chatbot (Uttar Pradesh DISCOMs; projects agra, kashi, triveni).
 Data available:
 - WFM (workforce management): meter installations (MI), SAT, invoices/revenue/receivables, inventory/stock, O&M complaints/tickets, technicians, meter journey.
-- MDM: ONLY meter-to-feeder auto-indexing / feeder mapping (confirmed, reassigned, review, no-data consumers by feeder/substation/division). Any other meter data (theft, voltage, power factor, billing, consumption, outages, load) is NOT available -> out_of_scope.
+- MDM: ONLY the consumer-to-feeder mapping audit / auto-indexing (confirmed, reassigned, review, no-data consumers; mapping accuracy, pending verification; feeders' MI, CI, reassign in/out, confidence; one consumer's index-based vs AI-based feeder, substation and outage match; correction queue; by project/zone/division/substation/feeder). Any other meter data (theft, voltage, power factor, billing, consumption, outages, load) is NOT available -> out_of_scope.
 Known values: OEMs (make/vendor) are only AEW, CAP, HPL, SEIPL; SAT batches are SAT-1 .. SAT-13 (no SAT-14 yet); 'varanasi'/'kasi' = kashi project, 'trivei'/'triveni' = triveni. SAT = Site Acceptance Test; MI = meter installation; DT/DTR = distribution transformer meter; PMPM = per meter per month payment.
+Dates: compare every date with Today, never with the verb tense -- a date before Today is in the past even when asked 'will be installed on ...' (answer it as data: what was installed that day); only a date after Today is a forecast.
+The user's screen: the chatbot cannot see or change the dashboard page the user has open. 'What filters are applied on my page / what am I looking at' -> kind chitchat, reply that you cannot see their page and offer to fetch the data if they name the project, period or other filters (never mention tables).
 Decide everything about the user's message and reply with JSON only:
 {"kind": "data" | "explain" | "chitchat" | "out_of_scope",
- "question": "one standalone English question: translate Hindi/Hinglish/any Indian language and fix spelling. Translate literally, in plain fixed wording, so the same ask in any language becomes the same English question: periods as 'last N days/weeks/months' / 'yesterday' / 'this month' with N in digits (never 'past six months'), breakdowns as '<x>-wise' (month-wise, zone-wise, OEM-wise) -- never drop a breakdown the user asked for. A garbled or cut-off KPI name is completed to the reading that keeps the characters the user typed (e.g. '&M productivity' = O&M productivity, not MI) -- never swap it for a different KPI -- and that reading goes in assumption so the user sees it. Keep the form of the ask: 'tickets on meter X' / 'complaints of consumer X' / 'details of ticket X' ask to SEE the records ('Show the tickets on meter X'), never rewrite them as 'how many'. ONLY if the message is an incomplete follow-up ('and in agra?', 'same for SAT', 'break it down by zone', 'which OEM?', 'only in kashi', 'and three months ago?', 'draft a message about it') fill in what it refers to from the conversation, keeping ALL its filters and entities. A follow-up continues the LATEST TURN: keep its topic/measure (e.g. 'what about agra' after a SAT question = Agra's SAT figure, not an earlier turn's topic) and its place/OEM/period unless the message replaces them; take something from an earlier turn only when the message names it. 'that/it/this/there' points at what the PREVIOUS ANSWER singled out (e.g. the project it named as worst) -- carry that entity as a filter: 'Which project is worst?' -> A: 'Triveni ...' then 'Break that down by age' = 'Break down Triveni's eligible pending SAT meters by age'. A message that is complete on its own is a NEW question: never add places, periods or filters the user did not say (a question naming a technician / person plus a measure is complete -- never carry the previous turn's place onto it). A request about the reply language ('Hindi mein batao', 'explain in English') is not part of the question -- leave it out",
+ "question": "one standalone English question: translate Hindi/Hinglish/any Indian language and fix spelling. Translate literally, in plain fixed wording, so the same ask in any language becomes the same English question: periods as 'last N days/weeks/months' / 'yesterday' / 'this month' with N in digits (never 'past six months'), breakdowns as '<x>-wise' (month-wise, zone-wise, OEM-wise) -- never drop a breakdown the user asked for. A garbled or cut-off KPI name is completed to the reading that keeps the characters the user typed (e.g. '&M productivity' = O&M productivity, not MI) -- never swap it for a different KPI -- and that reading goes in assumption so the user sees it. Keep the form of the ask: 'tickets on meter X' / 'complaints of consumer X' / 'details of ticket X' ask to SEE the records ('Show the tickets on meter X'), never rewrite them as 'how many'. ONLY if the message is an incomplete follow-up ('and in agra?', 'same for SAT', 'break it down by zone', 'which OEM?', 'only in kashi', 'and three months ago?', 'draft a message about it') fill in what it refers to from the conversation, keeping ALL its filters and entities. A follow-up continues the LATEST TURN: keep its topic/measure (e.g. 'what about agra' after a SAT question = Agra's SAT figure, not an earlier turn's topic; 'Which OEM?' after 'How many burnt meters?' = 'Burnt meters OEM-wise', never a defect-rate question) and its place/OEM/period unless the message replaces them; take something from an earlier turn only when the message names it. 'that/it/this/there' points at what the PREVIOUS ANSWER singled out (e.g. the project it named as worst) -- carry that entity as a filter: 'Which project is worst?' -> A: 'Triveni ...' then 'Break that down by age' = 'Break down Triveni's eligible pending SAT meters by age'. A message addressed to a project's head ('draft a message to the Agra project head about it') is about THAT project's own figures for the topic: 'Draft a message to the Agra project head about Agra's eligible pending SAT meters by age'. A message that is complete on its own is a NEW question: never add places, periods or filters the user did not say (a question naming a technician / person plus a measure is complete -- never carry the previous turn's place onto it). A request about the reply language ('Hindi mein batao', 'explain in English') is not part of the question -- leave it out",
  "followup": true only for such an incomplete follow-up,
  "parts": ["only when the message asks SEVERAL things ('X and Y', 'also tell me', a list of asks): each ask as its own standalone English question, in order"] or [],
  "examples": [0-3 ids from EXAMPLES whose question MEANS the same as (an ask in) this message, even if worded very differently, best first],
@@ -254,6 +256,12 @@ def _consistent_assumption(assumption: str, question: str) -> str:
 def _parse_triage(d: dict, state: dict, model: str) -> dict:
     kind = d.get("kind") if d.get("kind") in {"data", "explain", "chitchat", "out_of_scope"} else "data"
     domain = d.get("domain") if d.get("domain") in {"wfm", "mdm"} else "wfm"
+    # Mapping-audit wording is MDM whatever the model says: live 27 Oct, 'How many meters have been
+    # audited in the mapping audit?' was triaged wfm and its SQL rejected (no mapping tables there).
+    asked = f"{state['question']} {d.get('question') or ''}"
+    if kind in {"data", "explain", "out_of_scope"} and _MAPPING_RE.search(asked) and not _WFM_WORDS_RE.search(asked):
+        kind, domain = ("data" if kind == "out_of_scope" else kind), "mdm"
+        d = {**d, "topics": ["mdm_autoindexing"]}
     known = {t.table_name for t in get_catalog(domain).list_tables()}
     triage = {
         "kind": kind, "question": str(d.get("question") or state["question"]).strip(),
@@ -279,6 +287,23 @@ def _parse_triage(d: dict, state: dict, model: str) -> dict:
 
 
 _CONSUMER_WORD_RE = entity_check._CONSUMER_RE
+# Words only the consumer-to-feeder mapping audit (MDM) uses.
+_MAPPING_RE = re.compile(
+    r"\bmapping (?:audit|accuracy|auditor)\b|\bauto[- ]?index|\bfeeder (?:tagging|mapping|confidence)\b|\bre-?tag"
+    r"|\bcorrection queue\b|\bpending (?:field )?verification\b|\bsystem[- ]index\b|\b(?:index|ai)[- ]based feeder\b"
+    r"|\boutage match|\bmeters? audited\b|\breassign(?:ed|ment)? (?:in|out)\b|\b(?:mi|ci) (?:and|&|vs) (?:ci|mi)\b"
+    r"|\b(?:correct|correctly) (?:tagg|mapp)|\breview bucket\b"
+    r"|\bscored against\b|\bcandidate feeders?\b|\boutage (?:windows?|log)\b|\bproof pack\b|\breassignment\b"
+    r"|\b(?:go|went|goes) dark\b|\bdark when\b|\bmov(?:e|ed|es|ing)\b[^?]*\bfeeder\b"
+    r"|\b(?:lose|lost|losing) supply\b[^?]*\bfeeder\b|\bfeeder\b[^?]*\bhad outages\b"
+    r"|\b(?:feeders?|substations?)\b.*\b(?:reassign\w*|confirmed|review|no data|pending|confidence|accuracy|correct\w*|"
+    r"consumers|mi|ci)\b"
+    r"|\b(?:reassign\w*|confirmed|consumers|review|no data|pending)\b.*\b(?:feeders?|substations?)\b"
+    r"|\bverdict\b|\bwhy\b.*\breassigned\b|\bai\b.*\bfeeder\b|\bfeeder\b.*\bai\b|\bconfidence\b.*\bfeeder"
+    r"|^\s*(?:show|details of) feeder\b|\bconfirmed\b.*\breassign|\bin review\b|\bsubstation\b.*\bmeter\b",
+    re.I)
+_WFM_WORDS_RE = re.compile(r"\b(?:tickets?|complaints?|install\w*|sat\b|invoic\w*|stock|technicians?|o&m|journey|"
+                           r"(?<!lose )(?<!lost )(?<!losing )supply|warehouse|replac\w*|defect\w*)", re.I)
 _METER_SERIAL_RE = re.compile(r"\b(?=[A-Za-z]{1,4}\d)[A-Za-z]{1,4}\d{6,10}\b")
 
 
@@ -928,7 +953,13 @@ def _blocks(plan: dict, result: dict) -> dict:
                     kpis.append({"label": f"Overall {_label(plan, alias)}" if "total" not in _label(plan, alias).lower()
                                  else _label(plan, alias), "value": value, "formatted_value": format_number(value),
                                  "unit": None})
-    built = _build_chart(plan, df)
+    # A chart the rows cannot make is left out, never the answer: seen live 27 Oct, 'How can we
+    # shrink the Review bucket fastest?' failed in pivot_table and the user got an error.
+    try:
+        built = _build_chart(plan, df)
+    except Exception:  # noqa: BLE001
+        log.exception("chart: could not build from %s", list(df.columns))
+        built = None
     charts = [built] if built else []
     tables = []
     # A one-row answer with more columns than cards (the Never / Non-comm card has ten figures) keeps
@@ -953,7 +984,7 @@ def _blocks(plan: dict, result: dict) -> dict:
 # --------------------------------------------------------------------------- #
 
 _ANSWER_SYSTEM = """You are a sharp data analyst for GMR's smart-meter programme (Uttar Pradesh; projects Agra, Kashi, Triveni). Answer the user's question from the RESULT rows only.
-Terms: SAT = Site Acceptance Test (a batch acceptance of installed meters, SAT-1..SAT-13); MI = meter installation; eligible MI = installed on/before the project's SAT cutoff; non-SAT = eligible meters not yet in a SAT batch; DT/DTR = distribution transformer meter; PMPM = per meter per month payment; lumpsum = one-time payment per meter after SAT; OEM = meter maker (AEW, CAP, HPL, SEIPL); auto-indexing = consumer-to-feeder tagging audit.
+Terms: SAT = Site Acceptance Test (a batch acceptance of installed meters, SAT-1..SAT-13); MI = meter installation; eligible MI = installed on/before the project's SAT cutoff; non-SAT = eligible meters not yet in a SAT batch; DT/DTR = distribution transformer meter; PMPM = per meter per month payment; lumpsum = one-time payment per meter after SAT; OEM = meter maker (AEW, CAP, HPL, SEIPL); auto-indexing = consumer-to-feeder tagging audit (mapping audit), where MI = consumers declared to a feeder and CI = consumers in the field indexing register (not meter installation).
 - First sentence: the direct answer with the key number(s) and units. Copy numbers digit-for-digit from RESULT, with commas (1,234,567); add lakh/million in brackets when asked. IDs (meter serials, consumer numbers, SAT numbers) are written as-is, never with commas. Money columns are in crore: write 'Rs 12.34 crore'.
 - Never invent numbers: every number must come from RESULT (simple sums/differences/shares/products are fine).
 - Never compute an overall rate / average / productivity yourself (e.g. total installs / summed technicians): technicians are not technician-days, and per-row rates do not average that way. Never add up a per-row count of people (active technicians) across days/weeks -- the same person is counted again. Quote the Total row's value; if RESULT has no Total row, give the range (lowest to highest) instead.
@@ -966,6 +997,11 @@ Terms: SAT = Site Acceptance Test (a batch acceptance of installed meters, SAT-1
 - A breakdown (one row per zone / category / division / project ...) is summarised ACROSS its rows: the OVERALL figure from FACTS (the Total row), then the highest and lowest item for the key measure(s). Never describe only one row as if it were the whole answer, and never present a breakdown row that shares a name with the scope (the AGRA zone inside the Agra project) as the overall figure.
 - Name measures in words ('DI to Agency', 'installation to SAT'), never column names like di_to_agency.
 - State only orders and values that are in RESULT; never 'implied' / guessed rankings from earlier answers.
+- A list whose 'total available' is larger than the rows shown (a correction queue, ticket list ...): the count is 'total available' -- say e.g. '155,824 consumers; the strongest-evidence ones first' -- never the number of rows shown.
+- Figures quoted in USER MESSAGE ('about 1.68 lakh', 'only 59 defective', '4.28L') are the user's, often from an older refresh: when RESULT differs, open with today's figure from RESULT and say the quoted one is out of date -- never explain, reuse or subtract the quoted figure as if it were true.
+- Threshold asks ('less than one week', 'below 95%', 'more than 120 days'): only rows whose value is past the threshold qualify -- check each value; if none qualify say so plainly and name the closest ones with their values. Never count every row as qualifying.
+- 'Biggest / steepest / largest drop, gap or loss' = the row with the highest value of that loss column (see FACTS) -- compare all of them before naming one.
+- A Yes / No flag column in RESULT (focus_project, biggest_drop, under_one_week, same_rank_order ...) was computed exactly by code: the row marked 'Yes' IS the answer -- name that row and quote ITS figures; never pick a different row by your own reading. Dates in RESULT (e.g. eta_after_1_batch) are copied, never recomputed.
 - When RESULT splits the headline number (e.g. eligible pending vs not yet due, consumer/DTR/feeder, per project), mention the split briefly.
 - If an ASSUMPTION is given, state it in the first sentence ('Assuming you mean ...').
 - Snapshot data (SAT, non-SAT, stock, current stage, receivables) has no history: if the question asks for a past date ('as of 20 Sep') and RESULT is the current snapshot, say the figure is as on the latest refresh and that day-by-day history is not stored -- never present it as the past date's value.
@@ -1610,7 +1646,7 @@ def _route(state: dict, prior_turns: list[dict] | None) -> dict | None:
     triage = {"kind": "data", "question": question, "followup": False, "domain": domain,
               "language": language.detect(question) or "en",
               "parts": [], "examples": [f"e{example_id}"], "assumption": "", "topics": topics, "tables": [],
-              "reply": "", "source": "router"}
+              "reply": "", "source": "router", "match_ratio": round(hits[0][1] - 10, 3)}
     _step(state, "route", t0, matched_example=example_id, ratio=round(hits[0][1] - 10, 3), topics=topics)
     return triage
 

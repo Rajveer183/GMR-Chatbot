@@ -28,6 +28,7 @@ class RunContext:
     extras: list[dict] = field(default_factory=list)
     fallback: dict | None = None                         # a zero-row run kept in case retries run out
     widened: bool = False                                # schema already widened with the topic's tables
+    example_fallback: bool = False                       # the routed verified example's own SQL already used
     results_by_key: dict[str, dict] = field(default_factory=dict)  # idempotency: key -> executor result
     tool_ctx: Any = None                                 # app-side tool inputs (catalog, verdict, plan)
     prepared: Any = None                                 # the validated ToolCall (tools/calling.py)

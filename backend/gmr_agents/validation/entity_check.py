@@ -16,7 +16,8 @@ from __future__ import annotations
 
 import re
 
-_PROJECTS = {"agra": ["agra"], "kashi": ["kashi", "kasi", "varanasi"], "triveni": ["triveni", "trivei"]}
+_PROJECTS = {"agra": ["agra"], "kashi": ["kashi", "kasi", "varanasi"],
+             "triveni": ["triveni", "trivei", "prayagraj", "mirzapur"]}
 _OEMS = {"aew": ["aew"], "cap": ["cap"], "hpl": ["hpl"], "seipl": ["seipl"]}
 _CATEGORIES = {"CONSUMER": ["consumer meter", "consumer meters", "consumer only", "consumers only"],
                "DT": ["dtr", "dt meter", "dt meters", "transformer"],
@@ -331,6 +332,133 @@ def _om_problems(question: str, low: str, asked: str | None = None) -> list[str]
     return problems
 
 
+_MAPPING_TABLES = ("mapping_audit_summary", "mapping_audit_feeder", "mapping_audit", "mapping_audit_candidates",
+                   "mapping_audit_evidence")
+_MONTHS = {m: i for i, m in enumerate(("january", "february", "march", "april", "may", "june", "july", "august",
+                                       "september", "october", "november", "december"), 1)}
+
+
+def _mapping_problems(question: str, sql_texts: list[str]) -> list[str]:
+    """Consumer-to-feeder mapping audit (the dashboard's mapping_audit / _feeder / _summary tables)."""
+    problems: list[str] = []
+    for s in sql_texts:
+        low = (s or "").lower()
+        if not any(f"hes_gold.{t}" in low or re.search(rf"\b{t}\b", low) for t in _MAPPING_TABLES):
+            continue
+        # One full copy per month: without a data_date pin, June + July + August are added together (3x).
+        month_wise = re.search(r"\b(month[- ]?wise|monthly|trend|change|over time|each month|june to|from june)\b",
+                               question, re.I)
+        if "data_date" not in low and not month_wise:
+            problems.append("the mapping audit tables hold one full copy per month: pin data_date = (SELECT "
+                            "MAX(data_date) FROM hes_gold.mapping_audit_summary) for the latest month, or the "
+                            "asked month (DATE '2026-07-01') -- never add months together")
+        named = [m for m in _MONTHS if re.search(rf"\b{m}\b", question, re.I)]
+        if len(named) == 1 and not month_wise and f"-{_MONTHS[named[0]]:02d}-01" not in low:
+            problems.append(f"the question names {named[0].title()}: data_date = DATE '2026-{_MONTHS[named[0]]:02d}-01' "
+                            "(the audit month), not the latest month")
+        # Feeder names carry their code ('METHAPAR_41638210383MET'): an exact match finds nothing.
+        if re.search(r"\bfeeder_name\s*=\s*'", low):
+            problems.append("feeder_name holds the name plus its code ('METHAPAR_41638210383MET'): match with "
+                            "UPPER(feeder_name) LIKE '%METHAPAR%' and list one row per feeder_code")
+        # Athena rejects ORDER BY GROUPING(x) when a SELECT alias is also named x. Live 27 Oct: 'auto indexing
+        # concluded percentage zone wise in Kashi' failed with 'Invalid reference to output of SELECT clause'.
+        for col in set(re.findall(r"grouping\s*\(\s*(\w+)\s*\)", low)):
+            if re.search(rf"grouping\s*\(\s*{col}\s*\)[^,]*?\bend\s+as\s+{col}\b", low):
+                problems.append(f"Athena: the ROLLUP label must not be named {col} (alias it {col}_name) -- an alias "
+                                f"with the grouped column's name breaks GROUPING({col}) in ORDER BY")
+        # A named project must filter: live 27 Oct 'concluded % zone wise in Kashi' labelled zones Kashi / Other in
+        # a CASE and returned every zone.
+        for proj, zones in (("agra", "'agra'"), ("kashi", "'azamgarh'"), ("triveni", "'mirzapur'")):
+            if (re.search(rf"\b{proj}\b", question, re.I) and not _COMPARE_RE.search(question.lower())
+                    and not re.search(rf"(?:where|and)\s+(?:upper\(\s*(?:\w+\.)?zone\s*\)\s+in\s*\([^)]*{zones}"
+                                      rf"|lower\(\s*(?:\w+\.)?cluster\s*\)\s*(?:=|in\s*\()\s*'{proj}'"
+                                      rf"|(?:\w+\.)?cluster\s*=\s*'{proj}'|\w*proj\w*\s*=\s*'{proj}')", low)):
+                problems.append(f"the question is about {proj.title()} only: filter it in WHERE -- LOWER(cluster) = "
+                                f"'{proj}' on mapping_audit, or UPPER(zone) IN (its zones) on the summary / feeder tables")
+        # A feeder NAME in feeder_code finds nothing. Live 27 Oct: feeder_code = 'LATGHAT' -> '0 review and no data'.
+        if re.search(r"\bfeeder_code\s*=\s*'[a-z ]+'", low):
+            problems.append("feeder_code values look like '42601220265LAT': a feeder named in the question is "
+                            "UPPER(feeder_name) LIKE '%LATGHAT%'")
+        # Joining the feeder table needs the feeder key. Live 27 Oct: 'consumers to move to feeder BARDEEHA PTW'
+        # joined on data_date only and listed every reassigned meter.
+        if (re.search(r"\bmapping_audit\b(?!_)", low) and "mapping_audit_feeder" in low
+                # Only a JOIN of the feeder table itself -- a mapping_audit join next to a feeder_code IN
+                # (SELECT ... FROM mapping_audit_feeder) subquery (the proof pack) is fine.
+                and re.search(r"\bjoin\s+(?:hes_gold\.)?mapping_audit_feeder\b", low)
+                and not re.search(r"\bon\b[^;]*feeder_code\s*=|=\s*\w+\.feeder_code\b", low)):
+            problems.append("join mapping_audit_feeder on its feeder_code (= declared_feeder or auto_feeder) AND "
+                            "data_date -- a feeder named in the question: auto_feeder IN (SELECT feeder_code FROM "
+                            "hes_gold.mapping_audit_feeder WHERE ... UPPER(feeder_name) LIKE '%NAME%')")
+        ranking = re.search(r"\b(?:which|top|most|highest|lowest|largest|least|best|worst)\b", question, re.I)
+        if ranking and re.search(r"\border\s+by\b", low):
+            # Rankings skip the blank place / feeder row (the 51,102 consumers with no hierarchy). Live 27 Oct:
+            # 'which substation has the most consumers' answered with that blank row.
+            if re.search(r"\bgroup\s+by\b", low) and not re.search(r"\bgroup\s+by\b[^;]*\bfeeder_code\b", low):
+                # Only the finest grouped level is ranked (a substation row carries its zone).
+                col = next((c for c in ("sub_station", "sub_division", "division", "circle", "zone")
+                            if re.search(rf"\bgroup\s+by\b[^;]*\b{c}\b", low)), None)
+                if col and not re.search(rf"\b{col}\s+is\s+not\s+null", low):
+                    problems.append(f"a {col.replace('_', '')} ranking must skip the blank row of consumers with no "
+                                    f"hierarchy: add {col} IS NOT NULL")
+            # Only a ranking read FROM the feeder table; a LEFT JOIN that just adds feeder names (candidate
+            # feeders of one meter) has no no-feeder row to skip.
+            if (re.search(r"\bfrom\s+(?:hes_gold\.)?mapping_audit_feeder\b", low)
+                    and "feeder_code is not null" not in low and "like" not in low
+                    and re.search(r"\bfeeder", question, re.I)):
+                problems.append("a feeder ranking must skip the no-feeder row (51,103 consumers): add feeder_code IS NOT NULL")
+            # 'most / highest X' is a count unless a share is asked. Live 27 Oct: 'substation with the most pending
+            # verification' was ranked by share (a 2-consumer substation at 100%).
+            if (not re.search(r"\b(share|percent\w*|%|pct|rate|ratio|accuracy|confidence)\b", question, re.I)
+                    and re.search(r"\b(?:most|highest|largest)\b", question, re.I)
+                    and re.search(r"\border\s+by\s+\w*(?:_pct|share)\w*", low)):
+                problems.append("'most / highest' asks for a COUNT: order by the count (e.g. pending consumers), "
+                                "not by a share / percentage")
+        # Totals over the feeder table include the no-feeder row, like the dashboard. Live 27 Oct: 'total MI across
+        # all feeders' dropped it (4,111,811 instead of 4,162,914).
+        if ("mapping_audit_feeder" in low and "feeder_code is not null" in low and re.search(r"\bsum\s*\(", low)
+                and not re.search(r"\bgroup\s+by\b|\border\s+by\b|\blike\b|\bfeeder_code\s*(?:=|in)\b", low)):
+            problems.append("feeder-table totals include every row (the no-feeder row too), like the dashboard: drop "
+                            "feeder_code IS NOT NULL; feeders audited = COUNT(*) FILTER (WHERE mi > 0 OR "
+                            "correct_tagging > 0)")
+        # The evidence tables hold a row per consumer x candidate feeder (x 30-minute slot): ~15M / ~90-500M rows a
+        # month. Without a meter or feeder the query scans the month and times out.
+        for t in ("mapping_audit_candidates", "mapping_audit_evidence"):
+            if f"hes_gold.{t}" in low and not re.search(
+                    r"\bmeter_no\s*(?:=|in\b)|\b(?:declared|candidate)_feeder\s*(?:=|in\b)", low):
+                problems.append(f"hes_gold.{t} is huge (a row per consumer x candidate feeder): filter meter_no = 'X' or "
+                                "a feeder (declared_feeder / candidate_feeder = its feeder_code) as well as data_date")
+        # The outage log has one row per 30-minute slot: outages are its event_ids. Live 28 Oct: 'outage windows
+        # for meter AL1157377' counted slots per feeder and answered '5 outages, all dark' (17 outages, 12 dark).
+        if ("hes_gold.mapping_audit_evidence" in low and re.search(r"\bgroup\s+by\b", low)
+                and "event_id" not in low):
+            problems.append("mapping_audit_evidence rows are 30-minute slots: count outages as COUNT(DISTINCT "
+                            "event_id) and the ones the meter went dark in as COUNT(DISTINCT CASE WHEN consumer_dark "
+                            "THEN event_id END) -- never COUNT(*)")
+        # A per-feeder evidence summary must say which feeder is the meter's current one. Live 28 Oct: without it
+        # the answer called the recommended feeder SAHAWAR PTW 'the declared feeder'.
+        if (re.search(r"hes_gold\.mapping_audit_(?:evidence|candidates)\b", low)
+                and re.search(r"\bgroup\s+by\b[^;]*\bcandidate_feeder\b|\bselect\b[^;]*\bcandidate_feeder\b", low)
+                and "declared_feeder" not in low and "is_declared" not in low):
+            problems.append("show which candidate is the meter's current (index-based) feeder: is_declared on "
+                            "mapping_audit_candidates, or CASE WHEN candidate_feeder = MAX(declared_feeder) THEN "
+                            "'Yes' ELSE 'No' END AS is_current_feeder on mapping_audit_evidence")
+        # The summary and the meter table share only the month: joining them multiplies every row. Live 28 Oct:
+        # 'correction queue in Triveni' summed consumer_count over the join -> 508,125,282,840.
+        # (The month pin '(SELECT MAX(data_date) FROM hes_gold.mapping_audit_summary)' is not a use of the table.)
+        tables_part = re.sub(r"select\s+max\s*\(\s*data_date\s*\)(?:\s+as\s+\w+)?\s+from\s+(?:hes_gold\.)?mapping_audit_summary\b",
+                             "", low)
+        if ("mapping_audit_summary" in tables_part
+                and re.search(r"\b(?:from|join)\s+(?:hes_gold\.)?mapping_audit\b(?!_)", tables_part)):
+            problems.append("never JOIN mapping_audit_summary with mapping_audit (they share only the month: every "
+                            "row multiplies). Counts come from one table: SUM(consumer_count) on the summary, or "
+                            "COUNT(*) on mapping_audit (verdict = 'REASSIGN' AND LOWER(cluster) = 'triveni')")
+        # Reassign in and out are the same consumers counted at each end.
+        if re.search(r"\b(out|inc)\s*\)?\s*\+\s*(sum\s*\()?\s*(inc|out)\b", low):
+            problems.append("reassign out and reassign in count the SAME reassigned consumers at either end -- "
+                            "never add them; total reassignments = SUM(out) (= SUM(inc))")
+    return problems
+
+
 _CR_SCALE_RE = re.compile(r"/\s*(?:10{5,}(?:\.0)?|1e[5-9])\b|\*\s*1e-?[5-9]\b")
 _MONEY_RE = re.compile(r"\b(?:amount|crore|cr|rs|rupees?|money|invoiced amount|realised amount|realized amount)\b", re.I)
 
@@ -450,6 +578,9 @@ def check(question: str, sql_texts: list[str], columns: set[str] | None = None, 
     cols = {c.lower() for c in columns} if columns is not None else None
     problems: list[str] = []
     comparing = bool(_COMPARE_RE.search(question.lower()))
+    # The mapping audit's summary / feeder tables have no project column: a project is its zone list
+    # (UPPER(zone) IN ('AGRA', ...)), and every meter in them is a consumer meter.
+    mapping = any(m in low for m in _MAPPING_TABLES)
 
     for label, table, column in (("project", _PROJECTS, "project"), ("OEM", _OEMS, "oem")):
         # The user's own words count too: live 27 Oct the rewrite turned 'seipl' into 'SEPL' and the OEM filter
@@ -470,14 +601,14 @@ def check(question: str, sql_texts: list[str], columns: set[str] | None = None, 
             named = named | {p for d, ps in _DISCOM_PROJECTS.items() if f" {d} " in _words(question) for p in ps}
         leaked = _filtered(sql, list(table)) - named
         # A filter on every value of the dimension (IN ('agra','kashi','triveni')) is a breakdown, not a leak.
-        if leaked and len(leaked) < len(table) and not named:
+        if leaked and len(leaked) < len(table) and not named and not mapping:
             problems.append(f"the SQL filters on {label} {sorted(leaked)} that the question does not mention -- "
                             f"remove that filter (it was probably copied from an example)")
 
     has_category = cols is None or any("category" in c for c in cols)
     words = _words(f"{question} {asked or ''}")
     named_cats = set()
-    for cat, aliases in _CATEGORIES.items() if has_category else ():
+    for cat, aliases in _CATEGORIES.items() if has_category and not mapping else ():
         named = any(f" {a} " in _words(question) for a in aliases) or (cat == "CONSUMER" and _CONSUMER_RE.search(question))
         if named and cat.lower() not in low:
             problems.append(f"the question asks about {cat} meters but the SQL never filters/selects category '{cat}'")
@@ -640,6 +771,7 @@ def check(question: str, sql_texts: list[str], columns: set[str] | None = None, 
         if (re.search(rf"\b{word}s?[- ]?wise\b|\bby {word}s?\b|\b(each|every|per) {word}\b|\b{word}s? breakdown\b",
                       question, re.I)
                 and (cols is None or lvl in cols)
+                and not (mapping and lvl == "project" and re.search(r"\bgroup\s+by\b[^;]*\bproj", low))
                 and not _grouped_by(low, lvl) and len(re.findall(rf"\b{lvl}\s*=", low)) < 2
                 # rows of a pre-aggregated table listed per value (no aggregate needed)
                 and not (re.search(rf"^\s*select\b[^;]*?\b{lvl}\b[^;]*?\bfrom\b", low)
@@ -741,6 +873,7 @@ def check(question: str, sql_texts: list[str], columns: set[str] | None = None, 
 
     problems += _om_problems(question, low, asked)
     problems += _revenue_journey_problems(question, low, sql_texts, asked)
+    problems += _mapping_problems(question, sql_texts)
 
     # A meter-type exclusion nobody asked for. Live 26 Oct: 'invoice funnel zone wise in Triveni' added
     # meter_type <> 'OTHER-Consumer_meter' AND meter_type IS NOT NULL and lost 44 meters.

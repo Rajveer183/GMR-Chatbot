@@ -110,7 +110,7 @@ examples:
       FROM public.gold_meter_journey_stage_agg
       WHERE NOT is_replacement
 
-  - q: ["Give me a one-line status of the program", "program status", "quick update on the programme", "export today's headline stats", "CXO weekly summary", "Give me installed so far, SAT percentage and remaining stock in one go"]
+  - q: ["Give me a one-line status of the program", "program status", "quick update on the programme", "export today's headline stats", "Give me installed so far, SAT percentage and remaining stock in one go"]
     suggest: "Give me installed so far, SAT percentage and remaining stock in one go."
     note: "A one-line programme status (not the home-page headline strip -- 'dashboard headlines' is its own example with the strip's six tiles). Headline numbers come from the dashboard stats row (sat_percent = SAT / ELIGIBLE meters). Never compute SAT % from gold_mi_installation_* tables. Invoiced meters = total_lumpsum_invoice_done_meters; PMPM collected = total_pmpm_collection_done_meters."
     sql: |
@@ -141,7 +141,7 @@ examples:
              SUM(inventory_count - stock_consumed_count) - SUM(inventory_count - stock_consumed_count) FILTER (WHERE period_start <= CURRENT_DATE - 7)
       FROM public.gold_meter_inventory_event_day_agg
 
-  - q: ["Which three numbers should I worry about today?", "red flags today", "what should I worry about", "top risks", "watchlist"]
+  - q: ["Which three numbers should I worry about today?", "red flags today", "what should I worry about", "top risks", "watchlist", "Write a CXO weekly summary with three risks and three actions."]
     suggest: "Which three numbers should I worry about today?"
     note: "Each check: value vs threshold; severity = value / threshold - 1 (higher = worse). Show all, the answer names the top 3 by severity."
     sql: |
@@ -928,13 +928,13 @@ examples:
 
   - q: ["How many installed meters have not yet cleared SAT?", "how many meters are sat pending in Kashi", "meters pending SAT", "SAT pending meters", "feeder meters without sat", "meters without SAT", "how many meters not SAT done"]
     suggest: "How many installed meters have not yet cleared SAT?"
-    note: "installed_not_sat from public.gold_mi_sat_invoice_snapshot (= MI - SAT on the MI vs SAT card); eligible_pending_sat = the Non-SAT Ageing card's total (gold_non_sat_ageing_snapshot); a place / category goes on the outer query AND both subqueries (Kashi: LOWER(project) = 'kashi' three times); not_yet_due = the difference. Quote all three."
+    note: "installed_not_sat from public.gold_mi_sat_invoice_snapshot (= MI - SAT on the MI vs SAT card); eligible_pending_sat = the Non-SAT Ageing card's total (gold_non_sat_ageing_snapshot); a place / category goes on the outer query AND both subqueries (Kashi: LOWER(project) = 'kashi' three times); not_yet_due = the difference. The answer is installed_not_sat_total; the two 'of_which' columns are its parts (they add up to it) -- never add them to it, and never call the total 'eligible'."
     sql: |
       SELECT SUM(meter_count) AS total_mi,
-             SUM(meter_count) FILTER (WHERE sat_stage IS NULL) AS installed_not_sat,
-             (SELECT SUM(meter_count) FROM public.gold_non_sat_ageing_snapshot) AS eligible_pending_sat,
+             SUM(meter_count) FILTER (WHERE sat_stage IS NULL) AS installed_not_sat_total,
+             (SELECT SUM(meter_count) FROM public.gold_non_sat_ageing_snapshot) AS of_which_eligible_pending_sat,
              SUM(meter_count) FILTER (WHERE sat_stage IS NULL)
-               - (SELECT SUM(meter_count) FROM public.gold_non_sat_ageing_snapshot) AS not_yet_due
+               - (SELECT SUM(meter_count) FROM public.gold_non_sat_ageing_snapshot) AS of_which_not_yet_due
       FROM public.gold_mi_sat_invoice_snapshot
 
   - q: ["SAT pending less than 60 days", "non-SAT meters younger than 90 days", "meters waiting for SAT under 30 days"]
@@ -948,16 +948,19 @@ examples:
 
   - q: ["Which project is worst on pending SAT?", "which project has most meters pending SAT", "SAT pending project-wise"]
     suggest: "Which project is worst on pending SAT?"
-    note: "'Worst' = highest eligible pending as % of its installed meters (pending_pct_of_mi); also give the count, and say if a different project has the higher count."
+    note: "'Worst' = highest eligible pending as % of its installed meters (pending_pct_of_mi); eligible pending = the Non-SAT Ageing card. Also give the count, and say if a different project has the higher count."
     sql: |
-      SELECT CASE WHEN GROUPING(project) = 1 THEN 'Total' ELSE UPPER(project) END AS project,
-             SUM(meter_count) AS total_mi,
-             SUM(meter_count) FILTER (WHERE sat_stage IS NULL AND is_sat_eligible) AS eligible_pending_sat,
-             ROUND(SUM(meter_count) FILTER (WHERE sat_stage IS NULL AND is_sat_eligible) * 100.0 / NULLIF(SUM(meter_count), 0), 2) AS pending_pct_of_mi,
-             SUM(meter_count) FILTER (WHERE sat_stage IS NULL) AS installed_not_sat
-      FROM public.gold_mi_sat_invoice_snapshot
-      GROUP BY ROLLUP (project)
-      ORDER BY GROUPING(project) DESC, eligible_pending_sat DESC
+      SELECT CASE WHEN GROUPING(u.project) = 1 THEN 'Total' ELSE UPPER(u.project) END AS project,
+             SUM(u.mi) AS total_mi, SUM(u.pending) AS eligible_pending_sat,
+             ROUND(SUM(u.pending) * 100.0 / NULLIF(SUM(u.mi), 0), 2) AS pending_pct_of_mi,
+             SUM(u.not_sat) AS installed_not_sat
+      FROM (SELECT LOWER(project) AS project, meter_count AS mi, 0 AS pending,
+                   CASE WHEN sat_stage IS NULL THEN meter_count ELSE 0 END AS not_sat
+            FROM public.gold_mi_sat_invoice_snapshot
+            UNION ALL
+            SELECT LOWER(project), 0, meter_count, 0 FROM public.gold_non_sat_ageing_snapshot) u
+      GROUP BY ROLLUP (u.project)
+      ORDER BY GROUPING(u.project) DESC, pending_pct_of_mi DESC
 
   - q: ["SAT percentage against eligible MI for Agra", "eligible sat % in Kashi", "SAT % vs eligible MI", "how much of eligible MI has SAT done", "SAT progress against eligible meters"]
     note: "% SAT vs eligible MI = ALL SAT meters (sat_stage IS NOT NULL, eligible or not) / eligible MI -- the dashboard formula, can exceed 100%. Never SAT(eligible) / eligible. Show both percentages."
@@ -1060,7 +1063,7 @@ examples:
 
   - q: ["Where is the biggest drop-off in the supply-to-collection funnel?", "Build the full funnel from supply to collection with conversion at each stage", "funnel conversion"]
     suggest: "Build the full funnel from supply to collection with conversion at each stage."
-    note: "Conversion = step / previous step. Collected = meters of SAT batches with a lumpsum collection date (extra Athena query, joined by project + SAT batch in the answer)."
+    note: "Conversion = step / previous step. Keep ALL five steps in order (never ORDER BY the loss + LIMIT 1: the first step's NULL loss sorts first); the biggest_drop column marks the step with the largest loss -- name that one as the biggest drop-off."
     sql: |
       WITH f AS (
         SELECT (SELECT total_current_inventory_count FROM public.gold_dashboard_stats_snapshot WHERE singleton) AS supplied,
@@ -1068,14 +1071,17 @@ examples:
                SUM(meter_count) FILTER (WHERE sat_stage IS NOT NULL) AS sat_done,
                SUM(meter_count) FILTER (WHERE has_lumpsum_invoice) AS invoiced,
                (SELECT total_pmpm_collection_done_meters FROM public.gold_dashboard_stats_snapshot WHERE singleton) AS collected
-        FROM public.gold_mi_sat_invoice_snapshot)
-      SELECT step, meters, LAG(meters) OVER (ORDER BY ord) - meters AS lost_from_previous,
-             ROUND(meters * 100.0 / NULLIF(LAG(meters) OVER (ORDER BY ord), 0), 2) AS conversion_pct
-      FROM (SELECT 1 AS ord, '1 Supplied' AS step, supplied AS meters FROM f
-            UNION ALL SELECT 2, '2 Installed', installed FROM f
-            UNION ALL SELECT 3, '3 SAT done', sat_done FROM f
-            UNION ALL SELECT 4, '4 Invoiced (lumpsum)', invoiced FROM f
-            UNION ALL SELECT 5, '5 Collected (PMPM)', collected FROM f) s
+        FROM public.gold_mi_sat_invoice_snapshot),
+      s AS (SELECT ord, step, meters, LAG(meters) OVER (ORDER BY ord) - meters AS lost_from_previous,
+                   ROUND(meters * 100.0 / NULLIF(LAG(meters) OVER (ORDER BY ord), 0), 2) AS conversion_pct
+            FROM (SELECT 1 AS ord, '1 Supplied' AS step, supplied AS meters FROM f
+                  UNION ALL SELECT 2, '2 Installed', installed FROM f
+                  UNION ALL SELECT 3, '3 SAT done', sat_done FROM f
+                  UNION ALL SELECT 4, '4 Invoiced (lumpsum)', invoiced FROM f
+                  UNION ALL SELECT 5, '5 Collected (PMPM)', collected FROM f) u)
+      SELECT step, meters, lost_from_previous, conversion_pct,
+             CASE WHEN lost_from_previous = MAX(lost_from_previous) OVER () THEN 'Yes' ELSE '' END AS biggest_drop
+      FROM s
       ORDER BY ord
 
   - q: ["How much was supplied in Feb '26 and how did it compare with Jan '26?", "supply this month vs last month", "compare supplies of two months"]
@@ -1104,7 +1110,20 @@ examples:
       FROM m CROSS JOIN pk
       ORDER BY m.month
 
-  - q: ["monthly supply trend", "Is supply keeping pace with installation over the last three months?", "supply vs installation month-wise"]
+  - q: ["Is supply keeping pace with installation over the last three months?", "supply vs installs last 3 months", "are supplies keeping up with installations recently"]
+    suggest: "Is supply keeping pace with installation over the last three months?"
+    note: "'last three months' = rolling window ending yesterday (CURRENT_DATE - 1 - INTERVAL '3 months' .. CURRENT_DATE - 1) from the DAY table, one row per month (first and last months partial) plus Total. Keeping pace = supplied >= installed. Never LIMIT an ascending series (it keeps the OLDEST months)."
+    sql: |
+      SELECT CASE WHEN GROUPING(date_trunc('month', period_start)) = 1 THEN 'Total'
+                  ELSE to_char(date_trunc('month', period_start), 'Mon YYYY') END AS month,
+             SUM(inventory_count) AS supplied, SUM(installed_count) AS installed,
+             SUM(inventory_count) - SUM(installed_count) AS supplied_minus_installed
+      FROM public.gold_meter_inventory_event_day_agg
+      WHERE period_start BETWEEN (CURRENT_DATE - 1 - INTERVAL '3 months')::date AND CURRENT_DATE - 1
+      GROUP BY ROLLUP (date_trunc('month', period_start))
+      ORDER BY GROUPING(date_trunc('month', period_start)) DESC, date_trunc('month', period_start)
+
+  - q: ["monthly supply trend", "supply vs installation month-wise"]
     note: "A decline starts at the first month below the previous month that is followed by lower months; the peak is the month before. Keeping pace = supplied >= installed in each month."
     sql: |
       SELECT period_start AS month, SUM(inventory_count) AS supplied, SUM(installed_count) AS installed,
@@ -1140,9 +1159,23 @@ examples:
       GROUP BY GROUPING SETS ((), (project), (project, category))
       ORDER BY GROUPING(project) DESC, days_left NULLS LAST
 
+  - q: ["If installs continue at today's pace, when does stock run out, and what happens to SAT?", "stock run out and SAT impact", "what happens to SAT when stock runs out"]
+    note: "Postgres only. Pace = average daily new installs over the last 30 days ending yesterday; days left = remaining stock / pace. SAT impact: installs after the cutoff are not yet due; when stock runs out new installs stop, so the SAT pipeline is the eligible pending (Non-SAT card) plus not-yet-due meters."
+    sql: |
+      WITH p AS (SELECT SUM(meter_count) / 30.0 AS pace FROM public.gold_mi_installation_day_agg
+                 WHERE has_meter_serial AND progress_category IS NOT NULL AND NOT is_replacement
+                   AND period_start BETWEEN CURRENT_DATE - 30 AND CURRENT_DATE - 1),
+      s AS (SELECT SUM(inventory_count) - SUM(stock_consumed_count) AS stock FROM public.gold_meter_inventory_event_day_agg)
+      SELECT s.stock AS remaining_stock, ROUND(p.pace, 1) AS installs_per_day,
+             ROUND(s.stock / NULLIF(p.pace, 0)) AS days_left,
+             CURRENT_DATE + CAST(ROUND(s.stock / NULLIF(p.pace, 0)) AS int) AS runs_out_on,
+             (SELECT SUM(meter_count) FROM public.gold_non_sat_ageing_snapshot) AS eligible_pending_sat,
+             (SELECT SUM(meter_count) FROM public.gold_mi_sat_invoice_snapshot WHERE sat_stage IS NULL AND NOT is_sat_eligible) AS not_yet_due_for_sat
+      FROM s CROSS JOIN p
+
   - q: ["Which stores or sites have less than one week of stock?", "warehouse-wise days of stock left", "which warehouse will run out of stock first", "stock cover by warehouse", "kis godown mein ek hafte se kam stock hai", "warehouses with less than 15 days of stock"]
     suggest: "Which warehouses have less than one week of stock?"
-    note: "Store / site / godown = warehouse. One Athena query (Postgres has warehouse stock but no warehouse pace). Stock = latest inventory row per serial with no installed_ts and no installation row (matches the unused-stock card). Pace = meters installed a day from that warehouse (installed_ts), average of the last 6 months' daily rates (current month by days elapsed). 'Less than N days' = days_left < N (days_left kept to 1 decimal so the filter and the shown value agree); when none are below N, say none and name the lowest few with their days left."
+    note: "Store / site / godown = warehouse. One Athena query (Postgres has warehouse stock but no warehouse pace). Stock = latest inventory row per serial with no installed_ts and no installation row (matches the unused-stock card). Pace = meters installed a day from that warehouse (installed_ts), average of the last 6 months' daily rates (current month by days elapsed). 'Less than N days' = days_left < N (days_left kept to 1 decimal so the filter and the shown value agree); under_one_week marks the 7-day ask -- when every row says 'No', the answer is 'no warehouse has less than a week' and names the lowest few with their days left. Change the 7 for another N."
     sql: |
       WITH inv AS (
         SELECT UPPER(TRIM(meter_serial_number)) AS serial, COALESCE(NULLIF(TRIM(warehouse), ''), 'UNASSIGNED') AS warehouse,
@@ -1169,7 +1202,8 @@ examples:
       SELECT CASE WHEN GROUPING(wh) = 1 THEN 'TOTAL' ELSE wh END AS warehouse,
              SUM(stock) AS in_stock, ROUND(SUM(pace), 1) AS pace_per_day,
              ROUND(SUM(stock) / NULLIF(SUM(pace), 0), 1) AS days_left,
-             date_add('day', CAST(FLOOR(SUM(stock) / NULLIF(SUM(pace), 0)) AS integer), current_date) AS runs_out_on
+             date_add('day', CAST(FLOOR(SUM(stock) / NULLIF(SUM(pace), 0)) AS integer), current_date) AS runs_out_on,
+             CASE WHEN SUM(stock) / NULLIF(SUM(pace), 0) < 7 THEN 'Yes' ELSE 'No' END AS under_one_week
       FROM u
       GROUP BY ROLLUP (wh)
       ORDER BY GROUPING(wh) DESC, days_left NULLS LAST
@@ -1192,8 +1226,8 @@ examples:
       GROUP BY ROLLUP (category)
       ORDER BY GROUPING(category) DESC, category
 
-  - q: ["Supplied minus installed is about 1.68 lakh, but stock shows 1.21 lakh. Where are the other meters?", "reconcile supplied minus installed with stock", "why doesn't stock match supplied minus installed"]
-    note: "stock = supplied - MI installs - replacement installs + installs with no stock record (scrapped stock would subtract)."
+  - q: ["Supplied minus installed is about 1.68 lakh, but stock shows 1.21 lakh. Where are the other ≈47,500 meters?", "Supplied minus installed is about 1.68 lakh, but stock shows 1.21 lakh. Where are the other meters?", "reconcile supplied minus installed with stock", "why doesn't stock match supplied minus installed"]
+    note: "Copy this SQL as is. stock = supplied - MI installs - replacement installs + installs with no stock record (scrapped stock would subtract). The user's lakh figures are from an older refresh: answer with today's figures -- the gap is the replacement installs."
     sql: |
       SELECT inv.supplied, mi.mi_installed, inv.supplied - mi.mi_installed AS supplied_minus_installed, inv.stock AS remaining_stock,
              inv.supplied - mi.mi_installed - inv.stock AS gap,
@@ -1419,19 +1453,29 @@ examples:
       GROUP BY ROLLUP(project)
       ORDER BY GROUPING(project) DESC, productivity_per_tech_day DESC
 
-  - q: ["What is the MI productivity per team by project for the last 30 days?", "triveni ki productivity", "productivity project-wise"]
+  - q: ["What is the MI productivity per team by project for the last 30 days?", "productivity project-wise last 30 days", "MI productivity by project for the last N days"]
     suggest: "What is the MI productivity per team by project for the last 30 days?"
-    note: "No period given = the dashboard's default window, CURRENT_DATE - 31 .. CURRENT_DATE - 1 (31 days ending yesterday); say so. category = 'ALL' is the all-category roll-up row -- never sum category <> 'ALL' (double counts)."
+    note: "'last 30 days' = 30 full days ending yesterday: CURRENT_DATE - 30 .. CURRENT_DATE - 1 (asked 27 Oct = 27 Sep .. 26 Oct, as the dashboard). Only NO period at all = the card default CURRENT_DATE - 31 .. CURRENT_DATE - 1. category = 'ALL' is the all-category roll-up row -- never sum category <> 'ALL' (double counts)."
     sql: |
       SELECT CASE WHEN GROUPING(project) = 1 THEN 'Total' ELSE UPPER(project) END AS project,
              ROUND(SUM(installation_count)::numeric / NULLIF(SUM(technician_day_count), 0), 2) AS productivity_per_tech_day,
              COUNT(DISTINCT technician_name) AS active_technicians,
-             ROUND(SUM(technician_day_count) / 31.0, 1) AS technicians_per_day,
+             COUNT(DISTINCT period_start) AS active_days,
              SUM(installation_count) AS installations
       FROM public.gold_mi_technician_productivity_day_agg
-      WHERE category = 'ALL' AND period_start BETWEEN CURRENT_DATE - 31 AND CURRENT_DATE - 1
+      WHERE category = 'ALL' AND period_start BETWEEN CURRENT_DATE - 30 AND CURRENT_DATE - 1
       GROUP BY ROLLUP (project)
       ORDER BY GROUPING(project) DESC, productivity_per_tech_day DESC
+
+  - q: ["triveni ki productivity?", "productivity of a project", "Triveni productivity", "productivity project-wise"]
+    note: "No period = the card default window CURRENT_DATE - 31 .. CURRENT_DATE - 1; say the window. Give the card tiles: installations, active technicians, active days, productivity."
+    sql: |
+      SELECT SUM(installation_count) AS total_installations,
+             COUNT(DISTINCT technician_name) AS active_technicians,
+             COUNT(DISTINCT period_start) AS active_days,
+             ROUND(SUM(installation_count)::numeric / NULLIF(SUM(technician_day_count), 0), 2) AS productivity_per_tech_day
+      FROM public.gold_mi_technician_productivity_day_agg
+      WHERE category = 'ALL' AND LOWER(project) = 'triveni' AND period_start BETWEEN CURRENT_DATE - 31 AND CURRENT_DATE - 1
 
   - q: ["MI productivity zone wise in July 2026", "productivity circle wise in a month", "zone wise productivity per technician per day"]
     note: "MI-Productivity per team (KPI 2) by place: the technician table, category = 'ALL', one row per place plus the Total row (GROUP BY ROLLUP) -- the card's overall figure. Rows with no place name are left out, as on the card."
@@ -1533,11 +1577,29 @@ examples:
       WHERE category = 'ALL' AND LOWER(project) = 'triveni'
         AND period_start BETWEEN CURRENT_DATE - 30 AND CURRENT_DATE - 1
 
-  - q: ["Which zone or circle has the lowest productivity, and why?", "least productive zone and reason", "Which technician is responsible for Triveni's low productivity?"]
-    suggest: "Which zone or circle has the lowest productivity, and why?"
-    note: "Last 30 complete days; drop units with < 2% of technician-days; low-output days = technician-days with <= 1 install. Never blame a person. Totals come from the category = 'ALL' roll-up rows, the DT/feeder share from the per-category roll-ups (meter_type = 'ALL') -- each measure FILTERs to its own level."
+  - q: ["Which technician is responsible for Triveni's low productivity?", "who is to blame for low productivity", "which technicians pull productivity down in a project"]
+    note: "Never blame one person: productivity is a team measure. Show the project's productivity, how many technicians (>= 5 active days, last 30 days) average under 2 installs a day, and the lowest few as 'may need support'."
     sql: |
-      SELECT UPPER(zone) AS zone, UPPER(project) AS project,
+      WITH t AS (SELECT technician_name, SUM(installation_count) AS installs, SUM(technician_day_count) AS tech_days,
+                        COUNT(DISTINCT period_start) AS active_days
+                 FROM public.gold_mi_technician_productivity_day_agg
+                 WHERE category = 'ALL' AND LOWER(project) = 'triveni' AND period_start BETWEEN CURRENT_DATE - 30 AND CURRENT_DATE - 1
+                 GROUP BY technician_name)
+      SELECT (SELECT ROUND(SUM(installs)::numeric / NULLIF(SUM(tech_days), 0), 2) FROM t) AS project_productivity,
+             (SELECT COUNT(*) FROM t WHERE active_days >= 5) AS technicians_5_plus_days,
+             (SELECT COUNT(*) FROM t WHERE active_days >= 5 AND installs < 2 * tech_days) AS below_2_per_day,
+             technician_name AS technician, ROUND(installs::numeric / NULLIF(tech_days, 0), 2) AS productivity, active_days
+      FROM t
+      WHERE active_days >= 5
+      ORDER BY productivity, installs
+      LIMIT 5
+
+  - q: ["Which zone or circle has the lowest productivity, and why?", "least productive zone and reason"]
+    suggest: "Which zone or circle has the lowest productivity, and why?"
+    note: "Last 30 complete days; drop units with < 2% of technician-days; low-output days = technician-days with <= 1 install. Never blame a person. Totals come from the category = 'ALL' roll-up rows, the DT/feeder share from the per-category roll-ups (meter_type = 'ALL') -- each measure FILTERs to its own level. The Total row (all zones) is the yardstick: 'why' = the lowest zone's measures that are worse than Total's (more low-output days, fewer days per technician, a different DT/feeder share)."
+    sql: |
+      SELECT CASE WHEN GROUPING(zone) = 1 THEN 'Total' ELSE UPPER(zone) END AS zone,
+             CASE WHEN GROUPING(zone) = 1 THEN 'ALL' ELSE UPPER(MAX(project)) END AS project,
              ROUND(SUM(installation_count) FILTER (WHERE category = 'ALL')::numeric
                    / NULLIF(SUM(technician_day_count) FILTER (WHERE category = 'ALL'), 0), 2) AS productivity,
              SUM(technician_day_count) FILTER (WHERE category = 'ALL') AS technician_days,
@@ -1550,10 +1612,11 @@ examples:
       FROM public.gold_mi_technician_productivity_day_agg
       WHERE (category = 'ALL' OR meter_type = 'ALL')
         AND period_start BETWEEN CURRENT_DATE - 30 AND CURRENT_DATE - 1 AND zone IS NOT NULL
-      GROUP BY zone, project
-      HAVING SUM(technician_day_count) >= 0.02 * (SELECT SUM(technician_day_count) FROM public.gold_mi_technician_productivity_day_agg
+      GROUP BY ROLLUP (zone)
+      HAVING GROUPING(zone) = 1
+          OR SUM(technician_day_count) >= 0.02 * (SELECT SUM(technician_day_count) FROM public.gold_mi_technician_productivity_day_agg
                                                  WHERE category = 'ALL' AND period_start BETWEEN CURRENT_DATE - 30 AND CURRENT_DATE - 1)
-      ORDER BY productivity
+      ORDER BY GROUPING(zone) DESC, productivity
 
   - q: ["Show productivity for Consumer meters only in Kashi for last week.", "consumer productivity kashi last 7 days"]
     sql: |
@@ -1704,7 +1767,7 @@ examples:
              COALESCE(SUM(meter_count) FILTER (WHERE LOWER(project) = 'kashi'), 0) AS kashi,
              COALESCE(SUM(meter_count) FILTER (WHERE LOWER(project) = 'triveni'), 0) AS triveni
       FROM public.gold_mi_sat_invoice_snapshot
-      WHERE sat_stage >= 9
+      WHERE sat_stage IS NOT NULL
       GROUP BY sat_stage
       ORDER BY sat_stage
     extra:
@@ -1714,6 +1777,16 @@ examples:
           FROM gmr_wfm_silver.sat_milestones
           WHERE CAST(regexp_extract(sat_number, '(\d+)') AS INTEGER) >= 9
           ORDER BY project, CAST(regexp_extract(sat_number, '(\d+)') AS INTEGER)
+
+  - q: ["What do the two percentages above the Agra bars mean?", "percentages on the MI vs SAT chart bars", "labels above the SAT bars"]
+    note: "On the MI vs SAT-Progress chart each project has a Total MI bar labelled % SAT VS MI (Total SAT / Total MI) and an Eligible MI for SAT bar labelled % SAT VS Eligible MI (Total SAT / Eligible MI). Explain both with the project's figures."
+    sql: |
+      SELECT SUM(meter_count) AS total_mi, SUM(meter_count) FILTER (WHERE is_sat_eligible) AS eligible_mi,
+             SUM(meter_count) FILTER (WHERE sat_stage IS NOT NULL) AS total_sat,
+             ROUND(SUM(meter_count) FILTER (WHERE sat_stage IS NOT NULL) * 100.0 / NULLIF(SUM(meter_count), 0), 2) AS pct_sat_vs_mi,
+             ROUND(SUM(meter_count) FILTER (WHERE sat_stage IS NOT NULL) * 100.0 / NULLIF(SUM(meter_count) FILTER (WHERE is_sat_eligible), 0), 2) AS pct_sat_vs_eligible_mi
+      FROM public.gold_mi_sat_invoice_snapshot
+      WHERE LOWER(project) = 'agra'
 
   - q: ["Split SAT 10 by DT, Consumer and Feeder.", "SAT batch by category"]
     sql: |
@@ -1726,31 +1799,51 @@ examples:
 
   - q: ["At the current SAT pace, when will we reach 98% of eligible MI?", "SAT ETA", "when will SAT reach target"]
     suggest: "At the current SAT pace, when will we reach 98% of eligible MI?"
-    note: "Main query: needed meters per project. Extra (Athena): batch dates. Pace = meters in batches with sat_date in the last 182 days x 30.44 / 182 per month (batch meters = main/extra join on project + SAT-n). ETA = today + needed / pace months."
+    note: "Pace = SAT batches: main query (Postgres) gives each project's meters still needed, its average meters per batch over its last 3 non-empty batches and batches_needed; the extra query (Athena) gives each project's last batch date and average days between its last 4 batches. ETA per project = the extra query's eta_after_<batches_needed>_batch(es) date (today + N x cadence; newer batches can still be undated, so never count from last_batch_date) -- copy that date; say 'about N more batch(es), one every ~D days, so around <that date>'. Never state an ETA without both results."
     sql: |
-      SELECT CASE WHEN GROUPING(project) = 1 THEN 'Total' ELSE UPPER(project) END AS project,
-             SUM(meter_count) FILTER (WHERE is_sat_eligible) AS eligible_mi,
-             SUM(meter_count) FILTER (WHERE sat_stage IS NOT NULL) AS total_sat,
-             ROUND(SUM(meter_count) FILTER (WHERE sat_stage IS NOT NULL) * 100.0 / NULLIF(SUM(meter_count) FILTER (WHERE is_sat_eligible), 0), 2) AS sat_pct_of_eligible,
-             GREATEST(CEIL(0.98 * SUM(meter_count) FILTER (WHERE is_sat_eligible)) - SUM(meter_count) FILTER (WHERE sat_stage IS NOT NULL), 0) AS more_needed,
-             SUM(meter_count) FILTER (WHERE sat_stage IS NOT NULL AND sat_stage >= 9) AS sat_meters_in_batches_9_plus
-      FROM public.gold_mi_sat_invoice_snapshot
-      GROUP BY ROLLUP (project)
-      ORDER BY GROUPING(project) DESC, project
+      WITH b AS (SELECT LOWER(project) AS project, sat_stage, SUM(meter_count) AS meters,
+                        ROW_NUMBER() OVER (PARTITION BY LOWER(project) ORDER BY sat_stage DESC) AS rn
+                 FROM public.gold_mi_sat_invoice_snapshot
+                 WHERE sat_stage IS NOT NULL
+                 GROUP BY 1, 2
+                 HAVING SUM(meter_count) > 0),
+      pace AS (SELECT project, ROUND(AVG(meters)) AS avg_meters_per_batch FROM b WHERE rn <= 3 GROUP BY project),
+      need AS (SELECT LOWER(project) AS project,
+                      SUM(meter_count) FILTER (WHERE is_sat_eligible) AS eligible_mi,
+                      SUM(meter_count) FILTER (WHERE sat_stage IS NOT NULL) AS total_sat,
+                      GREATEST(CEIL(0.98 * SUM(meter_count) FILTER (WHERE is_sat_eligible))
+                               - SUM(meter_count) FILTER (WHERE sat_stage IS NOT NULL), 0) AS more_needed
+               FROM public.gold_mi_sat_invoice_snapshot GROUP BY 1)
+      SELECT UPPER(need.project) AS project, need.eligible_mi, need.total_sat,
+             ROUND(need.total_sat * 100.0 / NULLIF(need.eligible_mi, 0), 2) AS sat_pct_of_eligible,
+             need.more_needed, pace.avg_meters_per_batch,
+             CEIL(need.more_needed / NULLIF(pace.avg_meters_per_batch, 0)) AS batches_needed
+      FROM need JOIN pace ON pace.project = need.project
+      ORDER BY need.project
     extra:
-      - purpose: "SAT batches dated in the last 182 days, with each batch's meters (pace)"
+      - purpose: "Each project's last SAT batch date and average days between its last 4 batches (cadence)"
         sql: |
-          SELECT LOWER(project) AS project, sat_number, sat_date
-          FROM gmr_wfm_silver.sat_milestones
-          WHERE sat_date >= date_add('day', -182, current_date)
-          ORDER BY project, sat_date
+          WITH d AS (SELECT LOWER(project) AS project, CAST(sat_date AS date) AS sat_date,
+                            ROW_NUMBER() OVER (PARTITION BY LOWER(project) ORDER BY sat_date DESC) AS rn
+                     FROM gmr_wfm_silver.sat_milestones
+                     WHERE sat_date IS NOT NULL)
+          SELECT project, MAX(sat_date) AS last_batch_date,
+                 ROUND(date_diff('day', MIN(sat_date), MAX(sat_date)) / 3.0) AS avg_days_between_batches,
+                 date_add('day', CAST(ROUND(date_diff('day', MIN(sat_date), MAX(sat_date)) / 3.0) AS integer), current_date) AS eta_after_1_batch,
+                 date_add('day', CAST(2 * ROUND(date_diff('day', MIN(sat_date), MAX(sat_date)) / 3.0) AS integer), current_date) AS eta_after_2_batches,
+                 date_add('day', CAST(3 * ROUND(date_diff('day', MIN(sat_date), MAX(sat_date)) / 3.0) AS integer), current_date) AS eta_after_3_batches
+          FROM d
+          WHERE rn <= 4
+          GROUP BY project
+          ORDER BY project
 
-  - q: ["How many eligible meters in Kashi are still to pass SAT?", "Agra mein SAT kitna pending hai", "eligible pending SAT in a project"]
+  - q: ["How many eligible meters in Kashi are still to pass SAT?", "Agra mein SAT kitna pending hai", "eligible pending SAT in a project", "How many meters are pending SAT?"]
     suggest: "How many eligible meters in Kashi are still to pass SAT?"
+    note: "Eligible pending SAT = the Non-SAT Ageing card (gold_non_sat_ageing_snapshot total; the MI vs SAT flags differ by a few meters). Not yet due = installed after the cutoff, not pending. Lead with the eligible pending figure."
     sql: |
-      SELECT SUM(meter_count) FILTER (WHERE is_sat_eligible) AS eligible_mi,
-             SUM(meter_count) FILTER (WHERE is_sat_eligible AND sat_stage IS NULL) AS eligible_pending_sat,
-             SUM(meter_count) FILTER (WHERE sat_stage IS NULL) AS all_installed_not_sat
+      SELECT (SELECT SUM(meter_count) FROM public.gold_non_sat_ageing_snapshot WHERE LOWER(project) = 'kashi') AS eligible_pending_sat,
+             SUM(meter_count) FILTER (WHERE is_sat_eligible) AS eligible_mi,
+             SUM(meter_count) FILTER (WHERE sat_stage IS NULL AND NOT is_sat_eligible) AS not_yet_due
       FROM public.gold_mi_sat_invoice_snapshot
       WHERE LOWER(project) = 'kashi'
 
@@ -1774,6 +1867,16 @@ examples:
       WHERE age_key = 'age_120_plus'
       GROUP BY ROLLUP (category)
       ORDER BY GROUPING(category) DESC, non_sat_120_plus_days DESC
+
+  - q: ["Which project has the most non-SAT meters?", "Which project has the most meters pending SAT?", "non-SAT meters project wise"]
+    note: "Eligible pending per project = the Non-SAT Ageing card (gold_non_sat_ageing_snapshot), with Total; worst = most pending."
+    sql: |
+      SELECT CASE WHEN GROUPING(project) = 1 THEN 'Total' ELSE UPPER(project) END AS project,
+             SUM(meter_count) AS eligible_pending_sat,
+             COALESCE(SUM(meter_count) FILTER (WHERE age_key = 'age_120_plus'), 0) AS pending_120_plus_days
+      FROM public.gold_non_sat_ageing_snapshot
+      GROUP BY ROLLUP (project)
+      ORDER BY GROUPING(project) DESC, eligible_pending_sat DESC
 
   - q: ["List the ten divisions with the oldest non-SAT meters.", "divisions with most old non-SAT meters"]
     suggest: "List the ten divisions with the oldest non-SAT meters."
@@ -1805,8 +1908,8 @@ examples:
       FROM ns JOIN inv ON inv.project = ns.project JOIN r ON LOWER(r.project) = ns.project AND r.rn = 1
       ORDER BY lumpsum_blocked_cr DESC
 
-  - q: ["The project totals add up to 2.27L but the age buckets add to 3.01L. Why?", "why do non-SAT totals not match", "non-SAT project totals vs age buckets"]
-    note: "Show every scope side by side so the gap is explained: non-SAT (eligible pending) by project and by band from the ageing snapshot, and all installed-not-SAT incl. not-yet-due from the SAT snapshot. Quote today's figures; the user's numbers may come from an older refresh or a filtered dashboard view."
+  - q: ["The project totals add up to ≈2.27L but the age buckets add to ≈3.01L. Why?", "The project totals add up to 2.27L but the age buckets add to 3.01L. Why?", "project totals and age buckets of non-SAT do not match", "why do non-SAT totals not match", "non-SAT project totals vs age buckets"]
+    note: "A data question: always run this query (never an explanation-only reply). Show every scope side by side so the gap is explained: non-SAT (eligible pending) by project and by band from the ageing snapshot, and all installed-not-SAT incl. not-yet-due from the SAT snapshot. Quote today's figures; the user's numbers may come from an older refresh or a filtered dashboard view."
     sql: |
       SELECT 'Non-SAT ageing card: sum of project totals' AS measure, SUM(meter_count) AS meters FROM public.gold_non_sat_ageing_snapshot
       UNION ALL SELECT 'Non-SAT ageing card: sum of age buckets', SUM(meter_count) FROM public.gold_non_sat_ageing_snapshot WHERE age_key IS NOT NULL
@@ -1817,7 +1920,7 @@ examples:
 
   - q: ["Why do meters usually get stuck in non-SAT?", "stuck rate by category", "Why are the 0 to 90 day buckets zero when we installed meters yesterday?", "project totals vs age buckets don't match"]
     suggest: "Why do meters usually get stuck in non-SAT?"
-    note: "Non-SAT counts only ELIGIBLE meters (installed on/before the project cutoff in sat_eligibility_config); installs after the cutoff are 'not yet due' and not aged, so young bands are empty. No reason field exists: compare stuck rates by category."
+    note: "Non-SAT counts only ELIGIBLE meters (installed on/before the project cutoff in sat_eligibility_config); installs after the cutoff are 'not yet due' and not aged, so young bands are empty. 'Stuck' = eligible meters with no SAT batch (eligible_not_sat) -- not-yet-due meters are NOT stuck and the cutoff is NOT why meters get stuck. No reason field exists: say so, and compare stuck rates by category."
     sql: |
       SELECT CASE WHEN GROUPING(category) = 1 THEN 'Total' WHEN category = 'DT' THEN 'DTR' ELSE category END AS category,
              SUM(meter_count) FILTER (WHERE is_sat_eligible) AS eligible_mi,
@@ -1844,7 +1947,7 @@ examples:
       FROM public.gold_meter_defect_event_day_agg
 
   - q: ["Which OEM has the highest defect rate?", "defect rate OEM-wise", "Which OEM has the most defective meters?", "Sabse zyada kharab meter kis OEM ke hain", "HPL has only 59 defective meters. How can it have the highest defect rate?"]
-    note: "Show both defective count and rate with the installed base; a high rate on a tiny base is noise."
+    note: "Show both defective count and rate with the installed base; a high rate on a tiny base is noise. Defect rate counts ONLY Meter Faulty (not burnt / others): rate = meter_faulty / installed -- HPL's rate uses its faulty meters, not all its defective ones."
     sql: |
       SELECT u.oem, SUM(u.defects) AS defective, SUM(u.faulty) AS meter_faulty, SUM(u.burnt) AS meter_burnt,
              SUM(u.installed) AS installed,
@@ -1971,7 +2074,18 @@ examples:
       GROUP BY ROLLUP (u.oem)
       ORDER BY GROUPING(u.oem) DESC, defect_rate_pct DESC
 
-  - q: ["Show the burnt vs faulty split for AEW.", "burnt meters by OEM", "Which filter shows only burnt meters for SEIPL in Triveni?"]
+  - q: ["How many burnt meters by OEM?", "burnt meters by OEM", "OEM-wise burnt meters", "which OEM has the most burnt meters"]
+    note: "Burnt meters per OEM (all time unless a period is named) plus Total -- a count of Meter Burnt, not a defect rate. A follow-up 'Which OEM?' after a burnt-meter count means this."
+    sql: |
+      SELECT CASE WHEN GROUPING(UPPER(COALESCE(NULLIF(TRIM(oem), ''), 'Unknown'))) = 1 THEN 'Total'
+                  ELSE UPPER(COALESCE(NULLIF(TRIM(oem), ''), 'Unknown')) END AS oem,
+             SUM(defect_count) AS meter_burnt
+      FROM public.gold_meter_defect_event_day_agg
+      WHERE defective_type = 'Meter Burnt'
+      GROUP BY ROLLUP (UPPER(COALESCE(NULLIF(TRIM(oem), ''), 'Unknown')))
+      ORDER BY GROUPING(UPPER(COALESCE(NULLIF(TRIM(oem), ''), 'Unknown'))) DESC, meter_burnt DESC
+
+  - q: ["Show the burnt vs faulty split for AEW.", "burnt vs faulty for one OEM", "Which filter shows only burnt meters for SEIPL in Triveni?"]
     suggest: "Show the burnt vs faulty split for AEW."
     sql: |
       SELECT CASE WHEN GROUPING(defective_type) = 1 THEN 'Total' ELSE defective_type END AS defective_type,
@@ -2037,44 +2151,396 @@ examples:
       GROUP BY ROLLUP (UPPER(COALESCE(NULLIF(TRIM(oem), ''), 'Unknown')))
       ORDER BY GROUPING(UPPER(COALESCE(NULLIF(TRIM(oem), ''), 'Unknown'))) DESC, meter_burnt DESC
 
-  - q: ["How many consumer meters have been audited for feeder tagging?", "What share of auto-indexing is complete?", "How many consumers are ready to be re-tagged now?", "How many consumers need re-tagging?", "How far are we from the pending-verification target?"]
+  - q: ["Mapping audit key metrics", "How many consumer meters have been audited for feeder tagging?", "What share of auto-indexing is complete?", "How far are we from the pending-verification target?", "What is the mapping accuracy?", "auto indexing concluded and pending verification", "confirmed reassigned review and no data counts", "What is the system-index accuracy?", "What is auto-indexing concluded and pending verification?", "What is the auto-indexing concluded number and percentage?"]
     suggest: "What share of auto-indexing is complete?"
-    note: "No project filter unless the question names one. Grand total row = every level IS NULL; read its stored columns, NEVER SUM the cube (rows at every level would be counted many times). Concluded = confirmed + reassign; pending verification = review + no data (target 0) -- keep all four parts in the result so the answer can show the split."
+    note: "The Mapping Audit card for the latest month: meters audited, the four verdicts, concluded (= Mapping Accuracy, target 95%), pending verification (target < 5%), system-index accuracy, reassign %, substations and feeders. Read the month from the data and say it. COALESCE every FILTER sum (Athena returns NULL for none)."
     sql: |
-      SELECT meters_audited, confirmed_number, reassign_number, review_number, no_data_number,
-             auto_indexing_concluded_number, auto_indexing_concluded_pct, pending_verification_number, pending_verification_pct
-      FROM hes_gold.hierarchy_summary_autoindexing
-      WHERE project IS NULL AND discom IS NULL AND zone IS NULL AND circle IS NULL AND division IS NULL
+      SELECT s.meters_audited, s.confirmed, s.reassigned, s.review, s.no_data,
+             s.confirmed + s.reassigned AS concluded, s.review + s.no_data AS pending_verification,
+             ROUND((s.confirmed + s.reassigned) * 100.0 / s.meters_audited, 1) AS mapping_accuracy_pct,
+             ROUND((s.review + s.no_data) * 100.0 / s.meters_audited, 1) AS pending_verification_pct,
+             ROUND(s.confirmed * 100.0 / NULLIF(s.confirmed + s.reassigned, 0), 1) AS system_index_accuracy_pct,
+             ROUND(s.reassigned * 100.0 / s.meters_audited, 1) AS reassign_pct,
+             s.substations, f.feeders, s.audit_month
+      FROM (SELECT SUM(consumer_count) AS meters_audited,
+                   COALESCE(SUM(consumer_count) FILTER (WHERE verdict = 'CONFIRMED'), 0) AS confirmed,
+                   COALESCE(SUM(consumer_count) FILTER (WHERE verdict = 'REASSIGN'), 0) AS reassigned,
+                   COALESCE(SUM(consumer_count) FILTER (WHERE verdict = 'REVIEW'), 0) AS review,
+                   COALESCE(SUM(consumer_count) FILTER (WHERE verdict = 'NO DATA'), 0) AS no_data,
+                   COUNT(DISTINCT sub_station) AS substations, MAX(data_date) AS audit_month
+            FROM hes_gold.mapping_audit_summary
+            WHERE data_date = (SELECT MAX(data_date) FROM hes_gold.mapping_audit_summary)) s
+      CROSS JOIN (SELECT COUNT(*) FILTER (WHERE mi > 0 OR correct_tagging > 0) AS feeders
+                  FROM hes_gold.mapping_audit_feeder
+                  WHERE data_date = (SELECT MAX(data_date) FROM hes_gold.mapping_audit_summary)) f
 
-  - q: ["In which division is re-tagging highest?", "reassign by division", "divisions with most consumers to re-tag"]
+  - q: ["How many consumers are ready to be re-tagged now?", "How many consumers need re-tagging?", "consumers to re-tag", "reassign count", "how many reassigned in Kashi", "mismatches to re-tag"]
+    suggest: "How many consumers need re-tagging?"
+    note: "Re-tag = REASSIGN (evidence points to another feeder). Pending verification (review + no data) is NOT re-tagging. A project = its zones (Kashi: AZAMGARH, VARANASI I, VARANASI II)."
+    sql: |
+      SELECT COALESCE(SUM(consumer_count) FILTER (WHERE verdict = 'REASSIGN'), 0) AS consumers_to_retag,
+             ROUND(COALESCE(SUM(consumer_count) FILTER (WHERE verdict = 'REASSIGN'), 0) * 100.0 / SUM(consumer_count), 1) AS share_of_audited_pct,
+             SUM(consumer_count) AS meters_audited, MAX(data_date) AS audit_month
+      FROM hes_gold.mapping_audit_summary
+      WHERE data_date = (SELECT MAX(data_date) FROM hes_gold.mapping_audit_summary)
+
+  - q: ["Mapping audit project wise", "confirmed reassign review no data by project", "which project has the most pending verification", "auto indexing concluded project wise", "mapping accuracy by zone"]
+    note: "No project column: map zones to projects with CASE (the 51,102 consumers with no hierarchy are their own row and stay in the Total). Zone / circle / division wise = GROUP BY that column instead."
+    sql: |
+      SELECT CASE WHEN GROUPING(proj) = 1 THEN 'Total' ELSE proj END AS project,
+             SUM(consumer_count) AS meters_audited,
+             COALESCE(SUM(consumer_count) FILTER (WHERE verdict = 'CONFIRMED'), 0) AS confirmed,
+             COALESCE(SUM(consumer_count) FILTER (WHERE verdict = 'REASSIGN'), 0) AS reassigned,
+             COALESCE(SUM(consumer_count) FILTER (WHERE verdict = 'REVIEW'), 0) AS review,
+             COALESCE(SUM(consumer_count) FILTER (WHERE verdict = 'NO DATA'), 0) AS no_data,
+             ROUND(COALESCE(SUM(consumer_count) FILTER (WHERE verdict IN ('CONFIRMED', 'REASSIGN')), 0) * 100.0 / SUM(consumer_count), 1) AS concluded_pct,
+             ROUND(COALESCE(SUM(consumer_count) FILTER (WHERE verdict IN ('REVIEW', 'NO DATA')), 0) * 100.0 / SUM(consumer_count), 1) AS pending_pct
+      FROM (SELECT CASE WHEN UPPER(zone) IN ('AGRA', 'ALIGARH', 'ETAH', 'FIROZABAD', 'MATHURA') THEN 'Agra'
+                        WHEN UPPER(zone) IN ('AZAMGARH', 'VARANASI I', 'VARANASI II') THEN 'Kashi'
+                        WHEN UPPER(zone) IN ('MIRZAPUR', 'PRAYAGRAJ I', 'PRAYAGRAJ II') THEN 'Triveni'
+                        ELSE 'No hierarchy' END AS proj, verdict, consumer_count
+            FROM hes_gold.mapping_audit_summary
+            WHERE data_date = (SELECT MAX(data_date) FROM hes_gold.mapping_audit_summary)) t
+      GROUP BY ROLLUP (proj)
+      ORDER BY GROUPING(proj) DESC, SUM(consumer_count) DESC
+
+  - q: ["In which division is re-tagging highest?", "reassign by division", "divisions with most consumers to re-tag", "In which division are the most consumers to re-tag?"]
     suggest: "In which division is re-tagging highest?"
     sql: |
-      SELECT project, division, reassign_number, reassign_pct, meters_audited
-      FROM hes_gold.hierarchy_summary_autoindexing
-      WHERE project IS NOT NULL AND discom IS NOT NULL AND zone IS NOT NULL AND circle IS NOT NULL AND division IS NOT NULL
-      ORDER BY reassign_number DESC
+      SELECT division, zone,
+             COALESCE(SUM(consumer_count) FILTER (WHERE verdict = 'REASSIGN'), 0) AS reassigned,
+             SUM(consumer_count) AS meters_audited,
+             ROUND(COALESCE(SUM(consumer_count) FILTER (WHERE verdict = 'REASSIGN'), 0) * 100.0 / SUM(consumer_count), 1) AS reassign_pct
+      FROM hes_gold.mapping_audit_summary
+      WHERE data_date = (SELECT MAX(data_date) FROM hes_gold.mapping_audit_summary) AND division IS NOT NULL
+      GROUP BY division, zone
+      ORDER BY reassigned DESC
       LIMIT 10
 
-  - q: ["Which substations have the highest share in Review?", "How can we shrink the Review bucket fastest?", "substation review share"]
+  - q: ["Which substations have the highest share in Review?", "How can we shrink the Review bucket fastest?", "substation with most consumers", "substation with lowest mapping accuracy", "substations with most pending verification", "substation ranking", "Which substations have the highest share in review?"]
     suggest: "Which substations have the highest share in Review?"
-    note: "Share = SUM(review)/SUM(mi) per substation; also show review count so the biggest absolute buckets (fastest wins) are visible."
+    note: "Substation ranking from the summary (one row per substation x verdict): consumers, confirmed, reassigned, review, no data, pending and accuracy (concluded %) per substation; ORDER BY the asked measure. Share rankings need a size floor (>= 500 consumers); count rankings do not."
     sql: |
-      SELECT substation, SUM(review) AS review_consumers, SUM(mi) AS consumers_indexed,
-             ROUND(SUM(review) * 100.0 / NULLIF(SUM(mi), 0), 2) AS review_share_pct
-      FROM hes_gold.feeder_ranking_autoindexing
-      WHERE substation IS NOT NULL
-      GROUP BY substation
-      HAVING SUM(mi) >= 500
-      ORDER BY review_share_pct DESC
+      SELECT sub_station, zone, SUM(consumer_count) AS consumers,
+             COALESCE(SUM(consumer_count) FILTER (WHERE verdict = 'CONFIRMED'), 0) AS confirmed,
+             COALESCE(SUM(consumer_count) FILTER (WHERE verdict = 'REASSIGN'), 0) AS reassigned,
+             COALESCE(SUM(consumer_count) FILTER (WHERE verdict = 'REVIEW'), 0) AS review,
+             COALESCE(SUM(consumer_count) FILTER (WHERE verdict = 'NO DATA'), 0) AS no_data,
+             ROUND(COALESCE(SUM(consumer_count) FILTER (WHERE verdict = 'REVIEW'), 0) * 100.0 / SUM(consumer_count), 1) AS review_share_pct,
+             ROUND(COALESCE(SUM(consumer_count) FILTER (WHERE verdict IN ('CONFIRMED', 'REASSIGN')), 0) * 100.0 / SUM(consumer_count), 1) AS accuracy_pct,
+             ROW_NUMBER() OVER (ORDER BY ROUND(COALESCE(SUM(consumer_count) FILTER (WHERE verdict = 'REVIEW'), 0) * 100.0 / SUM(consumer_count), 1) DESC,
+                                SUM(consumer_count) DESC) AS rank_by_review_share
+      FROM hes_gold.mapping_audit_summary
+      WHERE data_date = (SELECT MAX(data_date) FROM hes_gold.mapping_audit_summary) AND sub_station IS NOT NULL
+      GROUP BY sub_station, zone
+      HAVING SUM(consumer_count) >= 500
+      ORDER BY review_share_pct DESC, consumers DESC
       LIMIT 15
 
-  - q: ["Open the correction queue for Agra.", "consumers to re-tag in Agra", "reassign list"]
+  - q: ["Which substation has the most correctly tagged consumers?", "substation with the most confirmed consumers", "substations with most correct tagging"]
+    note: "Correctly tagged = CONFIRMED. Rank by the confirmed COUNT (not total consumers); the first row is the answer."
     sql: |
-      SELECT consumer, system_feeder AS current_feeder, re_tag_to AS move_to_feeder, evidence, outage_match,
-             division, substation_name
-      FROM hes_gold.consumer_detail_autoindexing
-      WHERE LOWER(project) = 'agra' AND status = 'REASSIGN'
+      SELECT sub_station, zone,
+             SUM(consumer_count) AS consumers,
+             COALESCE(SUM(consumer_count) FILTER (WHERE verdict = 'CONFIRMED'), 0) AS confirmed,
+             COALESCE(SUM(consumer_count) FILTER (WHERE verdict = 'REASSIGN'), 0) AS reassigned,
+             COALESCE(SUM(consumer_count) FILTER (WHERE verdict = 'REVIEW'), 0) AS review,
+             COALESCE(SUM(consumer_count) FILTER (WHERE verdict = 'NO DATA'), 0) AS no_data,
+             COALESCE(SUM(consumer_count) FILTER (WHERE verdict IN ('REVIEW', 'NO DATA')), 0) AS pending_verification
+      FROM hes_gold.mapping_audit_summary
+      WHERE data_date = (SELECT MAX(data_date) FROM hes_gold.mapping_audit_summary) AND sub_station IS NOT NULL
+      GROUP BY sub_station, zone
+      ORDER BY confirmed DESC
+      LIMIT 10
+
+  - q: ["Which substation has the most pending verification?", "substations with most review plus no data", "substation with most pending consumers"]
+    note: "Pending verification = review + no data, ranked by that COUNT; the first row is the answer."
+    sql: |
+      SELECT sub_station, zone,
+             SUM(consumer_count) AS consumers,
+             COALESCE(SUM(consumer_count) FILTER (WHERE verdict = 'CONFIRMED'), 0) AS confirmed,
+             COALESCE(SUM(consumer_count) FILTER (WHERE verdict = 'REASSIGN'), 0) AS reassigned,
+             COALESCE(SUM(consumer_count) FILTER (WHERE verdict = 'REVIEW'), 0) AS review,
+             COALESCE(SUM(consumer_count) FILTER (WHERE verdict = 'NO DATA'), 0) AS no_data,
+             COALESCE(SUM(consumer_count) FILTER (WHERE verdict IN ('REVIEW', 'NO DATA')), 0) AS pending_verification
+      FROM hes_gold.mapping_audit_summary
+      WHERE data_date = (SELECT MAX(data_date) FROM hes_gold.mapping_audit_summary) AND sub_station IS NOT NULL
+      GROUP BY sub_station, zone
+      ORDER BY pending_verification DESC
+      LIMIT 10
+
+  - q: ["Which substation has the lowest mapping accuracy?", "substations with lowest auto-indexing concluded share", "worst substations on mapping accuracy"]
+    note: "Accuracy = (confirmed + reassign) / consumers, substations with >= 500 consumers. Many sit at 0%: substations_at_lowest says how many tie -- say so and name the largest ones (ordered by consumers)."
+    sql: |
+      SELECT t.*, SUM(CASE WHEN accuracy_pct = min_acc THEN 1 ELSE 0 END) OVER () AS substations_at_lowest
+      FROM (SELECT sub_station, zone, SUM(consumer_count) AS consumers,
+                   COALESCE(SUM(consumer_count) FILTER (WHERE verdict IN ('CONFIRMED', 'REASSIGN')), 0) AS concluded,
+                   ROUND(COALESCE(SUM(consumer_count) FILTER (WHERE verdict IN ('CONFIRMED', 'REASSIGN')), 0) * 100.0 / SUM(consumer_count), 1) AS accuracy_pct,
+                   MIN(ROUND(COALESCE(SUM(consumer_count) FILTER (WHERE verdict IN ('CONFIRMED', 'REASSIGN')), 0) * 100.0 / SUM(consumer_count), 1)) OVER () AS min_acc
+            FROM hes_gold.mapping_audit_summary
+            WHERE data_date = (SELECT MAX(data_date) FROM hes_gold.mapping_audit_summary) AND sub_station IS NOT NULL
+            GROUP BY sub_station, zone
+            HAVING SUM(consumer_count) >= 500) t
+      ORDER BY accuracy_pct, consumers DESC
+      LIMIT 10
+
+  - q: ["Which zone has the lowest auto-indexing concluded percentage?", "zone with lowest mapping accuracy", "zones ranked by concluded percentage"]
+    note: "One row per zone (no Total row in a ranking), ORDER BY concluded % ascending; the first row is the answer."
+    sql: |
+      SELECT zone, SUM(consumer_count) AS meters_audited,
+             COALESCE(SUM(consumer_count) FILTER (WHERE verdict IN ('CONFIRMED', 'REASSIGN')), 0) AS concluded,
+             ROUND(COALESCE(SUM(consumer_count) FILTER (WHERE verdict IN ('CONFIRMED', 'REASSIGN')), 0) * 100.0 / SUM(consumer_count), 1) AS concluded_pct
+      FROM hes_gold.mapping_audit_summary
+      WHERE data_date = (SELECT MAX(data_date) FROM hes_gold.mapping_audit_summary) AND zone IS NOT NULL
+      GROUP BY zone
+      ORDER BY concluded_pct
+      LIMIT 11
+
+  - q: ["Which feeder has the most pending consumers?", "feeder with most review and no data", "feeders with most pending verification"]
+    note: "Feeder pending = review + nodata from mapping_audit_feeder (feeder_code IS NOT NULL), ranked by that count; the first row is the answer."
+    sql: |
+      SELECT feeder_code, feeder_name, sub_station, zone, mi, review, nodata, review + nodata AS pending
+      FROM hes_gold.mapping_audit_feeder
+      WHERE data_date = (SELECT MAX(data_date) FROM hes_gold.mapping_audit_summary) AND feeder_code IS NOT NULL
+      ORDER BY review + nodata DESC
+      LIMIT 10
+
+  - q: ["Which feeder has the most review consumers?", "feeder with most consumers in review", "feeders ranked by review"]
+    note: "Rank feeders by their own review column (one row per feeder_code, never SUM across feeders); the first row is the answer."
+    sql: |
+      SELECT feeder_code, feeder_name, sub_station, zone, mi, review, nodata
+      FROM hes_gold.mapping_audit_feeder
+      WHERE data_date = (SELECT MAX(data_date) FROM hes_gold.mapping_audit_summary) AND feeder_code IS NOT NULL
+      ORDER BY review DESC
+      LIMIT 10
+
+  - q: ["Which feeders have the lowest confidence?", "least confident feeders", "feeders with lowest accuracy"]
+    note: "Lowest confidence_pct among feeders with mi >= 100 (smaller ones are noise). Many sit at 0%: feeders_at_lowest says how many tie -- say so and name the largest (ordered by mi)."
+    sql: |
+      SELECT t.*, SUM(CASE WHEN confidence_pct = min_conf THEN 1 ELSE 0 END) OVER () AS feeders_at_lowest
+      FROM (SELECT feeder_code, feeder_name, sub_station, zone, mi, correct_tagging, out AS reassign_out, review, nodata,
+                   confidence_pct, MIN(confidence_pct) OVER () AS min_conf
+            FROM hes_gold.mapping_audit_feeder
+            WHERE data_date = (SELECT MAX(data_date) FROM hes_gold.mapping_audit_summary) AND feeder_code IS NOT NULL AND mi >= 100) t
+      ORDER BY confidence_pct, mi DESC
+      LIMIT 10
+
+  - q: ["How many feeders does Triveni have in the mapping audit?", "feeders in a project", "how many feeders in Kashi mapping audit"]
+    note: "Feeders audited = rows with mi > 0 or correct_tagging > 0 (the dashboard's count); a project = its zones."
+    sql: |
+      SELECT COUNT(*) FILTER (WHERE mi > 0 OR correct_tagging > 0) AS feeders_audited, COUNT(*) AS feeder_rows
+      FROM hes_gold.mapping_audit_feeder
+      WHERE data_date = (SELECT MAX(data_date) FROM hes_gold.mapping_audit_summary) AND UPPER(zone) IN ('MIRZAPUR', 'PRAYAGRAJ I', 'PRAYAGRAJ II')
+
+  - q: ["Show feeder METHAPAR", "MI and CI of feeder METHAPAR", "how many consumers are on feeder X", "reassign in and out for a feeder", "confidence of feeder X"]
+    note: "One feeder: mapping_audit_feeder, name match UPPER(feeder_name) LIKE '%NAME%' (names carry the code), one row per feeder_code -- list several matches, never SUM them. MI = consumers declared, CI = field indexing register, out = reassign out, inc = reassign in, pending = review + nodata, confidence = decided share of MI."
+    sql: |
+      SELECT feeder_code, feeder_name, sub_station, zone, mi, ci, auto, correct_tagging,
+             out AS reassign_out, inc AS reassign_in, review, nodata, review + nodata AS pending, confidence_pct
+      FROM hes_gold.mapping_audit_feeder
+      WHERE data_date = (SELECT MAX(data_date) FROM hes_gold.mapping_audit_summary)
+        AND UPPER(feeder_name) LIKE '%METHAPAR%'
+
+  - q: ["Which feeders have the most reassign out?", "feeder with most consumers", "feeders with highest reassign in", "top feeders by pending", "feeder ranking", "feeders with lowest accuracy", "least confident feeders"]
+    note: "Feeder ranking: feeder_code IS NOT NULL, ORDER BY the asked column (mi = most consumers, out = reassign out, inc = reassign in, review + nodata = pending, correct_tagging = correct; lowest accuracy = confidence_pct ASC with mi >= 100), LIMIT 10."
+    sql: |
+      SELECT feeder_code, feeder_name, sub_station, zone, mi, ci, correct_tagging,
+             out AS reassign_out, inc AS reassign_in, review + nodata AS pending, confidence_pct
+      FROM hes_gold.mapping_audit_feeder
+      WHERE data_date = (SELECT MAX(data_date) FROM hes_gold.mapping_audit_summary) AND feeder_code IS NOT NULL
+      ORDER BY out DESC
+      LIMIT 10
+
+  - q: ["Total MI and CI across feeders", "how many feeders were audited", "total reassign in and reassign out", "consumers declared vs consumers indexed", "What is reassign in and reassign out?"]
+    note: "Feeders audited = the dashboard's feeder count (rows with mi > 0 or correct_tagging > 0). SUM(out) = SUM(inc) = total reassignments -- the same consumers counted at each end."
+    sql: |
+      SELECT COUNT(*) FILTER (WHERE mi > 0 OR correct_tagging > 0) AS feeders, SUM(mi) AS mi_consumers_declared,
+             SUM(ci) AS ci_consumers_indexed, SUM(correct_tagging) AS correct_tagging,
+             SUM(out) AS reassign_out, SUM(inc) AS reassign_in, SUM(review) AS review, SUM(nodata) AS no_data
+      FROM hes_gold.mapping_audit_feeder
+      WHERE data_date = (SELECT MAX(data_date) FROM hes_gold.mapping_audit_summary)
+
+  - q: ["Mapping audit status of meter AL1157377", "which feeder is meter AL1157377 on", "AI based and index based feeder of a consumer", "outage match for meter X", "Outage match for consumer AL0500051", "What is the outage match of meter AL1157377 on its original feeder and on the reassigned feeder?", "why was meter X reassigned", "Why was meter AL4712235 reassigned to another feeder?", "Why did meter X move from feeder Y to another feeder?", "substation of consumer X"]
+    note: "One consumer (latest month): verdict, index-based (declared) and AI-based (recommended) feeder with names, substation, and the outage matches 'dark of seen' for the declared and the best feeder -- the reason for the verdict. AI-based feeder is empty for REVIEW / NO DATA (undecided)."
+    sql: |
+      SELECT a.meter_no, a.data_date AS audit_month, a.verdict, a.cluster AS project, a.zone, a.sub_station,
+             a.declared_feeder AS index_based_feeder, d.feeder_name AS index_based_feeder_name,
+             a.auto_feeder AS ai_based_feeder, r.feeder_name AS ai_based_feeder_name,
+             CAST(a.declared_dark AS VARCHAR) || ' of ' || CAST(a.declared_dark + a.declared_powered AS VARCHAR) AS declared_feeder_outage_match,
+             a.best_feeder, CAST(a.best_dark AS VARCHAR) || ' of ' || CAST(a.best_dark + a.best_powered AS VARCHAR) AS best_feeder_outage_match,
+             a.mapping_confidence, a.was_cross_substation
+      FROM hes_gold.mapping_audit a
+      LEFT JOIN hes_gold.mapping_audit_feeder d ON d.feeder_code = a.declared_feeder AND d.data_date = a.data_date
+      LEFT JOIN hes_gold.mapping_audit_feeder r ON r.feeder_code = a.auto_feeder AND r.data_date = a.data_date
+      WHERE a.meter_no = 'AL1157377'
+        AND a.data_date = (SELECT MAX(data_date) FROM hes_gold.mapping_audit_summary)
+
+  - q: ["Which feeders was meter SC11051607 scored against?", "candidate feeders of a consumer", "evidence for meter X", "supporting and contradicting outages for meter X"]
+    note: "The dashboard's consumer drawer: every candidate feeder of the consumer's substation, ranked supporting DESC, net_score DESC (latest month). The first row is where the evidence points; is_current_feeder marks the index-based (declared) one. 'Why reassigned' alone is answered from mapping_audit (its declared vs best outage match) -- use this table only when the candidate feeders / scores are asked."
+    sql: |
+      SELECT c.candidate_feeder, f.feeder_name, c.supporting AS outages_dark_with_feeder,
+             c.contradicting AS outages_stayed_powered, c.net_score, c.is_declared AS is_current_feeder
+      FROM hes_gold.mapping_audit_candidates c
+      LEFT JOIN hes_gold.mapping_audit_feeder f ON f.feeder_code = c.candidate_feeder AND f.data_date = c.data_date
+      WHERE c.meter_no = 'SC11051607'
+        AND c.data_date = (SELECT MAX(data_date) FROM hes_gold.mapping_audit_summary)
+      ORDER BY c.supporting DESC, c.net_score DESC
+      LIMIT 40
+
+  - q: ["What is the runner-up feeder for meter SC11051607?", "How close was the call for meter SC11051607 between its top two feeders?", "second best feeder for a consumer", "margin between the top two candidate feeders"]
+    note: "The dashboard drawer's order: supporting DESC, net_score DESC. rank 1 = the feeder the evidence points to, rank 2 = the runner-up; margin = the gap in outages dark and in net score between them. Athena has no OFFSET here -- pick ranks with ROW_NUMBER."
+    sql: |
+      SELECT t.candidate_rank, t.candidate_feeder, f.feeder_name, t.supporting AS outages_dark_with_feeder,
+             t.contradicting AS outages_stayed_powered, t.net_score, t.is_declared AS is_current_feeder,
+             MAX(CASE WHEN t.candidate_rank = 1 THEN t.supporting END) OVER () - MAX(CASE WHEN t.candidate_rank = 2 THEN t.supporting END) OVER () AS margin_outages_dark,
+             MAX(CASE WHEN t.candidate_rank = 1 THEN t.net_score END) OVER () - MAX(CASE WHEN t.candidate_rank = 2 THEN t.net_score END) OVER () AS margin_net_score
+      FROM (SELECT c.*, ROW_NUMBER() OVER (ORDER BY c.supporting DESC, c.net_score DESC) AS candidate_rank
+            FROM hes_gold.mapping_audit_candidates c
+            WHERE c.meter_no = 'SC11051607' AND c.data_date = (SELECT MAX(data_date) FROM hes_gold.mapping_audit_summary)) t
+      LEFT JOIN hes_gold.mapping_audit_feeder f ON f.feeder_code = t.candidate_feeder AND f.data_date = t.data_date
+      WHERE t.candidate_rank <= 2
+      ORDER BY t.candidate_rank
+
+  - q: ["Show the outage windows behind meter SC11051607's reassignment", "outage log for meter X", "when did the feeders go dark for meter X", "did meter X go dark with each outage", "Show the outage windows and times for meter AL4712306", "Show the outage windows for meter AL1157377"]
+    note: "Only REASSIGN consumers have outage rows. Main query = one row per candidate feeder (its outages, how many the meter went dark in, first / last outage in IST, feeder name) -- summarise from it ('went dark in 12 of 12 outages of SAHAWAR PTW vs 5 of 7 of SAHAWAR DEHAT, its current feeder'). The extra query lists every outage. Latest month unless one is named."
+    sql: |
+      SELECT e.candidate_feeder, f.feeder_name,
+             COUNT(DISTINCT e.event_id) AS outages,
+             COUNT(DISTINCT CASE WHEN e.consumer_dark THEN e.event_id END) AS outages_meter_went_dark,
+             CASE WHEN e.candidate_feeder = MAX(e.declared_feeder) THEN 'Yes' ELSE 'No' END AS is_current_feeder,
+             MIN(e.slot) AT TIME ZONE 'Asia/Kolkata' AS first_outage_ist, MAX(e.slot) AT TIME ZONE 'Asia/Kolkata' AS last_outage_ist
+      FROM hes_gold.mapping_audit_evidence e
+      LEFT JOIN hes_gold.mapping_audit_feeder f ON f.feeder_code = e.candidate_feeder AND f.data_date = e.data_date
+      WHERE e.meter_no = 'SC11051607'
+        AND e.data_date = (SELECT MAX(data_date) FROM hes_gold.mapping_audit_summary)
+      GROUP BY e.candidate_feeder, f.feeder_name
+      ORDER BY outages_meter_went_dark DESC, outages DESC
+    extra:
+      - purpose: "Every outage of each candidate feeder (IST) and whether the meter went dark"
+        sql: |
+          SELECT candidate_feeder, event_id AS outage_no,
+                 MIN(slot) AT TIME ZONE 'Asia/Kolkata' AS outage_start_ist, MAX(slot) AT TIME ZONE 'Asia/Kolkata' AS outage_end_ist,
+                 COUNT(*) AS half_hour_slots,
+                 CASE WHEN BOOL_OR(consumer_dark) THEN 'Yes' ELSE 'No' END AS consumer_went_dark,
+                 COUNT_IF(NOT consumer_comm) AS slots_without_reading,
+                 CASE WHEN candidate_feeder = MAX(declared_feeder) THEN 'Yes' ELSE 'No' END AS is_current_feeder
+          FROM hes_gold.mapping_audit_evidence
+          WHERE meter_no = 'SC11051607'
+            AND data_date = (SELECT MAX(data_date) FROM hes_gold.mapping_audit_summary)
+          GROUP BY candidate_feeder, event_id
+          ORDER BY candidate_feeder, event_id
+          LIMIT 500
+
+  - q: ["Did meter AL4710864 go dark when feeder SAHAWAR PTW had outages?", "did consumer X lose supply with feeder Y", "outage match of meter X with a named feeder"]
+    note: "Only the named feeder among THIS meter's candidates (name -> feeder_code via mapping_audit_feeder LIKE, restricted to the meter's own candidate feeders, so a same-name feeder of another substation never matches). One row per matching feeder: its outages and how many the meter went dark in."
+    sql: |
+      SELECT e.candidate_feeder, f.feeder_name,
+             COUNT(DISTINCT e.event_id) AS outages_of_feeder,
+             COUNT(DISTINCT CASE WHEN e.consumer_dark THEN e.event_id END) AS outages_meter_went_dark,
+             CASE WHEN e.candidate_feeder = MAX(e.declared_feeder) THEN 'Yes' ELSE 'No' END AS is_current_feeder
+      FROM hes_gold.mapping_audit_evidence e
+      JOIN hes_gold.mapping_audit_feeder f ON f.feeder_code = e.candidate_feeder AND f.data_date = e.data_date
+      WHERE e.meter_no = 'AL4710864'
+        AND e.data_date = (SELECT MAX(data_date) FROM hes_gold.mapping_audit_summary)
+        AND UPPER(f.feeder_name) LIKE '%SAHAWAR PTW%'
+      GROUP BY e.candidate_feeder, f.feeder_name
+
+  - q: ["Proof pack for re-tags on feeder SAHAWAR", "evidence for every reassigned consumer of a feeder", "outages behind the re-tags of feeder X", "export the proof pack for feeder X", "How many reassigned consumers of feeder SAHAWAR DEHAT went dark in every outage of their new feeder?"]
+    note: "Lead with the Totals result (consumers re-tagged, how many went dark in every outage of their suggested feeder); the list is the proof per consumer. The dashboard's proof-pack export, summarised per consumer: re-tagged consumers declared to the named feeder (feeder name -> its feeder_code via mapping_audit_feeder), with outages of their suggested feeder and how many they went dark in. Latest month."
+    sql: |
+      SELECT e.meter_no AS consumer_meter, e.sub_station, e.declared_feeder AS feeder_on_record,
+             a.auto_feeder AS feeder_suggested,
+             COUNT(DISTINCT e.event_id) AS outages_of_suggested_feeder,
+             COUNT(DISTINCT CASE WHEN e.consumer_dark THEN e.event_id END) AS outages_consumer_went_dark
+      FROM hes_gold.mapping_audit_evidence e
+      JOIN hes_gold.mapping_audit a ON a.meter_no = e.meter_no AND a.data_date = e.data_date
+      WHERE e.data_date = (SELECT MAX(data_date) FROM hes_gold.mapping_audit_summary)
+        AND e.declared_feeder IN (SELECT feeder_code FROM hes_gold.mapping_audit_feeder
+                                  WHERE UPPER(feeder_name) LIKE '%SAHAWAR%'
+                                    AND data_date = (SELECT MAX(data_date) FROM hes_gold.mapping_audit_summary))
+        AND e.candidate_feeder = a.auto_feeder
+      GROUP BY e.meter_no, e.sub_station, e.declared_feeder, a.auto_feeder
+      ORDER BY outages_consumer_went_dark DESC
       LIMIT 200
+    extra:
+      - purpose: "Totals: re-tagged consumers of the feeder(s) and how many went dark in every outage of their suggested feeder"
+        sql: |
+          SELECT COUNT(*) AS consumers_retagged,
+                 COUNT_IF(dark = outages) AS dark_in_every_outage,
+                 ROUND(AVG(dark * 100.0 / NULLIF(outages, 0)), 1) AS avg_pct_outages_dark
+          FROM (SELECT e.meter_no, COUNT(DISTINCT e.event_id) AS outages,
+                       COUNT(DISTINCT CASE WHEN e.consumer_dark THEN e.event_id END) AS dark
+                FROM hes_gold.mapping_audit_evidence e
+                JOIN hes_gold.mapping_audit a ON a.meter_no = e.meter_no AND a.data_date = e.data_date
+                WHERE e.data_date = (SELECT MAX(data_date) FROM hes_gold.mapping_audit_summary)
+                  AND e.declared_feeder IN (SELECT feeder_code FROM hes_gold.mapping_audit_feeder
+                                            WHERE UPPER(feeder_name) LIKE '%SAHAWAR%'
+                                              AND data_date = (SELECT MAX(data_date) FROM hes_gold.mapping_audit_summary))
+                  AND e.candidate_feeder = a.auto_feeder
+                GROUP BY e.meter_no) t
+
+  - q: ["Open the correction queue for Agra.", "consumers to re-tag in Agra", "reassign list", "correction queue", "which consumers should move to another feeder", "How many consumers in the correction queue are in Triveni?"]
+    note: "total_in_queue = how many consumers the list has in all (the rows shown stop at the LIMIT): lead with it. Correction queue = REASSIGN consumers, strongest evidence first (best_dark DESC), LIMIT 200; the total comes from mapping_audit_summary. Project = cluster on this table ('Agra')."
+    sql: |
+      SELECT meter_no, sub_station, declared_feeder AS current_feeder, auto_feeder AS move_to_feeder,
+             best_dark AS evidence_windows, best_dark + best_powered AS windows_seen, zone, division,
+             data_date AS audit_month, COUNT(*) OVER () AS total_in_queue
+      FROM hes_gold.mapping_audit
+      WHERE verdict = 'REASSIGN' AND LOWER(cluster) = 'agra'
+        AND data_date = (SELECT MAX(data_date) FROM hes_gold.mapping_audit_summary)
+      ORDER BY best_dark DESC, meter_no
+      LIMIT 200
+
+  - q: ["List consumers to be re-tagged in substation GANJDUNDWARA", "correction queue for a substation", "reassigned consumers in a substation"]
+    note: "total_in_queue = how many consumers the list has in all (the rows shown stop at the LIMIT): lead with it. One substation's correction queue: UPPER(sub_station) LIKE '%NAME%' (names carry a code), REASSIGN, strongest evidence first; the total is the table's row count."
+    sql: |
+      SELECT meter_no, sub_station, declared_feeder AS current_feeder, auto_feeder AS move_to_feeder,
+             best_dark AS evidence_windows, best_dark + best_powered AS windows_seen,
+             COUNT(*) OVER () AS total_in_queue
+      FROM hes_gold.mapping_audit
+      WHERE verdict = 'REASSIGN' AND UPPER(sub_station) LIKE '%GANJDUNDWARA%'
+        AND data_date = (SELECT MAX(data_date) FROM hes_gold.mapping_audit_summary)
+      ORDER BY best_dark DESC, meter_no
+      LIMIT 200
+
+  - q: ["Which consumers should be moved to feeder BARDEEHA PTW?", "consumers reassigned into a feeder", "who is moving to feeder X", "consumers reassigned out of feeder X"]
+    note: "total_in_queue = how many consumers the list has in all (the rows shown stop at the LIMIT): lead with it. Into a named feeder = auto_feeder IN (that feeder's codes); out of it = declared_feeder IN (...). Codes from mapping_audit_feeder by name; never join on data_date alone."
+    sql: |
+      SELECT meter_no, sub_station, declared_feeder AS current_feeder, auto_feeder AS move_to_feeder,
+             best_dark AS evidence_windows, best_dark + best_powered AS windows_seen,
+             COUNT(*) OVER () AS total_in_queue
+      FROM hes_gold.mapping_audit
+      WHERE verdict = 'REASSIGN'
+        AND data_date = (SELECT MAX(data_date) FROM hes_gold.mapping_audit_summary)
+        AND auto_feeder IN (SELECT feeder_code FROM hes_gold.mapping_audit_feeder
+                            WHERE data_date = (SELECT MAX(data_date) FROM hes_gold.mapping_audit_summary)
+                              AND UPPER(feeder_name) LIKE '%BARDEEHA PTW%')
+      ORDER BY best_dark DESC, meter_no
+      LIMIT 200
+
+  - q: ["Mapping audit in July 2026", "What was the mapping accuracy in July 2026?", "confirmed and reassigned in a named audit month"]
+    note: "One named month = data_date = DATE '2026-07-01' (months stored: 2026-06-01, 2026-07-01, 2026-08-01)."
+    sql: |
+      SELECT data_date AS audit_month, SUM(consumer_count) AS meters_audited,
+             COALESCE(SUM(consumer_count) FILTER (WHERE verdict = 'CONFIRMED'), 0) AS confirmed,
+             COALESCE(SUM(consumer_count) FILTER (WHERE verdict = 'REASSIGN'), 0) AS reassigned,
+             COALESCE(SUM(consumer_count) FILTER (WHERE verdict = 'REVIEW'), 0) AS review,
+             COALESCE(SUM(consumer_count) FILTER (WHERE verdict = 'NO DATA'), 0) AS no_data,
+             ROUND(COALESCE(SUM(consumer_count) FILTER (WHERE verdict IN ('CONFIRMED', 'REASSIGN')), 0) * 100.0 / SUM(consumer_count), 1) AS mapping_accuracy_pct
+      FROM hes_gold.mapping_audit_summary
+      WHERE data_date = DATE '2026-07-01'
+      GROUP BY data_date
+
+  - q: ["How has mapping accuracy changed month wise?", "how did mapping accuracy change from June to August", "mapping audit month wise"]
+    note: "Months stored: 2026-06-01, 2026-07-01, 2026-08-01; a month-wise comparison = GROUP BY data_date."
+    sql: |
+      SELECT data_date AS audit_month, SUM(consumer_count) AS meters_audited,
+             COALESCE(SUM(consumer_count) FILTER (WHERE verdict = 'CONFIRMED'), 0) AS confirmed,
+             COALESCE(SUM(consumer_count) FILTER (WHERE verdict = 'REASSIGN'), 0) AS reassigned,
+             ROUND(COALESCE(SUM(consumer_count) FILTER (WHERE verdict IN ('CONFIRMED', 'REASSIGN')), 0) * 100.0 / SUM(consumer_count), 1) AS mapping_accuracy_pct
+      FROM hes_gold.mapping_audit_summary
+      GROUP BY data_date
+      ORDER BY data_date
 
   - q: ["How many meters have been invoiced under PMPM?", "PMPM invoiced meters"]
     suggest: "How many meters have been invoiced under PMPM?"
@@ -2118,7 +2584,7 @@ examples:
 
   - q: ["Estimate PMPM billing value for this month.", "PMPM monthly billing estimate"]
     suggest: "Estimate PMPM billing value for this month."
-    note: "Steady-state proxy: latest PMPM invoiced (crore, to date) / months since the first PMPM invoice (read from the data) gives Rs per month; state that it is an estimate."
+    note: "Steady-state proxy: latest PMPM invoiced (crore, to date) / months since the first PMPM invoice (read from the data) gives Rs crore per month; state that it is an estimate. Never multiply a crore amount by a meter count; the Total row must equal the sum of the projects."
     sql: |
       SELECT CASE WHEN GROUPING(r.project) = 1 THEN 'Total' ELSE UPPER(r.project) END AS project,
              SUM(r.pmpm_invoiced) AS pmpm_invoiced_to_date_cr,
@@ -2132,15 +2598,16 @@ examples:
       GROUP BY ROLLUP (r.project)
       ORDER BY GROUPING(r.project) DESC, project
 
-  - q: ["Which project should management focus on this week, and why?", "Compare Agra.", "project comparison on key KPIs", "Is there any link between high replacements and SAT lag by project?"]
+  - q: ["Which project should management focus on this week, and why?", "Compare Agra.", "project comparison on key KPIs"]
     suggest: "Which project should management focus on this week, and why?"
-    note: "One row per project with installs (last 7 days), SAT %, eligible pending, 120+ non-SAT, defects per 1000 and collection %. Name the project that is worst on most and why."
+    note: "One row per project with installs (last 7 days), SAT %, eligible pending, 120+ non-SAT, defects per 1000 and collection %. focus_project = 'Yes' marks the project to focus on (worst on the most measures, then lowest SAT %); worst_on lists those measures. The answer's first words NAME the focus_project row, then quote ITS OWN figures for its worst_on measures vs the others -- never another project's numbers."
     sql: |
       WITH sat AS (SELECT LOWER(project) AS project, SUM(meter_count) AS total_mi,
                           ROUND(SUM(meter_count) FILTER (WHERE sat_stage IS NOT NULL) * 100.0 / NULLIF(SUM(meter_count), 0), 2) AS sat_pct_vs_mi,
-                          SUM(meter_count) FILTER (WHERE sat_stage IS NULL AND is_sat_eligible) AS eligible_pending_sat
+                          SUM(meter_count) FILTER (WHERE is_sat_eligible) AS eligible_mi
                    FROM public.gold_mi_sat_invoice_snapshot GROUP BY 1),
-      ns AS (SELECT LOWER(project) AS project, SUM(meter_count) FILTER (WHERE age_key = 'age_120_plus') AS non_sat_120_plus
+      ns AS (SELECT LOWER(project) AS project, SUM(meter_count) AS eligible_pending_sat,
+                    SUM(meter_count) FILTER (WHERE age_key = 'age_120_plus') AS non_sat_120_plus
              FROM public.gold_non_sat_ageing_snapshot GROUP BY 1),
       wk AS (SELECT LOWER(project) AS project, SUM(meter_count) AS installs_last_7_days FROM public.gold_mi_installation_day_agg
              WHERE has_meter_serial AND progress_category IS NOT NULL AND NOT is_replacement AND period_start > CURRENT_DATE - 7 GROUP BY 1),
@@ -2149,12 +2616,46 @@ examples:
                     ROUND((lumpsum_realised + pmpm_realised) * 100.0 / NULLIF(lumpsum_invoiced + pmpm_invoiced, 0), 2) AS collection_pct
              FROM (SELECT *, ROW_NUMBER() OVER (PARTITION BY project ORDER BY created_at DESC, id DESC) AS rn FROM public.revenue_receivables) r
              WHERE rn = 1)
-      SELECT UPPER(sat.project) AS project, wk.installs_last_7_days, sat.total_mi, sat.sat_pct_vs_mi, sat.eligible_pending_sat,
-             ns.non_sat_120_plus, ROUND(df.replacements * 1000.0 / NULLIF(sat.total_mi, 0), 2) AS replacements_per_1000,
-             rv.collection_pct
-      FROM sat LEFT JOIN ns ON ns.project = sat.project LEFT JOIN wk ON wk.project = sat.project
-      LEFT JOIN df ON df.project = sat.project LEFT JOIN rv ON rv.project = sat.project
-      ORDER BY sat.sat_pct_vs_mi
+      SELECT f.*, CASE WHEN ROW_NUMBER() OVER (ORDER BY measures_worst_on DESC, sat_pct_vs_mi) = 1 THEN 'Yes' ELSE '' END AS focus_project
+      FROM (SELECT UPPER(sat.project) AS project, wk.installs_last_7_days, sat.total_mi, sat.sat_pct_vs_mi, ns.eligible_pending_sat,
+                   ns.non_sat_120_plus, ROUND(df.replacements * 1000.0 / NULLIF(sat.total_mi, 0), 2) AS replacements_per_1000,
+                   rv.collection_pct,
+                   (CASE WHEN wk.installs_last_7_days = MIN(wk.installs_last_7_days) OVER () THEN 1 ELSE 0 END
+                    + CASE WHEN sat.sat_pct_vs_mi = MIN(sat.sat_pct_vs_mi) OVER () THEN 1 ELSE 0 END
+                    + CASE WHEN ns.non_sat_120_plus = MAX(ns.non_sat_120_plus) OVER () THEN 1 ELSE 0 END
+                    + CASE WHEN df.replacements * 1.0 / NULLIF(sat.total_mi, 0) = MAX(df.replacements * 1.0 / NULLIF(sat.total_mi, 0)) OVER () THEN 1 ELSE 0 END
+                    + CASE WHEN rv.collection_pct = MIN(rv.collection_pct) OVER () THEN 1 ELSE 0 END) AS measures_worst_on,
+                   CONCAT_WS(', ',
+                     CASE WHEN wk.installs_last_7_days = MIN(wk.installs_last_7_days) OVER () THEN 'fewest installs in 7 days' END,
+                     CASE WHEN sat.sat_pct_vs_mi = MIN(sat.sat_pct_vs_mi) OVER () THEN 'lowest SAT %' END,
+                     CASE WHEN ns.non_sat_120_plus = MAX(ns.non_sat_120_plus) OVER () THEN 'most 120+ day non-SAT' END,
+                     CASE WHEN df.replacements * 1.0 / NULLIF(sat.total_mi, 0) = MAX(df.replacements * 1.0 / NULLIF(sat.total_mi, 0)) OVER () THEN 'most replacements per 1,000' END,
+                     CASE WHEN rv.collection_pct = MIN(rv.collection_pct) OVER () THEN 'lowest collection %' END) AS worst_on
+            FROM sat LEFT JOIN ns ON ns.project = sat.project LEFT JOIN wk ON wk.project = sat.project
+            LEFT JOIN df ON df.project = sat.project LEFT JOIN rv ON rv.project = sat.project) f
+      ORDER BY measures_worst_on DESC, sat_pct_vs_mi
+
+  - q: ["Is there any link between high replacements and SAT lag by project?", "do replacements slow down SAT", "replacements vs SAT lag"]
+    suggest: "Is there any link between high replacements and SAT lag by project?"
+    note: "Rank projects on replacements per 1,000 installed (1 = most) and on SAT lag = 100 - % SAT vs MI (1 = most lag). same_rank_order = 'Yes' only when the two rankings match for every project -- that is the only case to call it a link; with 3 projects say the evidence is weak either way."
+    sql: |
+      WITH r AS (SELECT LOWER(u.project) AS project, SUM(u.defects) AS replacements, SUM(u.installed) AS installed
+                 FROM (SELECT project, defect_count AS defects, 0 AS installed FROM public.gold_meter_defect_event_day_agg
+                       UNION ALL
+                       SELECT project, 0, meter_count FROM public.gold_mi_installation_month_agg
+                       WHERE has_meter_serial AND progress_category IS NOT NULL AND NOT is_replacement) u
+                 GROUP BY 1),
+      s AS (SELECT LOWER(project) AS project,
+                   ROUND(100 - SUM(meter_count) FILTER (WHERE sat_stage IS NOT NULL) * 100.0 / NULLIF(SUM(meter_count), 0), 2) AS sat_lag_pct
+            FROM public.gold_mi_sat_invoice_snapshot GROUP BY 1),
+      j AS (SELECT UPPER(r.project) AS project, ROUND(r.replacements * 1000.0 / NULLIF(r.installed, 0), 2) AS replacements_per_1000,
+                   s.sat_lag_pct
+            FROM r JOIN s ON s.project = r.project)
+      SELECT k.*, CASE WHEN BOOL_AND(replacement_rank = sat_lag_rank) OVER () THEN 'Yes' ELSE 'No' END AS same_rank_order
+      FROM (SELECT project, replacements_per_1000, RANK() OVER (ORDER BY replacements_per_1000 DESC) AS replacement_rank,
+                   sat_lag_pct, RANK() OVER (ORDER BY sat_lag_pct DESC) AS sat_lag_rank
+            FROM j) k
+      ORDER BY replacements_per_1000 DESC
 
   - q: ["Do the installed meter figures agree across pages?", "installed count consistency check", "why do installed numbers differ"]
     sql: |

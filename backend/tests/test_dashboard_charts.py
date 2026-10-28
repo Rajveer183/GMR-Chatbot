@@ -258,3 +258,18 @@ def test_live_fixes_27_oct():
     out = _build_chart(plan("SELECT 1 FROM gmr_wfm_silver.unified_installations",
                             {"type": "bar", "x": "utilization_pct", "y": ["supplied"]}), df)
     assert out["x"] == ["1PH", "3PH"]
+
+
+def test_a_chart_that_cannot_be_built_leaves_the_answer(monkeypatch):
+    # Live 27 Oct: 'How can we shrink the Review bucket fastest?' raised in pivot_table and
+    # the whole answer failed; now the table and cards still come back without the chart.
+    from gmr_agents import llm_pipeline
+
+    def boom(*_a, **_k):
+        raise ValueError("Grouper for 'substation' not 1-dimensional")
+
+    monkeypatch.setattr(llm_pipeline, "_build_chart", boom)
+    sql = "SELECT substation, review_share_pct FROM hes_gold.feeder_ranking_autoindexing"
+    df = pd.DataFrame({"substation": ["A", "B"], "review_share_pct": [96.9, 95.9]})
+    out = llm_pipeline._blocks(plan(sql, {"type": "bar", "x": "substation", "y": ["review_share_pct"]}), {"result": df})
+    assert out["charts"] == [] and out["tables"]

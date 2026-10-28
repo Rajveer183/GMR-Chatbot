@@ -31,6 +31,7 @@ from gmr_agents import llm_pipeline as P
 from gmr_agents.graph import context
 from gmr_agents.graph.state import AgentState
 from gmr_agents.guards import idempotency, limits, sql_validator
+from gmr_agents.schema import business_rules
 from gmr_agents.schema.catalog import get_catalog
 from gmr_agents.tools import calling, registry
 from shared import config as settings
@@ -105,6 +106,29 @@ def explain_node(state: AgentState, config: RunnableConfig) -> dict[str, Any]:
 # controller -- decides the next action; never executes
 # --------------------------------------------------------------------------- #
 
+# The router matched the question to a verified example almost word for word: when the planner
+# gives up on it ('unanswerable') or its SQL is rejected, that example's own SQL -- checked by hand
+# against the dashboard -- runs instead of another free-tier attempt. Seen live 27 Oct: 'Write a CXO
+# weekly summary with three risks and three actions' and 'The project totals add up to ~2.27L but the
+# age buckets add to ~3.01L. Why?' were refused, 'Estimate PMPM billing value for this month' failed
+# the safety check -- each one the exact wording of a verified example.
+_EXAMPLE_FALLBACK_RATIO = 0.95
+
+
+def _verified_example_plan(triage: dict) -> dict | None:
+    if triage.get("source") != "router" or float(triage.get("match_ratio") or 0) < _EXAMPLE_FALLBACK_RATIO:
+        return None
+    ids = [str(e).lstrip("e") for e in triage.get("examples") or []]
+    examples = business_rules.examples()
+    if not ids or not ids[0].isdigit() or int(ids[0]) >= len(examples):
+        return None
+    ex = examples[int(ids[0])]
+    return {"sql": str(ex["sql"]).strip(), "answer_kind": "breakdown", "display": {}, "labels": {},
+            "extra_queries": [{"purpose": str(e.get("purpose") or ""), "sql": str(e.get("sql") or "").strip()}
+                              for e in ex.get("extra") or [] if isinstance(e, dict) and e.get("sql")],
+            "reasoning": ("Verified example for this wording. " + str(ex.get("note") or "")).strip()}
+
+
 def controller_node(state: AgentState, config: RunnableConfig) -> dict[str, Any]:
     """Who controls it: the LLM writes the tool request; application code decides
     when no further tool is needed.
@@ -150,31 +174,40 @@ def controller_node(state: AgentState, config: RunnableConfig) -> dict[str, Any]
         prompt = (ctx.repair_prompt or ctx.base_prompt) + P._repair_hint(last_error.get("sql") or "", last_error["message"], catalog)
 
     t0 = time.perf_counter()
-    res = llm_gateway.chat_json("sql" if attempt == 0 else "repair", prompt, system=P._PLAN_SYSTEM,
-                                models=settings.LLM_MODELS_SQL, max_tokens=settings.LLM_MAX_TOKENS_SQL)  # decoding per task (sql / repair) from LLM_DECODING
-    if res is None:
-        P._step(ps, "plan", t0, attempt=attempt, outcome="no model available")
-        return {"tool_call": None, "status": "busy", "attempt": attempt + 1, "step_count": _tick(state)}
-    raw = res.data
+    example = None if ctx.example_fallback else _verified_example_plan(triage)
+    if last_error and last_error.get("kind") != "zero_rows" and example:
+        res = None  # rejected or failed SQL for a verified wording: run the example, not a repair
+    else:
+        res = llm_gateway.chat_json("sql" if attempt == 0 else "repair", prompt, system=P._PLAN_SYSTEM,
+                                    models=settings.LLM_MODELS_SQL, max_tokens=settings.LLM_MAX_TOKENS_SQL)  # decoding per task (sql / repair) from LLM_DECODING
+        if res is None and not example:
+            P._step(ps, "plan", t0, attempt=attempt, outcome="no model available")
+            return {"tool_call": None, "status": "busy", "attempt": attempt + 1, "step_count": _tick(state)}
+    raw = res.data if res is not None else {}
+    model = res.model if res is not None else "verified example"
+    if example and (res is None or raw.get("answer_kind") == "unanswerable" or not P._clean_sql(raw.get("sql"))):
+        ctx.example_fallback = True
+        P._step(ps, "plan", t0, attempt=attempt, outcome="verified example SQL used", example=triage["examples"][0])
+        raw = example
     if str(raw.get("tool") or "") == "calculator":
         # Pure arithmetic on numbers the user gave: the calculator tool computes it exactly.
         ctx.raw_plan = raw
-        P._step(ps, "plan", t0, attempt=attempt, model=res.model, kind="calculator")
+        P._step(ps, "plan", t0, attempt=attempt, model=model, kind="calculator")
         call = {"tool": "calculator", "args": {"expression": str(raw.get("expression") or "")},
-                "attempt": attempt, "model": res.model}
+                "attempt": attempt, "model": model}
         return {"tool_call": call, "tool_calls": [call], "attempt": attempt + 1, "validated": None,
                 "last_error": None, "step_count": _tick(state)}
     sql = P._clean_sql(raw.get("sql"))
     if raw.get("answer_kind") == "unanswerable" or not sql:
-        P._step(ps, "plan", t0, attempt=attempt, model=res.model, outcome="unanswerable")
+        P._step(ps, "plan", t0, attempt=attempt, model=model, outcome="unanswerable")
         P._finish(ps, str(raw.get("reason") or "This can't be answered from the available data."), refused=True,
                   source="planner", agent=triage["domain"])
         return {"tool_call": None, "status": "refused", "refused": True, "attempt": attempt + 1,
                 "step_count": _tick(state)}
     ctx.raw_plan = raw
-    P._step(ps, "plan", t0, attempt=attempt, model=res.model, kind=str(raw.get("answer_kind") or ""),
+    P._step(ps, "plan", t0, attempt=attempt, model=model, kind=str(raw.get("answer_kind") or ""),
             reasoning=str(raw.get("reasoning") or "")[:200])
-    call = {"tool": str(raw.get("tool") or "run_sql"), "args": {"sql": sql}, "attempt": attempt, "model": res.model}
+    call = {"tool": str(raw.get("tool") or "run_sql"), "args": {"sql": sql}, "attempt": attempt, "model": model}
     return {"tool_call": call, "tool_calls": [call], "attempt": attempt + 1, "validated": None,
             "last_error": None, "step_count": _tick(state)}
 

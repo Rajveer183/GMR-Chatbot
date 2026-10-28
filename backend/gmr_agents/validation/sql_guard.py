@@ -393,7 +393,14 @@ def _is_literal_ish(o: exp.Expression | None) -> bool:
     # DATE), not a bare Literal -- verified directly (BETWEEN DATE '...' AND
     # DATE '...' was being rejected as "not a value pin" before this check
     # unwrapped the cast).
-    return isinstance(o, exp.Literal) or (isinstance(o, exp.Cast) and isinstance(o.this, exp.Literal))
+    if isinstance(o, exp.Literal) or (isinstance(o, exp.Cast) and isinstance(o.this, exp.Literal)):
+        return True
+    # A scalar MAX/MIN subquery pins one value just as a literal does: the mapping audit's "latest month" is
+    # data_date = (SELECT MAX(data_date) FROM hes_gold.mapping_audit_summary), so the month never goes stale.
+    if isinstance(o, exp.Subquery) and isinstance(o.this, exp.Select):
+        projections = o.this.expressions
+        return len(projections) == 1 and isinstance(projections[0].unalias(), (exp.Max, exp.Min))
+    return False
 
 
 def _check_bounding_filter(qualified: exp.Select, referenced_tables: set[str], tables_meta: dict, resolve) -> str | None:
