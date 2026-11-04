@@ -12,12 +12,14 @@ LEAN copy of the session -- just the last REDIS_HISTORY_TTL-bounded
 REDIS_HISTORY_MAX_MESSAGES messages, without each assistant message's full
 structured `response` (kpis/charts/tables/insights can be tens of KB; the LLM
 context never needs them, only `recent_questions`/`recent_turns` do) -- under
-`chat:{session_id}`, TTL-refreshed on every write. `recent_questions` /
-`recent_turns` -- the two methods that actually feed the LLM prompt -- read
-this mirror first; `get_session` / `list_sessions` (the UI's full history)
-always read the JSON-backed store, unaffected by the Redis TTL or message cap.
-If Redis is unavailable, both methods transparently fall back to computing the
-same thing from the JSON-backed store, exactly as before this mirror existed.
+`chat:{session_id}`, TTL-refreshed on every write, sent after the store's lock
+is released (a slow Redis never holds up other requests). Nothing in this
+process reads it: `recent_questions` / `recent_turns` -- what feeds the LLM
+prompt -- read the in-memory sessions, which are always current. The mirror
+went stale whenever one SET was skipped (Redis marked down for up to 5 s, or a
+0.5 s timeout): the next follow-up then resolved against the turn BEFORE the
+latest one -- and it was capped at REDIS_HISTORY_MAX_MESSAGES, so
+recent_turns(sid, 50) returned at most 10 turns.
 
 The sessions are held in memory and the file is rewritten in the background,
 shortly after a change (one write for a question and its answer), and once
@@ -167,26 +169,27 @@ class SessionStore:
             lean["debug"] = {"followup": debug.get("followup"), "resolved_question": debug.get("resolved_question")}
         return lean
 
-    def _mirror_to_redis(self, session: dict) -> None:
-        """Best-effort; a Redis write failure never blocks or fails the request
-        (the JSON file above is already the durable copy)."""
+    def _mirror_payload(self, session: dict) -> str | None:
+        """The lean mirror text, built while the caller holds self._lock (a snapshot);
+        None when Redis is unavailable."""
         if not redis_client.available():
-            return
+            return None
         messages = session.get("messages", [])[-config.REDIS_HISTORY_MAX_MESSAGES:]
-        payload = json.dumps([self._lean_message(m) for m in messages], ensure_ascii=False, default=str)
-        redis_client.set(self._mirror_key(session["session_id"]), payload, ttl=config.REDIS_HISTORY_TTL)
+        return json.dumps([self._lean_message(m) for m in messages], ensure_ascii=False, default=str)
 
-    def _redis_messages(self, session_id: str) -> list[dict] | None:
-        """The mirrored lean message list, or None if Redis is unavailable or
-        this session has no (or an expired) mirror -- callers fall back to the
-        JSON-backed store in either case."""
-        raw = redis_client.get(self._mirror_key(session_id))
-        if raw is None:
-            return None
-        try:
-            return json.loads(raw)
-        except ValueError:
-            return None
+    def _mirror_to_redis(self, session_id: str, payload: str | None) -> None:
+        """Best-effort, called after self._lock is released; a Redis write failure never
+        blocks or fails the request (the JSON file above is already the durable copy)."""
+        if payload is not None:
+            redis_client.set(self._mirror_key(session_id), payload, ttl=config.REDIS_HISTORY_TTL)
+
+    def _messages(self, session_id: str) -> list[dict] | None:
+        """The session's messages from the in-memory store (a copy), or None."""
+        with self._lock:
+            for session in self._read()["sessions"]:
+                if session.get("session_id") == session_id:
+                    return list(session.get("messages", []))
+        return None
 
     # -- sessions -----------------------------------------------------------
 
@@ -307,21 +310,19 @@ class SessionStore:
                     ):
                         session["session_name"] = content.strip()[:60] or "New Session"
                     self._write(data, session_id)
-                    self._mirror_to_redis(session)
-                    return message
-        return None
+                    payload = self._mirror_payload(session)
+                    break
+            else:
+                return None
+        self._mirror_to_redis(session_id, payload)
+        return message
 
     def recent_questions(self, session_id: str, limit: int = 6) -> list[str]:
         """Prior user questions, oldest first -- context for resolving
         follow-ups like "and for the previous year?". A question that was
         itself a follow-up comes back as the standalone question it was
-        answered as, so "same for SAT" -> "and agra?" still has a full base.
-        Reads the Redis mirror when it has this session; falls back to the
-        JSON-backed store (always correct, just a touch slower) otherwise."""
-        messages = self._redis_messages(session_id)
-        if messages is None:
-            session = self.get_session(session_id)
-            messages = session.get("messages", []) if session else None
+        answered as, so "same for SAT" -> "and agra?" still has a full base."""
+        messages = self._messages(session_id)
         if not messages:
             return []
         questions: list[str] = []
@@ -336,12 +337,8 @@ class SessionStore:
 
     def recent_turns(self, session_id: str, limit: int = 3) -> list[dict]:
         """The last `limit` question/answer pairs, oldest first:
-        {question, resolved_question, summary, context}. Same Redis-mirror-first,
-        JSON-fallback read path as recent_questions."""
-        messages = self._redis_messages(session_id)
-        if messages is None:
-            session = self.get_session(session_id)
-            messages = session.get("messages", []) if session else None
+        {question, resolved_question, summary, context}, from the in-memory store."""
+        messages = self._messages(session_id)
         if not messages:
             return []
         turns: list[dict] = []
