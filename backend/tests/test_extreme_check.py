@@ -16,7 +16,7 @@ os.chdir(ROOT)
 
 import pandas as pd  # noqa: E402
 
-from gmr_agents.validation import entity_check, extreme_check  # noqa: E402
+from gmr_agents.checks import entity_check, extreme_check  # noqa: E402
 
 _DATA = {"2026-01-01": (391505, 14732, 48), "2026-02-01": (331959, 10061, 29), "2026-04-01": (152858, 6638, 63),
          "2026-06-01": (72178, 5370, 480), "2026-08-01": (42387, 3311, 33)}

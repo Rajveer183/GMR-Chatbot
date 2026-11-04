@@ -99,7 +99,7 @@ class TerminationTests(unittest.TestCase):
 class ReadOnlyDatabaseTests(unittest.TestCase):
     def test_session_refuses_writes(self):
         try:
-            from gmr_agents.sql.connections import pooled_postgres_connection
+            from gmr_agents.execution.connections import pooled_postgres_connection
             cm = pooled_postgres_connection()
             conn = cm.__enter__()
         except Exception as exc:  # no database here: nothing to check

@@ -1,4 +1,4 @@
-"""Run every SQL in gmr_agents/schema/data/examples.yaml through the same
+"""Run every SQL in gmr_agents/catalog/data/examples.yaml through the same
 safety check and executor the chatbot uses, and print the first rows.
 
     python eval/question_bank/verify_examples.py          # all
@@ -20,10 +20,10 @@ load_dotenv()
 
 import pandas as pd  # noqa: E402
 
-from gmr_agents.schema import business_rules  # noqa: E402
-from gmr_agents.schema.catalog import get_catalog  # noqa: E402
-from gmr_agents.sql import executor  # noqa: E402
-from gmr_agents.validation import sql_guard  # noqa: E402
+from gmr_agents.catalog import business_rules  # noqa: E402
+from gmr_agents.catalog.catalog import get_catalog  # noqa: E402
+from gmr_agents.execution import executor  # noqa: E402
+from gmr_agents.guards import sql_guard  # noqa: E402
 
 pd.set_option("display.width", 220)
 pd.set_option("display.max_columns", 20)

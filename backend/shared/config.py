@@ -235,6 +235,7 @@ PAST_QUESTIONS_MIN_SCORE = _float("PAST_QUESTIONS_MIN_SCORE")  # fused score a p
 PAST_QUESTIONS_MAX = _int("PAST_QUESTIONS_MAX")               # most recent answered questions indexed from the log
 ROUTER_ENABLED = _flag("ROUTER_ENABLED")                      # near-exact questions skip the understanding LLM call
 ROUTER_MIN_RATIO = _float("ROUTER_MIN_RATIO")                 # fuzzy ratio (0.85..1) a question needs to be routed
+SQL_VERIFIED_DIRECT = _flag("SQL_VERIFIED_DIRECT")            # exact verified wording -> its SQL runs, no planner call
 VERIFY_ENTITIES = _flag("VERIFY_ENTITIES")                    # verifier: question entities must match the SQL filters
 # --- Data skeleton (gmr_agents/schema/data_skeleton.py): read-only picture of every table ---
 DATA_SKELETON_SAMPLE_PCT = _float("DATA_SKELETON_SAMPLE_PCT")     # TABLESAMPLE % for Postgres sample rows

@@ -24,7 +24,7 @@ os.chdir(ROOT)
 
 from shared import config, llm_gateway  # noqa: E402
 from shared.session_store import SessionStore  # noqa: E402
-from gmr_agents import language as L  # noqa: E402
+from gmr_agents.resolvers import language as L  # noqa: E402
 from gmr_agents import main  # noqa: E402
 
 # Test fixtures only (what a scripted answer writer "wrote") -- never used by production code.
@@ -554,8 +554,9 @@ class RoutingUnchangedTests(unittest.TestCase):
     English question, domain, topics or tables the query writer gets."""
 
     def _understand(self, message: str, pref: str = "auto") -> tuple[dict, dict]:
-        from gmr_agents import llm_pipeline as P
-        from gmr_agents.graph import context, nodes
+        from gmr_agents.agents.router import triage as RT
+        from gmr_agents.supervisor import context
+        from gmr_agents.agents.router import agent as nodes
 
         triage = {"kind": "data", "question": "What is the total installed meter count in Kashi?", "followup": False,
                   "domain": "wfm", "language": "en", "parts": [], "examples": ["e3"], "assumption": "",
@@ -567,9 +568,9 @@ class RoutingUnchangedTests(unittest.TestCase):
               "language_pref": pref, "forced_language": L.forced(message, pref)}
         context.open_run(ps["trace_id"], ps)
         try:
-            with mock.patch.object(P, "_route", lambda s, p: None), \
-                 mock.patch.object(P, "_triage", lambda s, p: copy.deepcopy(triage)), \
-                 mock.patch.object(P, "fix_question", lambda *a: False):
+            with mock.patch.object(RT, "_route", lambda s, p: None), \
+                 mock.patch.object(RT, "_triage", lambda s, p: copy.deepcopy(triage)), \
+                 mock.patch.object(RT, "fix_question", lambda *a: False):
                 out = nodes.understand_node({"question": message, "prior_turns": []},
                                             {"configurable": {"trace_id": ps["trace_id"]}})
         finally:

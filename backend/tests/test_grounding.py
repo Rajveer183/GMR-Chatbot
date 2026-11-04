@@ -15,8 +15,8 @@ ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 sys.path.insert(0, ROOT)
 os.chdir(ROOT)
 
-from gmr_agents.validation import grounding  # noqa: E402
-from gmr_agents.validation.grounding import Evidence  # noqa: E402
+from gmr_agents.checks import grounding  # noqa: E402
+from gmr_agents.checks.grounding import Evidence  # noqa: E402
 
 REVIEW = Evidence("term:review", "business_rules.yaml#glossary", "review",
                   "review: Auto-indexing: evidence exists but is inconclusive; needs manual check.", 0.85)

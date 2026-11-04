@@ -1,1 +1,1 @@
-"""SQL execution against Athena (MDM + WFM silver) and Postgres (WFM gold)."""
+"""Old location -- the modules moved (see docs/ARCHITECTURE.md); the aliases here keep old imports working."""

@@ -1,6 +1,6 @@
 """KPI 2 vs KPI 3 table choice (entity_check): the question's words decide the productivity table."""
 
-from gmr_agents.validation.entity_check import check
+from gmr_agents.checks.entity_check import check
 
 CUBE = ("SELECT label, SUM(total_installations) FROM public.gold_mi_productivity_trend_month_agg "
         "WHERE aggregate_level = 'circle' AND project = 'ALL' AND filter_level = 'all' AND category = 'ALL' GROUP BY label")

@@ -17,7 +17,7 @@ The hard part is not generating SQL. It is making sure the answer is **correct, 
 
 ## 3. The agent workflow
 
-The workflow is a **LangGraph** state graph (`backend/gmr_agents/graph/`). The principle is: *the LLM plans and writes; application code validates, executes and decides when to stop.*
+The workflow is a **LangGraph** state graph (`backend/gmr_agents/supervisor/` wiring the agents in `backend/gmr_agents/agents/`; see `docs/ARCHITECTURE.md`). The principle is: *the LLM plans and writes; application code validates, executes and decides when to stop.*
 
 ```mermaid
 stateDiagram-v2
@@ -61,7 +61,7 @@ stateDiagram-v2
 
 ## 5. Knowledge and retrieval
 
-Business knowledge is stored as YAML in `backend/gmr_agents/schema/data/`:
+Business knowledge is stored as YAML in `backend/gmr_agents/catalog/data/`:
 
 - `business_rules.yaml` — how each KPI is computed (hot-reloaded)
 - `examples.yaml` — verified question → SQL examples, checked by `eval/question_bank/verify_examples.py`

@@ -75,7 +75,7 @@ def run(name: str, script: list[dict], *, max_steps: int | None = None, max_repa
                 return None
             return inner(task, prompt, **kw)
         llm_gateway.chat_json = capped
-    from gmr_agents.tools import sql_executor
+    from gmr_agents.execution.tools import sql_executor
     real_run_sql = sql_executor.run_sql
     if db_down:
         sql_executor.run_sql = lambda plan, catalog: {"ok": False, "result": {}, "error": {

@@ -2,7 +2,7 @@
 
 import sqlglot
 
-from gmr_agents.validation.sql_guard import _check_rollup_level
+from gmr_agents.guards.sql_guard import _check_rollup_level
 
 T = "public.gold_mi_technician_productivity_day_agg"
 M = "public.gold_mi_technician_productivity_month_agg"

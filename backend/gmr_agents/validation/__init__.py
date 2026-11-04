@@ -1,1 +1,1 @@
-"""Validation: the pre-execution SQL guard and the post-execution headline re-check."""
+"""Old location -- the modules moved (see docs/ARCHITECTURE.md); the aliases here keep old imports working."""

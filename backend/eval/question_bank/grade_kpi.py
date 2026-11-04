@@ -25,7 +25,7 @@ from collections import defaultdict
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, os.path.dirname(os.path.dirname(HERE)))
-from gmr_agents.schema.table_metadata import SCHEMA_RE, WFM_TABLES  # noqa: E402
+from gmr_agents.catalog.table_metadata import SCHEMA_RE, WFM_TABLES  # noqa: E402
 
 # Card prefix -> the gold tables its KPI is built from (backend kpi_catalog / kpi_definitions.yaml).
 CARD_TABLES = {

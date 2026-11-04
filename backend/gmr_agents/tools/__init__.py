@@ -1,1 +1,1 @@
-"""Tools the agent may request. Executed by application code, never by the LLM."""
+"""Old location -- the modules moved (see docs/ARCHITECTURE.md); the aliases here keep old imports working."""

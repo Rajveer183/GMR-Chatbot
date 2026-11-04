@@ -13,7 +13,7 @@ ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 sys.path.insert(0, ROOT)
 os.chdir(ROOT)
 
-from gmr_agents.validation.query_encoder import encode, prompt_line  # noqa: E402
+from gmr_agents.resolvers.query_encoder import encode, prompt_line  # noqa: E402
 
 
 class EncoderTests(unittest.TestCase):

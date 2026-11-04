@@ -13,7 +13,7 @@ ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 sys.path.insert(0, ROOT)
 os.chdir(ROOT)
 
-from gmr_agents.schema import chunking  # noqa: E402
+from gmr_agents.retrieval import chunking  # noqa: E402
 
 LONG_STEP = "a detailed computation step " * 30          # ~230 tokens each
 

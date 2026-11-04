@@ -2,8 +2,8 @@
 
 from unittest import mock
 
-from gmr_agents.sql import hierarchy
-from gmr_agents.validation.entity_check import check
+from gmr_agents.execution import hierarchy
+from gmr_agents.checks.entity_check import check
 
 SAT = "FROM public.gold_mi_sat_invoice_snapshot WHERE LOWER(project) = 'kashi'"
 

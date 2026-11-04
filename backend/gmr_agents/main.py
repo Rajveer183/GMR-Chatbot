@@ -45,10 +45,11 @@ from pydantic import BaseModel
 from shared import config, llm_gateway, redis_client
 from shared.logging_config import append_jsonl, configure_logging, new_trace_id
 from shared.session_store import SessionStore
-from gmr_agents import answer_cache, language, prewarm
+from gmr_agents.ops import answer_cache, prewarm
+from gmr_agents.resolvers import language
 from gmr_agents.llm_pipeline import run_agent
-from gmr_agents.schema import business_rules
-from gmr_agents.schema.catalog import MAX_CACHE_AGE_SECONDS, get_catalog
+from gmr_agents.catalog import business_rules
+from gmr_agents.catalog.catalog import MAX_CACHE_AGE_SECONDS, get_catalog
 
 configure_logging()
 log = logging.getLogger(__name__)
@@ -178,7 +179,7 @@ async def _keep_catalogs_fresh(stale: list[str]) -> None:
 async def _keep_skeleton_fresh() -> None:
     """Rebuild the read-only data skeleton (and the indexes built from it) in the
     background when it is older than DATA_SKELETON_MAX_AGE -- never on a question."""
-    from gmr_agents.schema import data_skeleton
+    from gmr_agents.retrieval import data_skeleton
 
     while True:
         try:
@@ -228,7 +229,7 @@ async def lifespan(_: FastAPI):
         log.exception("Retrieval warm-up failed -- it will build on first use.")
     # Orphan place values (blank division / circle with a known child) -> their parent, learnt
     # from the gold data in the background (~15 s); queries run unchanged until it is ready.
-    from gmr_agents.sql import hierarchy
+    from gmr_agents.execution import hierarchy
     hierarchy.refresh_in_background()
     refresher = asyncio.create_task(_keep_catalogs_fresh(stale))
     skeleton = asyncio.create_task(_keep_skeleton_fresh())
@@ -612,9 +613,9 @@ def table_page(req: TablePageRequest) -> dict:
     read-only layer and run with OFFSET / LIMIT -- no LLM call, no new SQL, and
     the rows never enter an LLM prompt."""
     from gmr_agents.llm_pipeline import _cell, raw_cols
-    from gmr_agents.schema.catalog import get_catalog
-    from gmr_agents.sql import executor
-    from gmr_agents.validation import sql_guard
+    from gmr_agents.catalog.catalog import get_catalog
+    from gmr_agents.execution import executor
+    from gmr_agents.guards import sql_guard
 
     if req.page < 1 or req.page_size not in _PAGE_SIZES:
         raise HTTPException(status_code=422, detail=f"page must be >= 1 and page_size one of {_PAGE_SIZES}.")
@@ -667,7 +668,7 @@ def llm_status() -> dict:
 def service_metrics(hours: float = 24.0) -> dict:
     """P50/P95 latency and time to first token, tokens, cost, LLM / tool / DB work, refusal /
     busy / repair / number-correction rates, cache hit rate and SLO targets (gmr_agents/metrics.py)."""
-    from gmr_agents import metrics
+    from gmr_agents.ops import metrics
 
     return metrics.compute(max(0.1, min(hours, 24 * 30)))
 

@@ -1,6 +1,6 @@
 """Supply utilization / MI pace vs stock cards (entity_check): the card's four figures, and warehouse names."""
 
-from gmr_agents.validation.entity_check import check
+from gmr_agents.checks.entity_check import check
 
 RATE_ONLY = ("SELECT ROUND(SUM(installed_count) * 100.0 / NULLIF(SUM(inventory_count), 0), 2) AS utilization_pct "
              "FROM public.gold_meter_inventory_event_month_agg WHERE UPPER(oem) = 'AEW' AND period_start <= CURRENT_DATE")

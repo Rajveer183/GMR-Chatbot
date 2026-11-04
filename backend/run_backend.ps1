@@ -6,7 +6,7 @@
 # Auto-reload is off by default: WatchFiles hung the reload several times when
 # a file changed during a long Athena query, leaving the OLD code serving
 # requests with no error. After a code change, stop (Ctrl+C) and start again.
-# KPI logic lives in gmr_agents/schema/data/business_rules.yaml and reloads
+# KPI logic lives in gmr_agents/catalog/data/business_rules.yaml and reloads
 # automatically -- no restart needed after editing it.
 param(
     [switch]$Dev,

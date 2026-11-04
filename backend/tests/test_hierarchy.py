@@ -15,7 +15,7 @@ os.chdir(ROOT)
 
 import pandas as pd  # noqa: E402
 
-from gmr_agents.sql import hierarchy as H  # noqa: E402
+from gmr_agents.execution import hierarchy as H  # noqa: E402
 
 MAP = {("division", "sub_division"): {"2614221-edsd chomua": "edd kosi mathura"},
        ("circle", "division"): {"edd jaunpur nagar": "edc i jaunpur"}}

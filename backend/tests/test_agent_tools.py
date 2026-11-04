@@ -14,7 +14,7 @@ sys.path.insert(0, ROOT)
 os.chdir(ROOT)
 
 from db_connection.readonly import ReadOnlyViolation, assert_read_only  # noqa: E402
-from gmr_agents.tools import calculator, calling, registry  # noqa: E402
+from gmr_agents.execution.tools import calculator, calling, registry  # noqa: E402
 from shared import config, llm_gateway  # noqa: E402
 
 

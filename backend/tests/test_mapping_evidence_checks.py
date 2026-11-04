@@ -1,7 +1,7 @@
 """Mapping-audit evidence tables (mapping_audit_candidates / mapping_audit_evidence): a query must name a meter or
 a feeder and pin the month -- the tables hold a row per consumer x candidate feeder (x 30-minute slot)."""
 
-from gmr_agents.validation.entity_check import _mapping_problems
+from gmr_agents.checks.entity_check import _mapping_problems
 
 LATEST = "data_date = (SELECT MAX(data_date) FROM hes_gold.mapping_audit_summary)"
 

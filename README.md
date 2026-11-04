@@ -64,18 +64,22 @@ See [docs/EXPLANATION.md](docs/EXPLANATION.md) for the reasoning behind each sta
 ├── backend/                     FastAPI service (Python)
 │   ├── gmr_agents/              the chatbot
 │   │   ├── main.py              API: /api/ai-query (+ /stream), sessions, table paging, TTS, history, metrics
-│   │   ├── llm_pipeline.py      understand → write SQL → run → answer (stages + prompts)
-│   │   ├── graph/               LangGraph orchestration of those stages (nodes, routing, state)
-│   │   ├── guards/              step / retry limits, prompt-injection scan, SQL validation, idempotency
-│   │   ├── validation/          SQL safety (sqlglot), entity check, number check, grounding, scope
-│   │   ├── tools/               tools the planner may call (SQL executor, calculator)
-│   │   ├── sql/                 query execution, engine connections, place hierarchy
-│   │   ├── schema/              live table catalog, retrieval (BM25 + embeddings), knowledge store
+│   │   ├── supervisor/          LangGraph graph: routes each question through the agents, step / retry limits
+│   │   ├── agents/              the LLM agents (one call each, + bounded repair) -- see docs/ARCHITECTURE.md
+│   │   │   ├── router/          Intent Router + Question Refiner (triage; skipped for verified wordings)
+│   │   │   ├── sql_writer/      SQL Writer + Query Debugger (plan, validate, execute, repair)
+│   │   │   ├── narrator/        Answer Narrator (summary, insights; numbers checked by code)
+│   │   │   └── knowledge/       Knowledge agent / RAG (explains KPIs and terms from retrieved chunks)
+│   │   ├── retrieval/           hybrid retrieval (BM25 + embeddings): schema, examples, values, glossary
+│   │   ├── catalog/             live table catalog, table metadata, business rules, verified examples
 │   │   │   └── data/            business_rules / examples / kpi_definitions / table_metadata / charts (.yaml)
-│   │   ├── answer_cache.py      answer cache keyed by data version
-│   │   ├── context_manager.py   prompt token budgeting
-│   │   ├── metrics.py           latency / token / refusal metrics for /api/metrics
-│   │   └── prewarm.py           optional cache pre-warmer (PREWARM_ENABLED)
+│   │   ├── resolvers/           place scope, question slots, response language
+│   │   ├── guards/              prompt-injection scan, SQL safety (sqlglot), step / retry limits, idempotency
+│   │   ├── checks/              entity check (before running), number / extreme / citation checks (after)
+│   │   ├── execution/           query execution, engine connections, place hierarchy, tools/ allowlist
+│   │   ├── presentation/        result facts, KPI cards / charts / tables, dashboard card charts
+│   │   ├── ops/                 answer cache + prewarm, prompt token budgets, /api/metrics
+│   │   └── llm_pipeline.py      compatibility facade (run_agent + every moved name)
 │   ├── shared/                  config (.env), LLM gateway + rate limiter, token counting,
 │   │                            logging, chat-session store, TTS, number formatting
 │   ├── db_connection/           read-only Athena (boto3) and Postgres (psycopg2) connectors
@@ -127,7 +131,7 @@ question
 `explain` questions are answered from retrieved KPI definitions; `chitchat` / `out_of_scope`
 replies come from the triage call.
 
-**Answer language** (`gmr_agents/language.py`). Every stage after triage works on the
+**Answer language** (`gmr_agents/resolvers/language.py`). Every stage after triage works on the
 standalone English question, so the same question routes to the same KPI / SQL in any
 language. Only the written answer changes language, decided by code in this order:
 
@@ -226,11 +230,11 @@ in the frontend compose file to the backend's public URL.
 
 | To change | Edit |
 |---|---|
-| How a KPI is computed / a new KPI | `gmr_agents/schema/data/business_rules.yaml` (reloads without restart) |
-| A verified question → SQL example | `gmr_agents/schema/data/examples.yaml` (check with `eval/question_bank/verify_examples.py`) |
-| Column meaning, table description, which tables load | `gmr_agents/schema/data/table_metadata.yaml` |
-| KPI reference used for explain answers | `gmr_agents/schema/data/kpi_definitions.yaml` |
-| Chart types and when each fits | `gmr_agents/schema/data/charts.yaml` |
+| How a KPI is computed / a new KPI | `gmr_agents/catalog/data/business_rules.yaml` (reloads without restart) |
+| A verified question → SQL example | `gmr_agents/catalog/data/examples.yaml` (check with `eval/question_bank/verify_examples.py`) |
+| Column meaning, table description, which tables load | `gmr_agents/catalog/data/table_metadata.yaml` |
+| KPI reference used for explain answers | `gmr_agents/catalog/data/kpi_definitions.yaml` |
+| Chart types and when each fits | `gmr_agents/catalog/data/charts.yaml` |
 | Models, limits, budgets, cache sizes | `backend/.env` |
 
 After changing which tables load, move `gmr_agents/cache/<domain>_catalog.json` aside and

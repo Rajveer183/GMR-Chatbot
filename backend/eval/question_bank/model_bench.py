@@ -31,10 +31,10 @@ if ONLY == "nvidia":  # reference triage on NVIDIA too, so no Groq quota is spen
 load_dotenv(os.path.join(ROOT, ".env"))
 
 from gmr_agents import llm_pipeline as P  # noqa: E402
-from gmr_agents.schema import business_rules  # noqa: E402
-from gmr_agents.schema.catalog import get_catalog  # noqa: E402
-from gmr_agents.sql import executor  # noqa: E402
-from gmr_agents.validation import sql_guard  # noqa: E402
+from gmr_agents.catalog import business_rules  # noqa: E402
+from gmr_agents.catalog.catalog import get_catalog  # noqa: E402
+from gmr_agents.execution import executor  # noqa: E402
+from gmr_agents.guards import sql_guard  # noqa: E402
 from shared import llm_gateway  # noqa: E402
 
 CANDIDATES = [

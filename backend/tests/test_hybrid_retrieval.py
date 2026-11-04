@@ -18,7 +18,7 @@ os.chdir(ROOT)
 
 import numpy as np  # noqa: E402
 
-from gmr_agents.schema.retrieval import BM25, item_ranks, rrf_fuse, tokens  # noqa: E402
+from gmr_agents.retrieval.retrieval import BM25, item_ranks, rrf_fuse, tokens  # noqa: E402
 
 
 class RrfTests(unittest.TestCase):

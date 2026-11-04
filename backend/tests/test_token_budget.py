@@ -16,7 +16,8 @@ os.chdir(ROOT)
 
 import pandas as pd  # noqa: E402
 
-from gmr_agents import context_manager, llm_pipeline as P  # noqa: E402
+from gmr_agents.ops import context_manager  # noqa: E402
+from gmr_agents import llm_pipeline as P
 from shared import config, llm_gateway, tokens  # noqa: E402
 
 

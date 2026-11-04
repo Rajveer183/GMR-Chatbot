@@ -1,6 +1,6 @@
 """O&M card checks (entity_check._om_problems): mistakes seen live on 26 Oct 2026 against the dashboard SQL."""
 
-from gmr_agents.validation.entity_check import check
+from gmr_agents.checks.entity_check import check
 
 
 def om(question, sql, needle):
@@ -41,7 +41,7 @@ def test_open_ageing_carries_sat_split():
 
 
 def test_month_words_are_not_read_inside_other_words():
-    from gmr_agents.validation.query_encoder import encode
+    from gmr_agents.resolvers.query_encoder import encode
     assert not encode("Escalations by discom decision").get("months")  # live 26 Oct: filtered December 2026
     assert not encode("marching ahead with augmented teams").get("months")
     assert encode("installs in Dec 2025")["months"] == ["december"]

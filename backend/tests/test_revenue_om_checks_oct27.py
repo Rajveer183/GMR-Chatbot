@@ -1,7 +1,7 @@
 """entity_check rules added 27 Oct 2026 for mistakes seen live on the journey, current-stage, receivables,
 revenue-ageing and O&M productivity / closed cards."""
 
-from gmr_agents.validation.entity_check import check
+from gmr_agents.checks.entity_check import check
 
 J = "FROM public.gold_meter_journey_stage_agg"
 RCV = ("FROM (SELECT r.*, ROW_NUMBER() OVER (PARTITION BY project ORDER BY created_at DESC, id DESC) AS rn "

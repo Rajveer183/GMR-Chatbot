@@ -15,7 +15,8 @@ from __future__ import annotations
 
 from typing import Any
 
-from gmr_agents.validation import entity_check, sql_guard
+from gmr_agents.checks import entity_check
+from gmr_agents.guards import sql_guard
 
 
 def validate_sql(sql: str, catalog) -> dict[str, Any]:

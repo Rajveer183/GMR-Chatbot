@@ -15,7 +15,7 @@ os.chdir(ROOT)
 
 import pandas as pd  # noqa: E402
 
-from gmr_agents.validation import number_check as nc  # noqa: E402
+from gmr_agents.checks import number_check as nc  # noqa: E402
 
 SAT = pd.DataFrame({"project": ["TRIVENI", "KASHI", "AGRA"], "total_mi": [1277180, 1352702, 1636209],
                     "total_sat": [1106912, 1190471, 1457191], "pct_sat": [86.67, 88.01, 89.06]})

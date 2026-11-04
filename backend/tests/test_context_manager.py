@@ -13,7 +13,7 @@ ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 sys.path.insert(0, ROOT)
 os.chdir(ROOT)
 
-from gmr_agents.context_manager import Section, build, fits_hard_limit  # noqa: E402
+from gmr_agents.ops.context_manager import Section, build, fits_hard_limit  # noqa: E402
 
 WORDS = "lorem ipsum dolor sit amet " * 20  # ~150 tokens per item
 

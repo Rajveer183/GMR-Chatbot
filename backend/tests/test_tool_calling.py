@@ -24,8 +24,8 @@ import numpy as np  # noqa: E402
 import pandas as pd  # noqa: E402
 from pydantic import BaseModel, ConfigDict  # noqa: E402
 
-from gmr_agents.tools import calling, registry  # noqa: E402
-from gmr_agents.tools.calling import ToolSpec  # noqa: E402
+from gmr_agents.execution.tools import calling, registry  # noqa: E402
+from gmr_agents.execution.tools.calling import ToolSpec  # noqa: E402
 from shared.llm_gateway import extract_json  # noqa: E402
 
 
