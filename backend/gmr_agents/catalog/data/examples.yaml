@@ -287,7 +287,7 @@ examples:
                             / ((SELECT as_of FROM w) - (SELECT since FROM w) + 1), 0)) AS days_of_stock_left,
              (SELECT to_char(since, 'DD Mon YYYY') || ' to ' || to_char(as_of, 'DD Mon YYYY') FROM w) AS pace_period
       FROM public.gold_meter_inventory_event_day_agg
-      WHERE LOWER(project) = 'kashi' AND period_start <= (SELECT as_of FROM w)
+      WHERE period_start <= (SELECT as_of FROM w)
       GROUP BY ROLLUP (category)
       ORDER BY GROUPING(category) DESC, days_of_stock_left
 
@@ -3242,7 +3242,7 @@ examples:
       GROUP BY ROLLUP (circle)
       ORDER BY GROUPING(circle) DESC, installations DESC
 
-  - q: ["PUVVNL productivity per technician per day, installations and active technicians in September 2026", "EDC Varanasi circle productivity per technician per day in September 2026", "productivity of a discom zone circle or division"]
+  - q: ["EDC Varanasi circle productivity per technician per day, installations and active technicians in September 2026", "PUVVNL productivity per technician per day in September 2026", "productivity of a discom zone circle or division"]
     note: "Place only, no category word -> category = 'ALL' and NO meter_type filter. A full stored place name (with its EDC / EUDD / EUDSD prefix) -> exact LOWER(col) = '...'."
     sql: |
       SELECT ROUND(SUM(installation_count)::numeric / NULLIF(SUM(technician_day_count), 0), 2) AS productivity_per_tech_day,
