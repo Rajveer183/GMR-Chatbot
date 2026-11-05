@@ -3216,7 +3216,7 @@ examples:
       GROUP BY ROLLUP (discom)
       ORDER BY GROUPING(discom) DESC, installations DESC
 
-  - q: ["MI productivity month wise in Agra from January 2026 to September 2026", "DT meter MI productivity month wise in Mathura zone from April 2026 to September 2026", "productivity month wise of a zone or project"]
+  - q: ["DT meter MI productivity month wise in Mathura zone from April 2026 to September 2026", "MI productivity month wise in Agra from January 2026 to September 2026", "productivity month wise of a zone or project"]
     note: "Month wise = _month_agg GROUP BY period_start (KPI 2), never the trend cube. A category named -> category = 'X' AND meter_type = 'ALL'; a place -> its own column."
     sql: |
       SELECT CASE WHEN GROUPING(period_start) = 1 THEN 'Total' ELSE to_char(period_start, 'Mon YYYY') END AS month,

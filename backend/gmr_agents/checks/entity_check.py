@@ -87,6 +87,7 @@ def _grouped_by(low: str, column: str) -> bool:
     return bool(re.search(rf"\b(?:group|partition)\s+by\b[^;]*?\b{column}\b", low, re.DOTALL))
 
 
+_SHARE_RE = re.compile(r"\b(?:share|percent|percentage)\b|%", re.I)
 _COMPARE_RE = re.compile(r"\b(compare|compared|comparison|versus|vs|other|others|rank|ranking|"
                          r"highest|lowest|best|worst)\b")
 _DATE_COLUMN_RE = re.compile(r"(date|time|_at$|^year|year$|month|period|^day|_day$|week)")
@@ -587,9 +588,11 @@ def check(question: str, sql_texts: list[str], columns: set[str] | None = None, 
         # was dropped (17,869 Kashi installs instead of 273 SEIPL).
         named = _named(question, table) | (_named(asked, table) if asked else set())
         # Every value named ('all projects (Agra, Kashi, Triveni)') = no filter needed. The SQL
-        # breaking down by that dimension, for several named values or a comparison ('Agra vs
-        # other projects', 'why does HPL have the highest ...') = each named one is a row.
-        if len(named) == len(table) or ((len(named) > 1 or comparing) and _grouped_by(low, column)):
+        # breaking down by that dimension, for several named values, a comparison ('Agra vs
+        # other projects', 'why does HPL have the highest ...') or a share ('what share of all
+        # installed meters is from Triveni') = each named one is a row.
+        if len(named) == len(table) or ((len(named) > 1 or comparing or _SHARE_RE.search(question))
+                                         and _grouped_by(low, column)):
             named_ok = named
         else:
             named_ok = set()
@@ -608,9 +611,16 @@ def check(question: str, sql_texts: list[str], columns: set[str] | None = None, 
     has_category = cols is None or any("category" in c for c in cols)
     words = _words(f"{question} {asked or ''}")
     named_cats = set()
+    asked_cats = {cat for cat, aliases in _CATEGORIES.items()
+                  if any(f" {a} " in _words(question) for a in aliases) or (cat == "CONSUMER" and _CONSUMER_RE.search(question))}
+    # Several categories named and the SQL breaks down by category ('Split SAT 10 by DT, Consumer and
+    # Feeder'): each one is a row, like the project / OEM breakdowns above. Bare 'DT' / 'feeder' count
+    # here -- grouping by category returns every category whatever the word meant.
+    mentioned = asked_cats | {cat for cat in _CATEGORIES if re.search(rf"\b{cat.lower()}r?s?\b", _words(question))}
+    split = len(mentioned) > 1 and _grouped_by(low, r"\w*category")
     for cat, aliases in _CATEGORIES.items() if has_category and not mapping else ():
-        named = any(f" {a} " in _words(question) for a in aliases) or (cat == "CONSUMER" and _CONSUMER_RE.search(question))
-        if named and cat.lower() not in low:
+        named = cat in asked_cats
+        if named and cat.lower() not in low and not split:
             problems.append(f"the question asks about {cat} meters but the SQL never filters/selects category '{cat}'")
         if named or any(f" {a} " in words for a in aliases) or (cat == "CONSUMER" and _CONSUMER_RE.search(words)) \
                 or re.search(rf"\b{cat.lower()}s?\b", words):
@@ -767,7 +777,8 @@ def check(question: str, sql_texts: list[str], columns: set[str] | None = None, 
     # '<level> wise' / 'by <level>' = one row per value of that column. Seen live: 'each step of the
     # meter journey in agra zone wise' ran as one row for zone = 'agra' (the breakdown was dropped).
     for lvl in ("zone", "circle", "division", "sub_division", "discom", "project", "warehouse", "oem"):
-        word = lvl.replace("_", "[ _-]?")
+        # 'sub division wise' is the sub_division breakdown, not a division-wise one.
+        word = lvl.replace("_", "[ _-]?") if lvl != "division" else r"(?<!sub )(?<!sub-)(?<!sub_)division"
         if (re.search(rf"\b{word}s?[- ]?wise\b|\bby {word}s?\b|\b(each|every|per) {word}\b|\b{word}s? breakdown\b",
                       question, re.I)
                 and (cols is None or lvl in cols)
