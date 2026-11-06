@@ -339,6 +339,123 @@ _MONTHS = {m: i for i, m in enumerate(("january", "february", "march", "april", 
                                        "september", "october", "november", "december"), 1)}
 
 
+# Technical dashboard cards (power quality / DT load / load violation): one row per meter (or DT) per month.
+_TECHNICAL_TABLES = ("voltage_deviation_index", "voltage_fluctuation_index", "voltage_unbalance_index", "voltage_drop",
+                     "current_unbalance", "pct_time_out_of_band", "pct_time_current_imbalance", "low_voltage_pockets",
+                     "low_voltage_pockets_meters", "dt_loading", "dt_peak_loading", "dt_peak_loading_feeder",
+                     "dt_load_kva", "dt_load_rise", "load_violation", "load_assessed_consumers")
+_THREE_PHASE_TABLES = ("voltage_unbalance_index", "current_unbalance", "pct_time_current_imbalance")
+TECHNICAL_DEFAULT_MONTH = ("(SELECT MAX(month_date) FROM (SELECT month_date FROM hes_gold.dt_load_profile WHERE "
+                           "month_date >= DATE '2026-06-01' GROUP BY month_date HAVING COUNT(DISTINCT data_date) >= 10) c)")
+
+
+_PROJECT_ZONES = {"agra": ("agra", "aligarh", "etah", "firozabad", "mathura"),
+                  "kashi": ("azamgarh", "varanasi i", "varanasi ii"),
+                  "triveni": ("mirzapur", "prayagraj i", "prayagraj ii")}
+
+
+def _technical_problems(question: str, sql_texts: list[str]) -> list[str]:
+    """Technical-card tables (6 Nov 2026 test): answers summed June-August (no month pin) or read August
+    (MAX(data_date), 2-3 days of readings) instead of the dashboard's default month."""
+    problems: list[str] = []
+    month_wise = re.search(r"\b(month[- ]?wise|monthly(?! peak)|trend|each month|every month|by month|over (?:the )?months|"
+                           r"june to|from june|compare(?:d)? (?:june|july|august))\b", question, re.I)
+    for s in sql_texts:
+        low = (s or "").lower()
+        used = [t for t in _TECHNICAL_TABLES if re.search(rf"\bhes_gold\.{t}\b", low)]
+        if not used:
+            continue
+        if not month_wise and not re.search(r"\b(?:data_date|month_date)\s*(?:=|between\b|in\s*\()", low):
+            problems.append("these tables hold one row per meter per MONTH: pin one month -- data_date (month_date on "
+                            f"dt_load_kva) = {TECHNICAL_DEFAULT_MONTH} when no month is asked (the dashboard's default "
+                            "month), or DATE '2026-07-01' for a named month. Never add months together")
+        # Athena has no Postgres casts. Live 6 Nov: ROUND(COUNT(DISTINCT meter_no)::numeric, 2) -> 'mismatched input'.
+        if re.search(r"::\s*\w+", low):
+            problems.append("Athena SQL: no '::' casts -- use CAST(x AS DOUBLE) (or nothing for a count)")
+        # AND ... OR ... without brackets: the OR side escapes the month / band filters. Live 6 Nov: 'critical low
+        # voltage meters in Kashi' wrote band = 'Critical' AND zone IN (Agra) OR zone IN (Kashi) -> 63,481.
+        flat = re.sub(r"--[^\n]*", "", low)
+        while re.search(r"\([^()]*\)", flat):              # brackets (and the subqueries in them) -> x
+            flat = re.sub(r"\([^()]*\)", "x", flat)
+        for where in re.findall(r"\bwhere\b(.*?)(?=\bgroup\s+by\b|\border\s+by\b|\bhaving\b|\blimit\b|$)", flat, re.S):
+            if re.search(r"\band\b", where) and re.search(r"\bor\b", where):
+                problems.append("WHERE mixes AND with OR without brackets -- the OR side drops the month and other "
+                                "filters: put the alternatives in brackets, e.g. AND (zone IN (...) OR ...)")
+                break
+        # One project asked: only its zones. Same query added Agra's zones to a Kashi question.
+        asked_projects = [p for p in _PROJECT_ZONES if re.search(rf"\b{p}\b", question, re.I)]
+        if len(asked_projects) == 1 and not _COMPARE_RE.search(question.lower()):
+            for other, zones in _PROJECT_ZONES.items():
+                if other != asked_projects[0] and re.search(rf"'{zones[0]}'", low):
+                    problems.append(f"the question is about {asked_projects[0].title()} only: filter its zones "
+                                    f"({', '.join(_PROJECT_ZONES[asked_projects[0]]).upper()}), not {other.title()}'s")
+                    break
+        # Live 6 Nov: 'DTs by monthly peak loading band' was answered as a June-August trend.
+        # MAX(...) over a GROUP BY returns one row per qualifying month -- right today only because one month has
+        # 10+ days (live 6 Nov, '% time beyond voltage band in Varanasi I zone').
+        if re.search(r"max\s*\(\s*month_date\s*\)(?:\s+as\s+\w+)?\s+from\s+hes_gold\.dt_load_profile\s+"
+                     r"(?:where\s[^)]*?)?group\s+by", low):
+            problems.append(f"the default month must be one value: use exactly {TECHNICAL_DEFAULT_MONTH}")
+        outer = re.sub(r"select\s+(?:max\s*\(\s*)?month_date\s*\)?(?:\s+as\s+\w+)?\s+from\s+hes_gold\.dt_load_profile[^)]*\)",
+                       "", low)
+        grouped = " ".join(re.findall(r"\bgroup\s+by\s+(?:rollup\s*\()?([\w\s,.]+)", outer))   # the GROUP BY lists only
+        pinned = re.search(r"\b(?:data_date|month_date)\s*=", outer)   # grouping one pinned month is harmless
+        if not month_wise and not pinned and re.search(r"\b(?:data_date|month_date)\b", grouped) \
+                and not re.search(r"\b(?:june|july|august|months|vs|versus|compare)\b", question, re.I):
+            problems.append("one month was asked (no month-wise / trend wording): pin data_date to the default month "
+                            "and do not group by month")
+        # Also 'SELECT MAX(data_date) AS m FROM hes_gold.dt_load_rise' (live 6 Nov: load-change bands for August).
+        if re.search(rf"max\(\s*(?:data_date|month_date)\s*\)(?:\s+as\s+\w+)?\s+from\s+(?:hes_gold\.)?"
+                     rf"(?:{'|'.join(_TECHNICAL_TABLES)})\b", low):
+            problems.append("the default month is not MAX(data_date) (August 2026 holds only 2-3 days): use "
+                            f"{TECHNICAL_DEFAULT_MONTH}")
+        named = [m for m in _MONTHS if re.search(rf"\b{m}\b", question, re.I)]
+        if len(named) == 1 and not month_wise and f"-{_MONTHS[named[0]]:02d}-01" not in low:
+            problems.append(f"the question names {named[0].title()}: pin DATE '2026-{_MONTHS[named[0]]:02d}-01'")
+        # Live 6 Nov: 'Load violation in EDC Ballia' took MAX(month_date) FROM dt_load_profile without the
+        # 10-day condition and answered for August.
+        if "dt_load_profile" in low and not re.search(r"count\s*\(\s*distinct\s+data_date\s*\)\s*>=\s*10", low):
+            problems.append(f"the default month needs the 10-day condition -- use exactly {TECHNICAL_DEFAULT_MONTH}")
+        # Athena: ROLLUP takes column references only. Live 6 Nov: 'Voltage unbalance by circle' grouped
+        # ROLLUP (CASE WHEN circle IS NULL ... UPPER(circle) END) -> 'Queries of this type are not supported'.
+        for inner in re.findall(r"rollup\s*\(([^)]*\([^)]*\)[^)]*|[^)]*\bcase\b[^)]*)\)", low):
+            problems.append("Athena: GROUP BY ROLLUP (circle) on the bare column -- never on an expression "
+                            f"({inner.strip()[:40]}...); label the Total row in SELECT with CASE WHEN GROUPING(circle) = 1")
+            break
+        for t in _THREE_PHASE_TABLES:
+            if t in used and "blocks_3ph" not in low:
+                problems.append(f"{t} is a 3-phase card: add blocks_3ph > 0 (the dashboard always applies it)")
+        # Athena: a CASE label aliased with the grouped column's own name breaks GROUPING(col) in ORDER BY
+        # (live 6 Nov: '% time current imbalance above 10% by circle').
+        for col in set(re.findall(r"grouping\s*\(\s*(\w+)\s*\)", low)):
+            if col in ("zone", "circle", "division", "sub_division", "cluster", "role", "status", "category") \
+                    and re.search(rf"\bend\s+as\s+{col}\b", low):
+                problems.append(f"Athena: the ROLLUP label must not be named {col} (alias it {col}_name)")
+        # The global 'Unmapped' CASE label does not work here (live 6 Nov: 'which division has the highest % time
+        # out of band' -> EXPRESSION_NOT_AGGREGATE): select and group the bare column.
+        if "'unmapped'" in low and re.search(r"group\s+by\s+(?:rollup\s*\(\s*)?(?:upper|lower|case)\b", low):
+            problems.append("on these tables select and GROUP BY the bare place column (circle / zone / division) -- "
+                            "no 'Unmapped' CASE label; rankings add <col> IS NOT NULL")
+        # The asked measure. Live 6 Nov: '% time under voltage by circle' answered the out-of-band total.
+        if "pct_time_out_of_band" in used:
+            for words, col in ((r"under[- ]?voltage|\buv\b|low voltage time", "uv_blocks"),
+                               (r"over[- ]?voltage|\bov\b|high voltage time", "ov_blocks")):
+                if re.search(words, question, re.I) and col not in low:
+                    problems.append(f"the question asks for {col[:2].upper()} time: SUM({col}) * 100.0 / SUM(live_blocks)")
+        # 'more than N points' = the card's band (lower bound included). Live 6 Nov: '> 20' gave 1,150, card 1,152.
+        if "dt_load_rise" in used and re.search(r"load_rise_pp\s*>\s*\d", low) \
+                and re.search(r"\b(?:more than|over|above)\s+\d+\s*(?:points|pp|percentage points)", question, re.I):
+            problems.append("load-rise bands include their lower bound: 'more than 20 points' = load_rise_pp >= 20 "
+                            "(the card's 'Rose >20 pp')")
+        if (re.search(r"\b(?:which|top|most|highest|lowest|worst|best)\b", question, re.I)
+                and re.search(r"\border\s+by\b", low)):
+            col = next((c for c in ("sub_division", "division", "circle", "zone")
+                        if re.search(rf"\bgroup\s+by\b[^;]*\b{c}\b", low)), None)
+            if col and not re.search(rf"\b{col}\s+is\s+not\s+null", low):
+                problems.append(f"a {col.replace('_', ' ')} ranking must skip the blank area: add {col} IS NOT NULL")
+    return problems
+
+
 def _mapping_problems(question: str, sql_texts: list[str]) -> list[str]:
     """Consumer-to-feeder mapping audit (the dashboard's mapping_audit / _feeder / _summary tables)."""
     problems: list[str] = []
@@ -582,6 +699,11 @@ def check(question: str, sql_texts: list[str], columns: set[str] | None = None, 
     # The mapping audit's summary / feeder tables have no project column: a project is its zone list
     # (UPPER(zone) IN ('AGRA', ...)), and every meter in them is a consumer meter.
     mapping = any(m in low for m in _MAPPING_TABLES)
+    # The Technical-card tables have their own place / category columns (zones for a project, role / category
+    # instead of WFM's CONSUMER / DT / FEEDER and meter_type): the WFM category and meter-type checks don't apply
+    # (live 6 Nov: 'top 10 consumers by excess load' was sent back for a CONSUMER filter load_violation lacks).
+    technical = any(re.search(rf"\bhes_gold\.{t}\b", low) for t in _TECHNICAL_TABLES)
+    mapping = mapping or technical
 
     for label, table, column in (("project", _PROJECTS, "project"), ("OEM", _OEMS, "oem")):
         # The user's own words count too: live 27 Oct the rewrite turned 'seipl' into 'SEPL' and the OEM filter
@@ -819,7 +941,7 @@ def check(question: str, sql_texts: list[str], columns: set[str] | None = None, 
                         "FILTER (WHERE sat_stage IS NOT NULL), never all installed meters")
 
     # Meter type: '1ph consumer meters' once ran as meter_type = 'LTCT-Consumer_meter' (0 rows).
-    has_type = cols is None or any("meter_type" in c for c in cols)
+    has_type = (cols is None or any("meter_type" in c for c in cols)) and not technical
     named_types = meter_types(question) if has_type else []
     for mt in named_types:
         if not any(s in low for s in _METER_TYPES[mt][1]):
@@ -885,6 +1007,7 @@ def check(question: str, sql_texts: list[str], columns: set[str] | None = None, 
     problems += _om_problems(question, low, asked)
     problems += _revenue_journey_problems(question, low, sql_texts, asked)
     problems += _mapping_problems(question, sql_texts)
+    problems += _technical_problems(question, sql_texts)
 
     # A meter-type exclusion nobody asked for. Live 26 Oct: 'invoice funnel zone wise in Triveni' added
     # meter_type <> 'OTHER-Consumer_meter' AND meter_type IS NOT NULL and lost 44 meters.
@@ -943,7 +1066,11 @@ def check(question: str, sql_texts: list[str], columns: set[str] | None = None, 
     from gmr_agents.resolvers.query_encoder import encode
 
     asked = encode(question)
-    if not any(asked.get(k) for k in ("years", "months", "dates", "relative_period", "as_of")):
+    # Technical-card tables: no period = the dashboard's default month (pinned by _technical_problems), never
+    # all time. Live 6 Nov: this check called the default month's DATE '2026-06-01' bound a leak and the
+    # repairs ended in SQL Athena could not run.
+    technical = any(re.search(rf"\bhes_gold\.{t}\b", low) for t in _TECHNICAL_TABLES)
+    if not technical and not any(asked.get(k) for k in ("years", "months", "dates", "relative_period", "as_of")):
         dated = re.findall(r"(?:period_start|date|_at|_date|day|_month)\w*\s*(?:=|>=|<=|>|<|between)\s*(?:date\s*)?'(\d{4}-\d{2}-\d{2})'", low)
         if dated:
             problems.append(f"the SQL filters on the date {dated[0]} but the question names no period -- "

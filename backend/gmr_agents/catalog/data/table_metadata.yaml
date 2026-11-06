@@ -62,6 +62,27 @@ mdm_tables:
     # the evidence behind one consumer's verdict (the dashboard's consumer drawer and proof-pack export)
     - mapping_audit_candidates
     - mapping_audit_evidence
+    # Technical > Power Quality cards (dashboard KpiBoard, one row per meter per month, data_date = 1st).
+    # Written by gmr-etl kpi_80 (VDI / drop / % out of band), kpi_82 (VFI), kpi_85 (VUI / current
+    # unbalance / % time CI), kpi_12 (low-voltage pockets). Verified live 6 Nov 2026; months 2026-06..08.
+    - voltage_deviation_index
+    - voltage_fluctuation_index
+    - voltage_unbalance_index
+    - voltage_drop
+    - current_unbalance
+    - pct_time_out_of_band
+    - pct_time_current_imbalance
+    - low_voltage_pockets
+    - low_voltage_pockets_meters
+    # Technical > Load Management cards (kpi_63 / 64 / 65 / 66 / 60). Low Power Factor is not trained.
+    - dt_loading
+    - dt_peak_loading
+    - dt_peak_loading_feeder
+    - dt_load_kva
+    - dt_load_rise
+    - load_violation
+    - load_assessed_consumers
+    - dt_load_profile
 
 wfm_tables:
   gmr_wfm_silver:
@@ -637,19 +658,38 @@ table_descriptions:
   voltage_imbalance: Per-meter voltage-imbalance event rate and how long it's persisted (ageing bucket).
   voltage_imbalance_alerts: Severity-tiered active voltage-imbalance alerts with streak/run-length tracking.
   voltage_imbalance_reduction: Period-over-period voltage-imbalance percentage comparison (did it improve).
-  low_voltage_pockets: Zone/area-level count of low-voltage-flagged meters, banded by severity and ageing.
-  low_voltage_pockets_meters: Meter-level detail behind low_voltage_pockets (which specific meters, how many days/blocks affected).
+  low_voltage_pockets: >-
+    Low-voltage pockets card: per month x discom/category/zone/circle/division/sub_division x band (Critical /
+    Poor / Average) x ageing_bucket, unique_meter_count. A meter can sit in several bands -- count meters from
+    low_voltage_pockets_meters.
+  low_voltage_pockets_meters: >-
+    Low-voltage pockets, one row per meter x band per month (days, band_blocks, phases_affected, ageing_bucket,
+    category, cluster, zone..sub_division, feeder_code, dtr_code). Meters flagged = COUNT(DISTINCT meter_no).
   voltage_deviation: Per-meter voltage deviation from nominal (mean/max % deviation, min/max/avg voltage).
-  voltage_deviation_index: Per-meter Voltage Deviation Index (VDI) -- a summarized deviation-severity score.
-  voltage_drop: Per-meter voltage-drop magnitude and cumulative drop.
-  voltage_fluctuation_index: Per-meter Voltage Fluctuation Index (VFI) per phase (R/Y/B), banded by fluctuation magnitude.
-  voltage_unbalance_index: Per-meter Voltage Unbalance Index (VUI) across the 3 phases, banded by severity.
+  voltage_deviation_index: >-
+    Voltage Deviation Index (VDI) card: one row per meter per month -- vdi_mean / vdi_p95 / vdi_rms (% away from
+    nominal), live_blocks, status Good / Moderate / Poor / Offline, role (meter type), zone..sub_station.
+  voltage_drop: >-
+    Voltage Drop card: one row per meter per month -- drop_mean / drop_max (volts below the 0.9 x nominal floor),
+    intervals_with_drop, status OK / Mild / Moderate / Severe / Offline, per-phase R/Y/B drops.
+  voltage_fluctuation_index: >-
+    Voltage Fluctuation Index (VFI) card: one row per meter per month -- vfi_pct (swing vs its own daily average),
+    six signed band counts (dips / surges), status Stable / Moderate / Unstable / Offline.
+  voltage_unbalance_index: >-
+    Voltage Unbalance Index (VUI) card: 3-phase meters, one row per meter per month -- vui_mean / vui_max, block
+    counts 0-2% / 2-3% / >3%, status Good / Moderate / Poor (Phase missing / Offline excluded).
   current_imbalance: Per-meter current-imbalance event rate and ageing bucket (mirrors voltage_imbalance, for current).
   current_imbalance_alerts: Severity-tiered active current-imbalance alerts with streak/run-length tracking.
   current_imbalance_reduction: Period-over-period current-imbalance percentage comparison.
-  current_unbalance: Per-meter current-unbalance magnitude by phase, banded (mirrors voltage_unbalance_index, for current).
-  pct_time_current_imbalance: Per-meter % of observed time spent above the current-imbalance threshold.
-  pct_time_out_of_band: Per-meter % of observed time voltage was over- or under-voltage (outside the acceptable band).
+  current_unbalance: >-
+    Meter Current Unbalance card: 3-phase meters, one row per meter per month -- current_unbalance_mean / _max (%),
+    block counts <3 / 3-5 / 5-10 / >=10%, status Good / Moderate / Elevated / Poor / Offline/NoLoad.
+  pct_time_current_imbalance: >-
+    % Time with unacceptable current imbalance (>10%) card: one row per 3-phase meter per month --
+    ci_gt_10pct_blocks / phase_i_live_blocks, status Compliant / Borderline / NonCompliant.
+  pct_time_out_of_band: >-
+    % Time beyond voltage tolerance band card: one row per meter per month -- ov_blocks / uv_blocks / oob_blocks of
+    live_blocks (+-10% of nominal), status Compliant / Borderline / NonCompliant / ChronicViolation / Offline.
   # hes_gold -- power factor
   low_power_factor: Zone/area-level count of low-power-factor meters/events, banded by severity and ageing.
   low_power_factor_meters: Meter-level detail behind low_power_factor (per-meter low-PF %, min/avg PF, ageing).
@@ -662,19 +702,41 @@ table_descriptions:
   power_factor_deterioration_meters: Meter-level detail behind power_factor_deterioration (which meters, how many qualifying days).
   # hes_gold -- load / DTR / feeder network loss
   dim_dtr_capacity: DTR (distribution transformer) rated capacity (kVA) reference/dimension table.
-  dt_loading: DTR-level loading (as % of rated capacity) distribution, banded.
+  dt_loading: >-
+    % DT Loading card: one row per DT x loading_band per month (only bands the DT spent time in) -- block_count of
+    total_blocks, plus per-DT peak_block_band / max_pct_loading / overload_blocks repeated on each row. Count DTs
+    with COUNT(DISTINCT meter_no).
+  dt_load_kva: >-
+    DT Load (kVA) card: one row per DT per DAY (data_date = day, month_date = month) -- peak/avg/min load kVA,
+    peak_pct_loading, overload_slots (half-hours at/above rating), 48-slot load_profile array, peak_band.
+  dt_load_profile: Per area x day x half-hour slot sums of DT load kVA and rating (area load profile).
+  dt_load_rise: >-
+    DT Load Rise card: one row per DT per month -- pct_loading (average % of rating) vs prev_pct_loading (previous
+    month), load_rise_pp (percentage points), peak rise.
+  dt_loading_daily: Per DT x day x loading band half-hour counts (daily view of dt_loading).
+  dt_peak_loading_feeder: >-
+    % DT Peak Loading by feeder: one row per feeder per month -- assessed_dts, overloaded_90_dts (>90%, includes
+    >100), overloaded_100_dts, underloaded_dts, most loaded DT.
+  load_assessed_consumers: >-
+    Denominator of % Consumers with Load Violation: consumers assessed (assessed_meters) per month x discom /
+    category / cluster / zone..sub_division.
   dt_loss: DTR-level technical energy loss (input reading vs billed/child energy), with data-credibility flags.
   dt_loss_consumers: >-
     Per-consumer detail behind dt_loss (each connected meter's billed/raw energy contributing to the DTR's loss
     calc).
-  dt_peak_loading: DTR-level peak load (kVA) against its rating, banded.
+  dt_peak_loading: >-
+    % DT Peak Loading card: one row per DT per month -- peak_load_kva, pct_peak_loading (% of dtr_rating_kva),
+    peak_band, load_status Overloaded >100% / Overloaded 90-100% / Normal / Underloaded <20%.
   feeder_loss: Feeder-level technical energy loss (mirrors dt_loss, one network level up).
   feeder_loss_ai: >-
     Feeder-level technical loss -- AI-adjusted variant of feeder_loss (same shape, different loss-estimation
     method).
   feeder_loss_ai_consumers: Per-consumer detail behind feeder_loss_ai.
   feeder_loss_consumers: Per-consumer detail behind feeder_loss.
-  load_violation: Per-meter sanctioned-load violations (actual max demand exceeding the sanctioned load).
+  load_violation: >-
+    % Consumers with Load Violation card: VIOLATORS ONLY, one row per consumer per month whose max demand md_kw is
+    over 1.6 x sanctioned_load_kw (excess_kw, excess_pct, category consumer_1_phase / consumer_3_phase, cluster,
+    zone..sub_division). Denominator = load_assessed_consumers.
   overload_md_breach: Per-meter maximum-demand (MD) overload risk, bucketed by severity.
   # hes_gold -- outage / reliability
   hidden_outage_events: Individual detected 'hidden' (undetected/unreported through normal channels) outage events per meter.

@@ -818,6 +818,104 @@ topics:
         GROUP BY ROLLUP (zone)
         ORDER BY GROUPING(zone) DESC, SUM(consumer_count) DESC
 
+  # Technical dashboard cards (HES meter data on Athena hes_gold). Formulas follow the dashboard KpiBoard
+  # (HES-FRONTEND-GMR src/kpi/*Model.js + HES-BACKEND-GMR _stats_sql) over the tables gmr-etl kpi_80/82/85/12
+  # write; references recomputed live 6 Nov 2026. Default month = the board's own default (pickDefaultMonth:
+  # latest month with >= 10 days of readings).
+  mdm_power_quality:
+    domain: mdm
+    title: "Power quality (voltage deviation, fluctuation, unbalance, drop, low-voltage pockets, current unbalance, % time out of band)"
+    description: "The Technical > Power Quality cards: Voltage Deviation Index (VDI), Voltage Fluctuation Index (VFI), Voltage Unbalance Index (VUI), Voltage Drop (V), Low-voltage pockets, Meter Current Unbalance (%), % time beyond the voltage tolerance band, % time with unacceptable current imbalance (>10%): averages, meters by status, by circle / zone / meter type, dips and surges, per meter."
+    keywords: [power quality, voltage, vdi, voltage deviation, deviation index, vfi, voltage fluctuation, fluctuation, voltage stability, dips, surges, swings, vui, voltage unbalance, voltage imbalance, phase imbalance, unbalance, voltage drop, drop depth, under voltage, undervoltage, low voltage, low-voltage pockets, over voltage, overvoltage, tolerance band, out of band, voltage band, compliance, current unbalance, current imbalance, unacceptable current imbalance, phase current, 10%, poor, moderate, good, severe, mild, stable, unstable, chronic violation, non compliant, borderline]
+    tables: [voltage_deviation_index, voltage_fluctuation_index, voltage_unbalance_index, voltage_drop, current_unbalance, pct_time_out_of_band, pct_time_current_imbalance, low_voltage_pockets, low_voltage_pockets_meters]
+    answer_notes:
+      - "Always name the month (data_month in RESULT, e.g. 2026-07-01 = July 2026). With no month asked it is the dashboard's default month: the latest month with at least 10 days of meter readings (July 2026 now; August 2026 holds only 2-3 days). Say so in one short clause."
+      - "Card meanings: VDI = how far voltage sits from nominal (230 V; 63.5 V on PT feeder / HT meters), % -- Good <= 2, Moderate <= 5, Poor > 5. VFI = swing against the meter's own daily average voltage, % -- Stable < 2, Moderate < 5, Unstable >= 5; dips = slots more than 5% below, surges = more than 5% above. VUI = worst phase-voltage deviation from the 3-phase mean, % (3-phase meters only) -- Good <= 2, Moderate <= 3, Poor > 3. Voltage drop = volts below the 0.9 x nominal floor (207 V) in under-voltage slots; status is graded on the deepest drop: OK none, Mild < 5 V, Moderate < 15 V, Severe >= 15 V. Current unbalance = worst phase-current deviation from the 3-phase mean, % -- Good < 3, Moderate < 5, Elevated < 10, Poor >= 10. % time beyond band = share of live half-hours outside +-10% of nominal (Compliant < 5%, Borderline < 15%, NonCompliant < 30%, ChronicViolation >= 30%). % time CI > 10% (Compliant <= 5%, Borderline <= 15%, NonCompliant > 15%)."
+      - "Averages are weighted by each meter's readings (the dashboard tile), not a plain mean of meters -- say 'average' and quote it with 2 decimals and its unit (% or V). Eligible meters = meters with a row that month, offline ones included."
+      - "Low-voltage pockets: meters persistently (4+ consecutive days) below 200 V -- Critical < 150 V, Poor 150-180 V, Average 180-200 V (PT meters 54 / 57 / 60 V); a meter can be in several bands, so the total is distinct meters."
+      - "Rankings: the first row of RESULT is the answer; never rank the blank / NULL area."
+    rules:
+      - "Month: every query pins ONE month on data_date (1st of the month). No month / 'current' / 'latest' = the dashboard default month: data_date = (SELECT MAX(month_date) FROM (SELECT month_date FROM hes_gold.dt_load_profile WHERE month_date >= DATE '2026-06-01' GROUP BY month_date HAVING COUNT(DISTINCT data_date) >= 10) c). A named month = DATE 'YYYY-MM-01' (months stored 2026-06-01, 2026-07-01, 2026-08-01). Month-wise = GROUP BY data_date. Always SELECT the month as data_month. Never sum months."
+      - "Places: these tables have NO cluster/project column -- project = its zones: Agra = UPPER(zone) IN ('AGRA','ALIGARH','ETAH','FIROZABAD','MATHURA'); Kashi = ('AZAMGARH','VARANASI I','VARANASI II'); Triveni = ('MIRZAPUR','PRAYAGRAJ I','PRAYAGRAJ II'). discom_code 'DVVNL' (Agra) / 'PUVVNL' (Kashi + Triveni). zone / circle / division / sub_division / sub_station / feeder_name / dtr_name are upper-case ('EDC II JAUNPUR'): UPPER(col) LIKE '%NAME%' (zone 'varanasi' = both VARANASI I and II). Meter type = role: '1ph' (1-phase consumer), '3ph' (3-phase consumer), 'ht' (HT consumer), 'dtr' (DT meter), 'feeder'; consumers = role IN ('1ph','3ph','ht'). One meter = meter_no = 'X'."
+      - "VDI (hes_gold.voltage_deviation_index): eligible meters = COUNT(DISTINCT meter_no); average VDI = SUM(vdi_mean * live_blocks) / SUM(live_blocks) over status <> 'Offline'; peak VDI = AVG(vdi_p95), spike-weighted VDI = AVG(vdi_rms), both over status <> 'Offline'."
+      - "VFI (hes_gold.voltage_fluctuation_index): average = SUM(vfi_pct * live_blocks) / SUM(live_blocks) over status <> 'Offline'; dips % = SUM(vf_band_lt_m10 + vf_band_m10_m5) * 100.0 / SUM(band_total); surges % = SUM(vf_band_p5_p10 + vf_band_gt_p10) * 100.0 / SUM(band_total)."
+      - "VUI (hes_gold.voltage_unbalance_index) and current unbalance (hes_gold.current_unbalance) and % time CI (hes_gold.pct_time_current_imbalance): ALWAYS WHERE blocks_3ph > 0. Scoreable = status NOT IN ('Offline','1-Phase','Offline/NoLoad','PT-Scaled'). Average VUI = SUM(vui_mean * phase_v_live_blocks) / SUM(phase_v_live_blocks) over scoreable; time 2-3% = SUM(vui_band_2_3_blocks), > 3% = SUM(vui_gt_3pct_blocks), each * 100.0 / SUM(phase_v_live_blocks). Average current unbalance = SUM(current_unbalance_mean * phase_i_live_blocks) / SUM(phase_i_live_blocks) over scoreable; average peak = AVG(current_unbalance_max) over scoreable; % time above 10% = SUM(ci_gt_10pct_blocks) * 100.0 / SUM(phase_i_live_blocks) (same on pct_time_current_imbalance)."
+      - "Voltage drop (hes_gold.voltage_drop): average drop depth (V) = SUM(drop_mean * intervals_with_drop) / SUM(intervals_with_drop) over status <> 'Offline'; average deepest drop = AVG(drop_max), drop slots per meter = AVG(intervals_with_drop), both over status <> 'Offline'; severe share = COUNT_IF(status = 'Severe') * 100.0 / COUNT_IF(status <> 'Offline')."
+      - "% time beyond voltage band (hes_gold.pct_time_out_of_band): SUM(oob_blocks) * 100.0 / SUM(live_blocks); over-voltage = SUM(ov_blocks), under-voltage = SUM(uv_blocks), same denominator. Never AVG(pct_time_oob)."
+      - "Meters by status = COUNT(*) GROUP BY status WHERE status <> 'Offline' (and <> 'unknown'); one row per meter per month. By area / meter type = GROUP BY circle (default level) / zone / division / role with the same weighted formula and HAVING SUM(<weight>) > 0; rankings skip the NULL area and sort DESC (worst first)."
+      - "Low-voltage pockets: meters flagged = COUNT(DISTINCT meter_no) FROM hes_gold.low_voltage_pockets_meters (band 'Critical' / 'Poor' / 'Average', ageing_bucket '3-30 Days' / '31-60 Days' / '61-90 Days' / 'More than 90 Days', category = meter type: 'consumer_1_phase' (1-phase consumers) / 'consumer_3_phase' / 'consumer_ht' / 'dt_meter' / 'feeder' -- phases_affected only says which phases R/Y/B were low, never the meter type; cluster 'Agra' / 'Kashi' / 'Triveni'); band x ageing chart = SUM(unique_meter_count) FROM hes_gold.low_voltage_pockets GROUP BY band, ageing_bucket. Its tables are low_voltage_pockets*, never voltage_drop."
+      - "ROUND every figure to 2 decimals. One table per KPI; never JOIN two of them."
+    example:
+      question: "Average voltage deviation index circle-wise in Kashi"
+      sql: |
+        SELECT MAX(data_date) AS data_month,
+               CASE WHEN GROUPING(circle) = 1 THEN 'Total' ELSE circle END AS circle_name,
+               COUNT(DISTINCT meter_no) AS eligible_meters,
+               ROUND(SUM(CASE WHEN status <> 'Offline' THEN vdi_mean * live_blocks END)
+                     / NULLIF(SUM(CASE WHEN status <> 'Offline' THEN live_blocks END), 0), 2) AS avg_vdi_pct,
+               COUNT_IF(status = 'Poor') AS poor_meters
+        FROM hes_gold.voltage_deviation_index
+        WHERE data_date = (SELECT MAX(month_date) FROM (SELECT month_date FROM hes_gold.dt_load_profile WHERE month_date >= DATE '2026-06-01' GROUP BY month_date HAVING COUNT(DISTINCT data_date) >= 10) c)
+          AND UPPER(zone) IN ('AZAMGARH', 'VARANASI I', 'VARANASI II') AND circle IS NOT NULL
+        GROUP BY ROLLUP (circle)
+        ORDER BY GROUPING(circle) DESC, 4 DESC
+
+  mdm_dt_load:
+    domain: mdm
+    title: "DT load management (DT load kVA, % DT loading, % DT peak loading, DT load rise)"
+    description: "The Technical > Load Management DT cards: DT load in kVA (load profile, hours above rating, most stressed DTs), % DT loading bands (DTs above rating, never above 20%, time above rating), % DT peak loading (overloaded > 100% / 90-100%, underloaded < 20%, top overloaded DTs, feeders with most overloaded DTs), DT load rise since last month."
+    keywords: [dt load, dt loading, transformer load, transformer loading, dtr loading, kva, load profile, load duration curve, rating, rated capacity, above rating, overloaded, overload, overloading, underloaded, underload, peak loading, peak load, dt peak, 90%, 100%, 120%, never above 20, stressed dts, load rise, load change, rose, fell, increase in load, since last month, asset loading spread, feeders with most overloaded dts]
+    tables: [dt_loading, dt_peak_loading, dt_peak_loading_feeder, dt_load_kva, dt_load_rise]
+    answer_notes:
+      - "Always name the month (data_month in RESULT). With no month asked it is the dashboard's default month: the latest month with at least 10 days of readings (July 2026 now; August 2026 holds only 2-3 days)."
+      - "% DT loading = half-hour load (kVAh x 2 x CT ratio) as % of the DT's kVA rating; 'peaked above rating' = its highest half-hour was 100% or more. % DT peak loading uses the DT's maximum demand: Overloaded > 100%, Overloaded 90-100%, Underloaded < 20%, else Normal. Load rise = this month's average loading minus last month's, in percentage points. The two loading cards differ because one uses half-hour energy and the other maximum demand."
+      - "Lists of DTs leave out implausible ones (loading 200%+ or a CT far too large for the DT's rating), as the dashboard does. Quote DT counts as whole numbers, percentages with 1-2 decimals."
+    rules:
+      - "Month: every query pins ONE month. dt_loading / dt_peak_loading / dt_peak_loading_feeder / dt_load_rise: data_date = month 1st; dt_load_kva is one row per DT per DAY -- filter month_date (data_date is the day). No month / 'current' / 'latest' = the dashboard default month: (SELECT MAX(month_date) FROM (SELECT month_date FROM hes_gold.dt_load_profile WHERE month_date >= DATE '2026-06-01' GROUP BY month_date HAVING COUNT(DISTINCT data_date) >= 10) c). Named month = DATE 'YYYY-MM-01'. SELECT the month as data_month."
+      - "Places: cluster = project, stored 'Agra' / 'Kashi' / 'Triveni' (LOWER(cluster) = 'kashi'); zone / circle / division / sub_division upper-case (UPPER(col) LIKE '%NAME%'); feeder_code, dtr_code, meter_no (the DT meter). No category / role column."
+      - "% DT loading (hes_gold.dt_loading, one row per DT x loading_band -- count DTs with COUNT(DISTINCT meter_no)): DTs assessed = COUNT(DISTINCT meter_no); peaked above rating = COUNT(DISTINCT meter_no) FILTER (WHERE peak_block_band IN ('100-120%','>120%')); never above 20% = ... peak_block_band = '<20%'; time above rating % = SUM(block_count) FILTER (WHERE loading_band IN ('100-120%','>120%')) * 100.0 / SUM(block_count); DTs by monthly peak = COUNT(DISTINCT meter_no) GROUP BY peak_block_band (bands '<20%','20-35%','35-55%','55-70%','70-85%','85-100%','100-120%','>120%'). Areas with most DTs above rating: per area over * 100.0 / dts, HAVING COUNT(DISTINCT meter_no) >= 20, ORDER BY pct DESC, over DESC LIMIT 10."
+      - "% DT peak loading (hes_gold.dt_peak_loading, one row per DT): COUNT(DISTINCT meter_no) total and FILTER (WHERE load_status = 'Overloaded >100%' / 'Overloaded 90-100%' / 'Underloaded <20%' / 'Normal'); 'overloaded' alone = both overloaded statuses, each named. By band = GROUP BY peak_band. Top overloaded DTs: meter_no, dtr_code, feeder_code, ROUND(peak_load_kva,1), pct_peak_loading, dtr_rating_kva WHERE pct_peak_loading < 200 AND <plausible CT> ORDER BY pct_peak_loading DESC LIMIT 10. Feeders with most overloaded DTs: hes_gold.dt_peak_loading_feeder WHERE overloaded_90_dts > 0 ORDER BY overloaded_90_dts DESC LIMIT 10 (overloaded_90_dts = above 90% incl. above 100%, overloaded_100_dts, assessed_dts, max_loaded_dt, max_pct_peak_loading)."
+      - "'Monthly peak' is the % DT Loading card's name (each DT's highest half-hour in the month), not a month-wise ask: one month unless months are asked. Which card: 'DTs by monthly peak' / '% DT loading' / 'above rating' / 'never above 20%' = dt_loading (peak_block_band); 'peak loading' / 'overloaded' / 'underloaded' / 'DTs by peak loading band' = dt_peak_loading (load_status, peak_band); 'DT-days' / 'kVA' / 'hours above rating' / 'load profile' = dt_load_kva; 'rise' / 'change since last month' = dt_load_rise."
+      - "Plausible CT (dashboard 'believable DT'): (ct_ratio IS NULL OR dtr_rating_kva IS NULL OR TRY_CAST(split_part(ct_ratio, '/', 1) AS double) <= 2 * dtr_rating_kva * 1000 / (sqrt(3) * 433))."
+      - "DT load kVA (hes_gold.dt_load_kva): one DT = WHERE meter_no = 'X' (or dtr_code = 'X') AND month_date = ...: rating = MAX(dtr_rating_kva), CT = MAX(ct_ratio), peak load = MAX(peak_load_kva), peak % = MAX(peak_pct_loading), hours above rating = SUM(cardinality(filter(load_profile, x -> x > dtr_rating_kva))) / 2.0, days with data = COUNT(*), readings = SUM(slots_reported), average load = AVG(avg_load_kva). Most stressed DTs: GROUP BY meter_no, dtr_code, hours = SUM(overload_slots) / 2.0, HAVING SUM(overload_slots) > 0 AND MAX(peak_pct_loading) < 200, WHERE <plausible CT>, ORDER BY hours DESC LIMIT 10. By peak band: COUNT(DISTINCT meter_no) and COUNT(*) DT-days GROUP BY peak_band."
+      - "DT load rise (hes_gold.dt_load_rise, one row per DT): DTs compared = COUNT_IF(prev_pct_loading IS NOT NULL); new DTs = COUNT_IF(prev_pct_loading IS NULL); average loading now = AVG(pct_loading) and last month = AVG(prev_pct_loading), both over compared DTs (plain mean of DTs); rose over 10 points = COUNT_IF(load_rise_pp >= 10); fell over 10 = COUNT_IF(load_rise_pp < -10). 'Rose / more than N points' uses the card's bands, lower bound included: more than 20 = load_rise_pp >= 20 ('Rose >20 pp'), more than 5 = >= 5; 'fell more than N' = load_rise_pp < -N. Change bands: NULL 'No previous month', < -10 'Fell >10 pp', < -5 'Fell 5-10 pp', < 5 'Stable (±5 pp)', < 10 'Rose 5-10 pp', < 20 'Rose 10-20 pp', else 'Rose >20 pp'. Biggest rises: load_rise_pp > 0 AND peak_pct_loading < 200 AND NOT COALESCE(prev_peak_pct_loading > 200, false) AND <plausible CT> ORDER BY load_rise_pp DESC LIMIT 10 (drops: < 0, ASC)."
+      - "ROUND percentages to 2 decimals (pp and kVA to 1). Never JOIN two of these tables."
+    example:
+      question: "How many DTs are overloaded and underloaded on peak loading in Kashi?"
+      sql: |
+        SELECT MAX(data_date) AS data_month,
+               COUNT(DISTINCT meter_no) AS dts_assessed,
+               COUNT(DISTINCT meter_no) FILTER (WHERE load_status = 'Overloaded >100%') AS overloaded_above_100,
+               COUNT(DISTINCT meter_no) FILTER (WHERE load_status = 'Overloaded 90-100%') AS overloaded_90_100,
+               COUNT(DISTINCT meter_no) FILTER (WHERE load_status = 'Underloaded <20%') AS underloaded_below_20
+        FROM hes_gold.dt_peak_loading
+        WHERE data_date = (SELECT MAX(month_date) FROM (SELECT month_date FROM hes_gold.dt_load_profile WHERE month_date >= DATE '2026-06-01' GROUP BY month_date HAVING COUNT(DISTINCT data_date) >= 10) c)
+          AND LOWER(cluster) = 'kashi'
+
+  mdm_load_violation:
+    domain: mdm
+    title: "% consumers with load violation (max demand above sanctioned load)"
+    description: "The Technical > Load Management card % Consumers with Load Violation: consumers whose maximum demand exceeds their sanctioned load by more than 60%, as a share of consumers assessed; by project / circle / zone / category; excess kW; violator lists."
+    keywords: [load violation, sanctioned load, contracted load, max demand, maximum demand, md, exceeds sanctioned, overdrawing, excess load, excess kw, violators, consumers with load violation, load violation percentage]
+    tables: [load_violation, load_assessed_consumers]
+    answer_notes:
+      - "A load violation = the consumer's maximum demand in the month is more than 1.6 x (60% above) its sanctioned load. % = violators / consumers assessed (consumers with a sanctioned load and a max-demand reading). Quote violators, assessed and the % (2 decimals), and name the month (July 2026 is the dashboard default when no month is asked)."
+    rules:
+      - "Month: data_date = month 1st; no month / 'latest' = the dashboard default month (SELECT MAX(month_date) FROM (SELECT month_date FROM hes_gold.dt_load_profile WHERE month_date >= DATE '2026-06-01' GROUP BY month_date HAVING COUNT(DISTINCT data_date) >= 10) c). Months stored 2026-06..08."
+      - "hes_gold.load_violation holds VIOLATORS only (one row per consumer): violators = COUNT(DISTINCT meter_no). Denominator = SUM(assessed_meters) FROM hes_gold.load_assessed_consumers with the SAME month and place / category filters. % = violators * 100.0 / assessed, computed from two CTEs (WITH v AS (...), a AS (...) SELECT ... FROM v, a); per area / project: GROUP BY that column in both CTEs and JOIN v and a on it."
+      - "Filters: cluster 'Agra' / 'Kashi' / 'Triveni' (LOWER(cluster) = 'kashi'); category 'consumer_1_phase' / 'consumer_3_phase'; zone / circle / division / sub_division upper-case (UPPER(col) LIKE '%NAME%'). load_assessed_consumers has no feeder / dtr / meter columns -- a % below sub_division is not available (counts are). Flagged consumers by area = COUNT(DISTINCT meter_no) GROUP BY circle (default) ORDER BY 2 DESC. Lists: meter_no, sanctioned_load_kw, md_kw, excess_kw, excess_pct ORDER BY excess_kw DESC LIMIT 200."
+    example:
+      question: "What % of consumers have load violation in Kashi?"
+      sql: |
+        WITH m AS (SELECT MAX(month_date) AS mon FROM (SELECT month_date FROM hes_gold.dt_load_profile WHERE month_date >= DATE '2026-06-01' GROUP BY month_date HAVING COUNT(DISTINCT data_date) >= 10) c),
+             v AS (SELECT COUNT(DISTINCT meter_no) AS violators FROM hes_gold.load_violation
+                   WHERE data_date = (SELECT mon FROM m) AND LOWER(cluster) = 'kashi'),
+             a AS (SELECT SUM(assessed_meters) AS assessed FROM hes_gold.load_assessed_consumers
+                   WHERE data_date = (SELECT mon FROM m) AND LOWER(cluster) = 'kashi')
+        SELECT (SELECT mon FROM m) AS data_month, violators, assessed,
+               ROUND(violators * 100.0 / NULLIF(assessed, 0), 2) AS pct_consumers_with_load_violation
+        FROM v, a
+
 # Domain words people use -> the programme's own terms. Retrieval only: the
 # query is expanded with these before BM25 + embedding search (never changes
 # the question the LLM answers).
@@ -860,6 +958,11 @@ retrieval_synonyms:
   pending: pending
   technician: productivity
   per day among technicians: top performer productivity
+  transformer: DT DTR
+  overdrawing: load violation sanctioned load
+  bijli kam: low voltage voltage drop
+  kam voltage: low voltage voltage drop
+  phase imbalance: voltage unbalance current unbalance
 
 explain_only:
   mi_progress: "Meters installed (KPI 1): rows with a meter serial, category resolved and not a replacement; SUM(meter_count) of gold_mi_installation_*."
@@ -900,3 +1003,16 @@ explain_only:
   pending_verification: "Auto-indexing pending = Review + No data consumers still needing a decision (target 0)."
   feeder_tagging_importance: "Why correct feeder tagging (consumer-to-feeder mapping) matters: feeder and distribution-transformer energy accounting and AT&C loss calculation add up consumption by feeder, so a consumer on the wrong feeder shifts its energy and losses to another feeder; outage attribution and reliability indices (SAIFI / SAIDI) count affected consumers per feeder; and field teams restore supply and plan load by feeder. The mapping audit finds the wrong tags (Reassign) so they can be corrected."
   mdm_mi: "In MDM tables 'mi' means meters indexed (consumers declared to a feeder), not meter installation."
+  vdi: "Voltage Deviation Index (VDI), Power Quality card: how far a meter's voltage sits from nominal (230 V; 63.5 V for PT-metered feeder / HT meters), as a %, averaged over its live half-hours (vdi_mean), with its 95th percentile (peak VDI) and RMS (spike-weighted). Good <= 2%, Moderate <= 5%, Poor > 5%. The card average weights each meter by its readings."
+  vfi: "Voltage Fluctuation Index (VFI): how much each phase swings against its own DAILY average voltage, %, averaged over the month. Stable < 2%, Moderate < 5%, Unstable >= 5%. Dips = readings more than 5% below the daily average, surges = more than 5% above."
+  vui: "Voltage Unbalance Index (VUI): for 3-phase meters, the worst phase voltage's deviation from the mean of the three phases, %, per half-hour, averaged. REC bands: Good <= 2%, Moderate 2-3%, Poor > 3%. Single-phase meters have none."
+  voltage_drop: "Voltage Drop (V): in each under-voltage half-hour (below 0.9 x nominal = 207 V), how many volts below that floor the voltage fell; the card shows the average depth, the deepest drop and the number of drop slots. Status from the deepest drop: OK (none), Mild < 5 V, Moderate < 15 V, Severe >= 15 V."
+  low_voltage_pockets: "Low-voltage pockets: meters whose voltage stayed in a low band on at least half their readings for 4+ consecutive days -- Critical < 150 V, Poor 150-180 V, Average 180-200 V (PT meters 54 / 57 / 60 V), aged by days in the band (3-30, 31-60, 61-90, 90+)."
+  current_unbalance: "Meter Current Unbalance (%): for 3-phase meters, the worst phase current's deviation from the average of the three phase currents, %, averaged over valid half-hours. Good < 3%, Moderate < 5%, Elevated < 10%, Poor >= 10%. Causes: single-phase loads crowded on one phase."
+  pct_time_out_of_band: "% Time beyond voltage tolerance band: share of a meter's live half-hours with voltage outside +-10% of nominal (over-voltage above 253 V, under-voltage below 207 V). The card figure = all out-of-band half-hours / all live half-hours. Compliant < 5%, Borderline < 15%, NonCompliant < 30%, ChronicViolation >= 30%."
+  pct_time_current_imbalance: "% Time with unacceptable current imbalance: share of a 3-phase meter's valid half-hours with current unbalance of 10% or more. Card figure = all such half-hours / all valid half-hours. Compliant <= 5%, Borderline <= 15%, NonCompliant > 15%."
+  dt_load_kva: "DT Load (kVA): each half-hour's DT load = kVAh import x 2 x CT ratio (kVA), per day; the card shows one DT's load profile, its load duration curve (loads sorted high to low), peak load vs rating and hours above rating."
+  dt_loading: "% DT Loading: each half-hour's DT load as % of its kVA rating, banded <20, 20-35, 35-55, 55-70, 70-85, 85-100, 100-120, >120%. Under 55% = underloaded, 55-85% = optimal range, 85%+ = overload risk. Card tiles: DTs assessed, DTs whose highest half-hour reached 100%+, DTs never above 20%, share of all DT half-hours above rating."
+  dt_peak_loading: "% DT Peak Loading: the DT's maximum demand in the month as % of its kVA rating. Overloaded > 100%, Overloaded 90-100%, Underloaded < 20%, else Normal. Reads higher than % DT loading, which averages each half-hour's energy."
+  dt_load_rise: "DT Load Rise: this month's average DT loading (% of rating) minus last month's, in percentage points; DTs with no previous month are 'new'. Bands: fell > 10, fell 5-10, stable +-5, rose 5-10, rose 10-20, rose > 20 points."
+  load_violation: "% Consumers with Load Violation: consumers whose maximum demand in the month exceeds their sanctioned load by more than 60% (MD > 1.6 x sanctioned), as a % of consumers assessed (with a sanctioned load and a demand reading)."

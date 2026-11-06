@@ -97,10 +97,61 @@ const METER_STAGE_COLORS: Record<string, string> = {
   supplies: NAVY, agency: "#F2665D", supervisor: "#9085e9", technician: "#15803d",
   "installed, sat pending": GOLD, "sat done, revenue pending": RED,
 };
+// Technical (HES) boards -- HES-FRONTEND-GMR src/theme/dataviz.tokens.js LIGHT tokens via src/kpi/colour.js
+// (statusColour / severityColour / dtBandColour) and DtLoadBoard.jsx (load status, rise bands). The backend
+// (presentation/hes_charts.py) sends these keys as `point_keys` (per bar / slice) and `series_keys`.
+const T = {
+  bad: "#B91C1C", warn: "#D97706", good: "#15803D", grey: "#64748B", series: "#1A5FA8",
+  ramp1: "#E07C40", ramp2: "#CE5220", ramp3: "#B91C1C",
+  underload: "#E8734A", nearOptimal: "#F5A81C", approaching: "#F97316",
+  band0: "#8FB8E2", band1: "#5590CB", band2: "#2A66AB", band3: "#0B3D7B", goodAlt: "#4E9E63",
+};
+// Layout-V voltage boards: statusColour, a flat tier map (Mild = Moderate = Elevated amber).
+const PQ_STATUS: Record<string, string> = {
+  poor: T.bad, severe: T.bad, unstable: T.bad, critical: T.bad,
+  moderate: T.warn, elevated: T.warn, mild: T.warn,
+  good: T.good, ok: T.good, stable: T.good,
+  "1-phase": T.grey, "offline/noload": T.grey, "phase missing": T.grey, "no valid slot": T.grey, offline: T.grey,
+  mean: T.grey,                                 // MeanBars: one neutral hue for every bar
+  series: T.series, overload: T.bad, highlight: T.bad,
+  dips: "#2a78d6", surges: "#e87ba4",           // DirectionCells (VFI)
+  "under-voltage": T.bad, "over-voltage": T.warn,
+};
+// Layout A / E: severityColour, by rank in the KPI's own scale.
+const PQ_SEVERITY: Record<string, string> = {
+  ...PQ_STATUS,
+  chronicviolation: T.ramp3, noncompliant: T.ramp2, borderline: T.ramp1, compliant: T.good,
+  critical: T.ramp3, poor: T.ramp2, average: T.ramp1,
+  "3-30 days": T.band0, "31-60 days": T.band1, "61-90 days": T.band2, "more than 90 days": T.band3,
+};
+const PCI_SEVERITY: Record<string, string> = { ...PQ_SEVERITY, noncompliant: T.ramp3, borderline: T.ramp2 };
+// DT boards: loading bands by group, load status, load-change bands.
+const DT_COLOURS: Record<string, string> = {
+  "<20%": T.underload, "20-35%": T.underload, "35-55%": T.underload, "55-70%": T.nearOptimal, "70-85%": T.good,
+  "85-100%": T.bad, "100-120%": T.bad, ">120%": T.bad,
+  "overloaded >100%": T.bad, "overloaded 90-100%": T.approaching, normal: T.good, "underloaded <20%": T.underload,
+  "fell >10 pp": T.band3, "fell 5-10 pp": T.band1, "stable (±5 pp)": T.goodAlt, "rose 5-10 pp": T.ramp1,
+  "rose 10-20 pp": T.ramp2, "rose >20 pp": T.ramp3, "no previous month": T.grey,
+  "last month": T.band0, "this month": T.series,
+  series: T.series, overload: T.bad, highlight: T.bad, mean: T.grey,
+};
+const HES_COLOURS: Record<string, Record<string, string>> = {
+  pq_vdi: PQ_STATUS, pq_vfi: PQ_STATUS, pq_vui: PQ_STATUS, pq_drop: PQ_STATUS, pq_cu: PQ_STATUS,
+  pq_oob: PQ_SEVERITY, pq_pci: PCI_SEVERITY, lv_pockets: PQ_SEVERITY,
+  dt_loading: DT_COLOURS, dt_peak: DT_COLOURS, dt_peak_feeder: DT_COLOURS, dt_kva: DT_COLOURS, dt_rise: DT_COLOURS,
+  load_violation: { series: T.series, highlight: T.bad },
+};
+
+/** True for a Technical (HES) board tag: its keys are the backend's canonical names, used as sent. */
+export function isHesBoard(kpi: string | undefined): boolean {
+  return Boolean(kpi && HES_COLOURS[kpi]);
+}
+
 const KPI_OVERRIDES: Record<string, Record<string, string>> = {
   supply_utilization: SUPPLIES_UTIL_COLORS,
   mi_pace_stock: MI_PACE_STOCK_COLORS,
   meter_stage: METER_STAGE_COLORS,
+  ...HES_COLOURS,
 };
 
 /** The dashboard card each `chart.dashboard` tag reproduces, by its name on the dashboard. */
@@ -123,6 +174,20 @@ export const DASHBOARD_CARDS: Record<string, string> = {
   om_productivity: "O&M-Productivity per team",
   om_closed: "O&M Ticket Closed Analysis",
   hhu_reading: "HHU Reading Trend",
+  pq_vdi: "Voltage Deviation Index",
+  pq_vfi: "Voltage Fluctuation Index",
+  pq_vui: "Voltage Unbalance Index",
+  pq_drop: "Voltage Drop",
+  pq_cu: "Meter Current Unbalance",
+  pq_oob: "% Time beyond voltage tolerance band",
+  pq_pci: "% Time with unacceptable current imbalance",
+  lv_pockets: "Low-voltage pockets",
+  dt_loading: "% DT Loading",
+  dt_peak: "% DT Peak Loading",
+  dt_peak_feeder: "% DT Peak Loading",
+  dt_kva: "DT Load",
+  dt_rise: "DT Load Rise",
+  load_violation: "% Consumers with Load Violation",
 };
 
 /** chartUtils.js getColor: the key's fixed colour, else the palette slot for its position. */
@@ -166,6 +231,9 @@ const JOURNEY_STAGES: [RegExp, RegExp, string][] = [
  * live, 'BYPASS BY CONSUMER' and 'CONSUMER REFUSAL' both took Consumer navy by partial match. */
 export function canonicalKey(kpi: string, name: string, exact = false): string {
   const raw = name.toLowerCase().trim();
+  // Technical boards: the backend already sends canonical keys ('>120%', 'Poor') -- the age-band
+  // parsing below would turn '>120%' into '120+ days'.
+  if (isHesBoard(kpi)) return raw;
   const k = raw.replace(/_/g, " ").replace(/\s+/g, " ");
   if (/(age|day|band|bucket|plus|\+|>)/.test(k) || /^\d+\s*-\s*\d+$/.test(k)) {
     const b = band(kpi, k);

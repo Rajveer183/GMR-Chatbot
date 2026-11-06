@@ -104,6 +104,10 @@ function namedSeries(chart: AIChartSpec): Named[] {
 function colours(chart: AIChartSpec, layout: ChartLayout): string[] {
   const series = namedSeries(chart);
   const kpi = chart.dashboard;
+  // Technical boards: the backend names each slice / bar (point_keys) or series (series_keys) by the
+  // board's own colour key -- a status, a loading band, or a role colour (mean / series / highlight).
+  if (kpi && chart.point_keys?.length) return chart.point_keys.map((k, i) => dashboardColour(kpi, k, i, true));
+  if (kpi && chart.series_keys?.length) return chart.series_keys.map((k, i) => dashboardColour(kpi, k, i, true));
   if (kpi && layout.kind !== "radialBar" && layout.kind !== "heatmap") {
     // The dashboard card's fixed colour per series name (per slice / step for donuts and funnels).
     if (layout.kind === "pie" || layout.kind === "donut" || layout.funnel) {
@@ -642,13 +646,16 @@ function dashboardOptions(
         dropShadow: { enabled: false },
       };
 
+  // One colour per bar (Technical boards: loading bands, the highlighted top area, DTs by their band).
+  const distributed = series.length === 1 && Boolean(chart.point_keys?.length);
   return {
     ...base,
     chart: { ...base.chart, stacked: !grouped },
     legend: { ...legend, show: series.length > 1 },
-    dataLabels,
+    dataLabels: distributed ? { ...dataLabels, style: { ...(dataLabels as any).style, colors: palette.map(getContrastText) } } : dataLabels,
     plotOptions: {
       bar: {
+        distributed,
         horizontal,
         borderRadius: grouped ? 0 : horizontal ? 4 : 6,
         borderRadiusApplication: "end",

@@ -3260,3 +3260,296 @@ examples:
       WHERE has_meter_serial AND progress_category IS NOT NULL AND NOT is_replacement
         AND inventory_meter_type = 'HTCT-Consumer_meter'
         AND period_start BETWEEN DATE '2026-01-01' AND DATE '2026-06-01'
+
+  # ---- Technical > Power Quality cards (hes_gold, verified live 6 Nov 2026). No month asked = the dashboard's
+  # default month: latest month with >= 10 days of readings (dt_load_profile day count) -- July 2026 today.
+  - q: ["What is the average voltage deviation index?", "average VDI", "voltage deviation index summary", "how far is voltage from nominal"]
+    note: "VDI card tiles. Average = SUM(vdi_mean * live_blocks) / SUM(live_blocks) over status <> 'Offline' (reading-weighted, never AVG(vdi_mean)); peak = AVG(vdi_p95); spike-weighted = AVG(vdi_rms). Eligible meters include offline ones."
+    sql: |
+      SELECT MAX(data_date) AS data_month,
+             COUNT(DISTINCT meter_no) AS eligible_meters,
+             ROUND(SUM(CASE WHEN status <> 'Offline' THEN vdi_mean * live_blocks END)
+                   / NULLIF(SUM(CASE WHEN status <> 'Offline' THEN live_blocks END), 0), 2) AS avg_vdi_pct,
+             ROUND(AVG(CASE WHEN status <> 'Offline' THEN vdi_p95 END), 2) AS peak_vdi_pct,
+             ROUND(AVG(CASE WHEN status <> 'Offline' THEN vdi_rms END), 2) AS spike_weighted_vdi_pct,
+             COUNT_IF(status = 'Poor') AS poor_meters, COUNT_IF(status = 'Moderate') AS moderate_meters,
+             COUNT_IF(status = 'Good') AS good_meters
+      FROM hes_gold.voltage_deviation_index
+      WHERE data_date = (SELECT MAX(month_date) FROM (SELECT month_date FROM hes_gold.dt_load_profile WHERE month_date >= DATE '2026-06-01' GROUP BY month_date HAVING COUNT(DISTINCT data_date) >= 10) c)
+
+  - q: ["Which circles have the worst voltage deviation index?", "VDI by circle", "circle-wise VDI", "worst circles on VDI"]
+    note: "Per area: the same reading-weighted average, areas with no live readings and the blank area dropped, worst first. Poor share = Poor / (Poor + Moderate + Good)."
+    sql: |
+      SELECT MAX(data_date) AS data_month, circle,
+             ROUND(SUM(vdi_mean * live_blocks) / NULLIF(SUM(live_blocks), 0), 2) AS avg_vdi_pct,
+             COUNT(*) AS meters,
+             ROUND(COUNT_IF(status = 'Poor') * 100.0 / NULLIF(COUNT_IF(status IN ('Poor', 'Moderate', 'Good')), 0), 1) AS poor_share_pct
+      FROM hes_gold.voltage_deviation_index
+      WHERE data_date = (SELECT MAX(month_date) FROM (SELECT month_date FROM hes_gold.dt_load_profile WHERE month_date >= DATE '2026-06-01' GROUP BY month_date HAVING COUNT(DISTINCT data_date) >= 10) c)
+        AND circle IS NOT NULL
+      GROUP BY circle
+      HAVING SUM(live_blocks) > 0
+      ORDER BY avg_vdi_pct DESC
+
+  - q: ["Average VDI month-wise", "VDI trend by month", "voltage deviation index for each month"]
+    note: "Month-wise = one row per data_date (June, July, August 2026). August 2026 holds only 2-3 days of readings -- say so."
+    sql: |
+      SELECT data_date AS data_month, COUNT(DISTINCT meter_no) AS eligible_meters,
+             ROUND(SUM(CASE WHEN status <> 'Offline' THEN vdi_mean * live_blocks END)
+                   / NULLIF(SUM(CASE WHEN status <> 'Offline' THEN live_blocks END), 0), 2) AS avg_vdi_pct
+      FROM hes_gold.voltage_deviation_index
+      WHERE data_date BETWEEN DATE '2026-06-01' AND DATE '2026-08-01'
+      GROUP BY data_date
+      ORDER BY data_date
+
+  - q: ["What is the average voltage fluctuation index?", "average VFI", "voltage stability", "how much does voltage fluctuate", "voltage dips and surges"]
+    note: "VFI card. Average = SUM(vfi_pct * live_blocks) / SUM(live_blocks) over status <> 'Offline'. Dips = swings more than 5% below the daily average, surges = more than 5% above, as shares of all phase readings (band_total)."
+    sql: |
+      SELECT MAX(data_date) AS data_month,
+             COUNT(DISTINCT meter_no) AS eligible_meters,
+             ROUND(SUM(CASE WHEN status <> 'Offline' THEN vfi_pct * live_blocks END)
+                   / NULLIF(SUM(CASE WHEN status <> 'Offline' THEN live_blocks END), 0), 2) AS avg_vfi_pct,
+             ROUND(SUM(vf_band_lt_m10 + vf_band_m10_m5) * 100.0 / NULLIF(SUM(band_total), 0), 2) AS dips_pct,
+             ROUND(SUM(vf_band_p5_p10 + vf_band_gt_p10) * 100.0 / NULLIF(SUM(band_total), 0), 2) AS surges_pct,
+             COUNT_IF(status = 'Unstable') AS unstable_meters, COUNT_IF(status = 'Moderate') AS moderate_meters,
+             COUNT_IF(status = 'Stable') AS stable_meters
+      FROM hes_gold.voltage_fluctuation_index
+      WHERE data_date = (SELECT MAX(month_date) FROM (SELECT month_date FROM hes_gold.dt_load_profile WHERE month_date >= DATE '2026-06-01' GROUP BY month_date HAVING COUNT(DISTINCT data_date) >= 10) c)
+
+  - q: ["What is the average voltage unbalance index?", "average VUI", "voltage unbalance", "phase voltage imbalance", "how many meters have poor voltage unbalance"]
+    note: "VUI card: 3-phase meters only -- ALWAYS blocks_3ph > 0. Average weighted by phase_v_live_blocks over scoreable statuses. Time 2-3% and > 3% are shares of all valid 3-phase readings."
+    sql: |
+      SELECT MAX(data_date) AS data_month,
+             COUNT(DISTINCT meter_no) AS eligible_3ph_meters,
+             ROUND(SUM(CASE WHEN status NOT IN ('Offline', '1-Phase', 'Offline/NoLoad', 'PT-Scaled') THEN vui_mean * phase_v_live_blocks END)
+                   / NULLIF(SUM(CASE WHEN status NOT IN ('Offline', '1-Phase', 'Offline/NoLoad', 'PT-Scaled') THEN phase_v_live_blocks END), 0), 2) AS avg_vui_pct,
+             ROUND(SUM(vui_band_2_3_blocks) * 100.0 / NULLIF(SUM(phase_v_live_blocks), 0), 2) AS time_vui_2_3_pct,
+             ROUND(SUM(vui_gt_3pct_blocks) * 100.0 / NULLIF(SUM(phase_v_live_blocks), 0), 2) AS time_vui_above_3_pct,
+             COUNT_IF(status = 'Poor') AS poor_meters, COUNT_IF(status = 'Moderate') AS moderate_meters,
+             COUNT_IF(status = 'Good') AS good_meters
+      FROM hes_gold.voltage_unbalance_index
+      WHERE data_date = (SELECT MAX(month_date) FROM (SELECT month_date FROM hes_gold.dt_load_profile WHERE month_date >= DATE '2026-06-01' GROUP BY month_date HAVING COUNT(DISTINCT data_date) >= 10) c)
+        AND blocks_3ph > 0
+
+  - q: ["What is the average voltage drop?", "voltage drop summary", "average drop depth in volts", "how many meters have severe voltage drop"]
+    note: "Voltage Drop card (volts below the 0.9 x nominal floor). Average depth weighted by intervals_with_drop; deepest = AVG(drop_max); slots per meter = AVG(intervals_with_drop); all over status <> 'Offline'. Status (Severe / Moderate / Mild / OK) is graded on the deepest drop."
+    sql: |
+      SELECT MAX(data_date) AS data_month,
+             COUNT(DISTINCT meter_no) AS eligible_meters,
+             ROUND(SUM(CASE WHEN status <> 'Offline' THEN drop_mean * intervals_with_drop END)
+                   / NULLIF(SUM(CASE WHEN status <> 'Offline' THEN intervals_with_drop END), 0), 2) AS avg_drop_depth_v,
+             ROUND(AVG(CASE WHEN status <> 'Offline' THEN drop_max END), 2) AS avg_deepest_drop_v,
+             ROUND(AVG(CASE WHEN status <> 'Offline' THEN intervals_with_drop END), 1) AS drop_slots_per_meter,
+             COUNT_IF(status = 'Severe') AS severe_meters, COUNT_IF(status = 'Moderate') AS moderate_meters,
+             COUNT_IF(status = 'Mild') AS mild_meters, COUNT_IF(status = 'OK') AS ok_meters
+      FROM hes_gold.voltage_drop
+      WHERE data_date = (SELECT MAX(month_date) FROM (SELECT month_date FROM hes_gold.dt_load_profile WHERE month_date >= DATE '2026-06-01' GROUP BY month_date HAVING COUNT(DISTINCT data_date) >= 10) c)
+
+  - q: ["Share of severe voltage drop meters by circle", "severe voltage drop circle-wise", "which circle has the most severe voltage drops"]
+    note: "Severe share per area = Severe / (Severe + Moderate + Mild + OK); worst first, blank area dropped."
+    sql: |
+      SELECT MAX(data_date) AS data_month, circle,
+             COUNT_IF(status = 'Severe') AS severe_meters,
+             ROUND(COUNT_IF(status = 'Severe') * 100.0 / NULLIF(COUNT_IF(status IN ('Severe', 'Moderate', 'Mild', 'OK')), 0), 2) AS severe_share_pct
+      FROM hes_gold.voltage_drop
+      WHERE data_date = (SELECT MAX(month_date) FROM (SELECT month_date FROM hes_gold.dt_load_profile WHERE month_date >= DATE '2026-06-01' GROUP BY month_date HAVING COUNT(DISTINCT data_date) >= 10) c)
+        AND circle IS NOT NULL
+      GROUP BY circle
+      ORDER BY severe_share_pct DESC
+
+  - q: ["How many meters are in low-voltage pockets?", "low voltage pockets", "meters flagged for low voltage by band", "critical low voltage meters"]
+    note: "Low-voltage pockets card: meters flagged = COUNT(DISTINCT meter_no) on low_voltage_pockets_meters (a meter can be in several bands, so band counts add up to more than the total)."
+    sql: |
+      SELECT MAX(data_date) AS data_month,
+             CASE WHEN GROUPING(band) = 1 THEN 'Total' ELSE band END AS low_voltage_band,
+             COUNT(DISTINCT meter_no) AS meters_flagged
+      FROM hes_gold.low_voltage_pockets_meters
+      WHERE data_date = (SELECT MAX(month_date) FROM (SELECT month_date FROM hes_gold.dt_load_profile WHERE month_date >= DATE '2026-06-01' GROUP BY month_date HAVING COUNT(DISTINCT data_date) >= 10) c)
+      GROUP BY ROLLUP (band)
+      ORDER BY GROUPING(band) DESC, meters_flagged DESC
+
+  - q: ["What is the average meter current unbalance?", "current unbalance", "average phase current imbalance", "meter current unbalance percentage"]
+    note: "Meter Current Unbalance card: 3-phase meters (blocks_3ph > 0). Average weighted by phase_i_live_blocks over scoreable statuses; peak = AVG(current_unbalance_max); time above 10% = ci_gt_10pct_blocks / phase_i_live_blocks."
+    sql: |
+      SELECT MAX(data_date) AS data_month,
+             COUNT(DISTINCT meter_no) AS eligible_3ph_meters,
+             ROUND(SUM(CASE WHEN status NOT IN ('Offline', '1-Phase', 'Offline/NoLoad', 'PT-Scaled') THEN current_unbalance_mean * phase_i_live_blocks END)
+                   / NULLIF(SUM(CASE WHEN status NOT IN ('Offline', '1-Phase', 'Offline/NoLoad', 'PT-Scaled') THEN phase_i_live_blocks END), 0), 2) AS avg_current_unbalance_pct,
+             ROUND(AVG(CASE WHEN status NOT IN ('Offline', '1-Phase', 'Offline/NoLoad', 'PT-Scaled') THEN current_unbalance_max END), 2) AS avg_peak_unbalance_pct,
+             ROUND(SUM(ci_gt_10pct_blocks) * 100.0 / NULLIF(SUM(phase_i_live_blocks), 0), 2) AS time_above_10_pct,
+             COUNT_IF(status = 'Poor') AS poor_meters, COUNT_IF(status = 'Elevated') AS elevated_meters,
+             COUNT_IF(status = 'Moderate') AS moderate_meters, COUNT_IF(status = 'Good') AS good_meters
+      FROM hes_gold.current_unbalance
+      WHERE data_date = (SELECT MAX(month_date) FROM (SELECT month_date FROM hes_gold.dt_load_profile WHERE month_date >= DATE '2026-06-01' GROUP BY month_date HAVING COUNT(DISTINCT data_date) >= 10) c)
+        AND blocks_3ph > 0
+
+  - q: ["What is the % time beyond voltage tolerance band?", "percent time out of voltage band", "over voltage and under voltage time", "voltage band compliance"]
+    note: "% time beyond band = all out-of-band half-hours / all live half-hours (never AVG of the meters' %). Over- and under-voltage split the same way."
+    sql: |
+      SELECT MAX(data_date) AS data_month,
+             COUNT(DISTINCT meter_no) AS meters, COUNT_IF(status <> 'Offline') AS scoreable_meters,
+             ROUND(SUM(oob_blocks) * 100.0 / NULLIF(SUM(live_blocks), 0), 2) AS pct_time_out_of_band,
+             ROUND(SUM(ov_blocks) * 100.0 / NULLIF(SUM(live_blocks), 0), 2) AS pct_time_over_voltage,
+             ROUND(SUM(uv_blocks) * 100.0 / NULLIF(SUM(live_blocks), 0), 2) AS pct_time_under_voltage
+      FROM hes_gold.pct_time_out_of_band
+      WHERE data_date = (SELECT MAX(month_date) FROM (SELECT month_date FROM hes_gold.dt_load_profile WHERE month_date >= DATE '2026-06-01' GROUP BY month_date HAVING COUNT(DISTINCT data_date) >= 10) c)
+
+  - q: ["Voltage band compliance status distribution", "how many meters are chronic violation on voltage band", "meters by status for % time beyond voltage band"]
+    note: "Meters by status = COUNT(*) per status, Offline and unknown left out (the dashboard donut)."
+    sql: |
+      SELECT MAX(data_date) AS data_month, status, COUNT(*) AS meters
+      FROM hes_gold.pct_time_out_of_band
+      WHERE data_date = (SELECT MAX(month_date) FROM (SELECT month_date FROM hes_gold.dt_load_profile WHERE month_date >= DATE '2026-06-01' GROUP BY month_date HAVING COUNT(DISTINCT data_date) >= 10) c)
+        AND status NOT IN ('Offline', 'unknown')
+      GROUP BY status
+      ORDER BY meters DESC
+
+  - q: ["What is the % time with unacceptable current imbalance?", "% time current imbalance above 10%", "current imbalance compliance", "how many meters are non compliant on current imbalance"]
+    note: "Card (>10%): 3-phase meters (blocks_3ph > 0); % = SUM(ci_gt_10pct_blocks) / SUM(phase_i_live_blocks). Statuses Compliant <= 5%, Borderline <= 15%, NonCompliant > 15%."
+    sql: |
+      SELECT MAX(data_date) AS data_month,
+             COUNT(DISTINCT meter_no) AS meters,
+             COUNT_IF(status NOT IN ('Offline', '1-Phase', 'Offline/NoLoad', 'PT-Scaled')) AS scoreable_meters,
+             ROUND(SUM(ci_gt_10pct_blocks) * 100.0 / NULLIF(SUM(phase_i_live_blocks), 0), 2) AS pct_time_ci_above_10,
+             COUNT_IF(status = 'NonCompliant') AS noncompliant_meters, COUNT_IF(status = 'Borderline') AS borderline_meters,
+             COUNT_IF(status = 'Compliant') AS compliant_meters
+      FROM hes_gold.pct_time_current_imbalance
+      WHERE data_date = (SELECT MAX(month_date) FROM (SELECT month_date FROM hes_gold.dt_load_profile WHERE month_date >= DATE '2026-06-01' GROUP BY month_date HAVING COUNT(DISTINCT data_date) >= 10) c)
+        AND blocks_3ph > 0
+
+  # ---- Technical > Load Management cards
+  - q: ["% DT loading summary", "how many DTs peaked above rating", "DTs never above 20% loading", "time above rating for DTs", "DT loading"]
+    note: "% DT Loading card. dt_loading has one row per DT x band, so DTs = COUNT(DISTINCT meter_no). Peaked above rating = its highest half-hour in 100-120% / >120%; time above rating = half-hours in those bands / all half-hours."
+    sql: |
+      SELECT MAX(data_date) AS data_month,
+             COUNT(DISTINCT meter_no) AS dts_assessed,
+             COUNT(DISTINCT meter_no) FILTER (WHERE peak_block_band IN ('100-120%', '>120%')) AS dts_peaked_above_rating,
+             COUNT(DISTINCT meter_no) FILTER (WHERE peak_block_band = '<20%') AS dts_never_above_20pct,
+             ROUND(COALESCE(SUM(block_count) FILTER (WHERE loading_band IN ('100-120%', '>120%')), 0) * 100.0 / NULLIF(SUM(block_count), 0), 2) AS time_above_rating_pct
+      FROM hes_gold.dt_loading
+      WHERE data_date = (SELECT MAX(month_date) FROM (SELECT month_date FROM hes_gold.dt_load_profile WHERE month_date >= DATE '2026-06-01' GROUP BY month_date HAVING COUNT(DISTINCT data_date) >= 10) c)
+
+  - q: ["Which circles have the most DTs above rating?", "DTs above rating by circle", "areas with most DTs peaking above rating"]
+    note: "Card panel: per area, DTs whose peak half-hour reached 100%+ as % of its DTs; areas with fewer than 20 DTs left out; top 10 by % then count."
+    sql: |
+      SELECT MAX(data_date) AS data_month, circle,
+             COUNT(DISTINCT meter_no) AS dts,
+             COUNT(DISTINCT meter_no) FILTER (WHERE peak_block_band IN ('100-120%', '>120%')) AS dts_above_rating,
+             ROUND(COUNT(DISTINCT meter_no) FILTER (WHERE peak_block_band IN ('100-120%', '>120%')) * 100.0 / COUNT(DISTINCT meter_no), 1) AS above_rating_pct
+      FROM hes_gold.dt_loading
+      WHERE data_date = (SELECT MAX(month_date) FROM (SELECT month_date FROM hes_gold.dt_load_profile WHERE month_date >= DATE '2026-06-01' GROUP BY month_date HAVING COUNT(DISTINCT data_date) >= 10) c)
+        AND circle IS NOT NULL
+      GROUP BY circle
+      HAVING COUNT(DISTINCT meter_no) >= 20
+      ORDER BY above_rating_pct DESC, dts_above_rating DESC
+      LIMIT 10
+
+  - q: ["How many DTs are overloaded on peak loading?", "% DT peak loading", "overloaded and underloaded DTs", "DTs above 100% peak loading", "DT peak loading by status"]
+    note: "% DT Peak Loading card: load_status Overloaded >100% / Overloaded 90-100% / Underloaded <20% / Normal, each with its % of DTs assessed."
+    sql: |
+      SELECT MAX(data_date) AS data_month,
+             COUNT(DISTINCT meter_no) AS dts_assessed,
+             COUNT(DISTINCT meter_no) FILTER (WHERE load_status = 'Overloaded >100%') AS overloaded_above_100,
+             COUNT(DISTINCT meter_no) FILTER (WHERE load_status = 'Overloaded 90-100%') AS overloaded_90_100,
+             COUNT(DISTINCT meter_no) FILTER (WHERE load_status = 'Underloaded <20%') AS underloaded_below_20,
+             ROUND(COUNT(DISTINCT meter_no) FILTER (WHERE load_status = 'Overloaded >100%') * 100.0 / COUNT(DISTINCT meter_no), 2) AS overloaded_above_100_pct,
+             ROUND(COUNT(DISTINCT meter_no) FILTER (WHERE load_status = 'Overloaded 90-100%') * 100.0 / COUNT(DISTINCT meter_no), 2) AS overloaded_90_100_pct,
+             ROUND(COUNT(DISTINCT meter_no) FILTER (WHERE load_status = 'Underloaded <20%') * 100.0 / COUNT(DISTINCT meter_no), 2) AS underloaded_pct
+      FROM hes_gold.dt_peak_loading
+      WHERE data_date = (SELECT MAX(month_date) FROM (SELECT month_date FROM hes_gold.dt_load_profile WHERE month_date >= DATE '2026-06-01' GROUP BY month_date HAVING COUNT(DISTINCT data_date) >= 10) c)
+
+  - q: ["Top 10 overloaded DTs", "most overloaded transformers", "DTs with the highest peak loading"]
+    note: "Top Overloaded DTs panel: implausible DTs left out (peak 200%+ or a CT far too large for the rating)."
+    sql: |
+      SELECT MAX(data_date) OVER () AS data_month, meter_no, dtr_code, feeder_code, zone,
+             dtr_rating_kva, ROUND(peak_load_kva, 1) AS peak_load_kva, pct_peak_loading
+      FROM hes_gold.dt_peak_loading
+      WHERE data_date = (SELECT MAX(month_date) FROM (SELECT month_date FROM hes_gold.dt_load_profile WHERE month_date >= DATE '2026-06-01' GROUP BY month_date HAVING COUNT(DISTINCT data_date) >= 10) c)
+        AND pct_peak_loading < 200
+        AND (ct_ratio IS NULL OR dtr_rating_kva IS NULL OR TRY_CAST(split_part(ct_ratio, '/', 1) AS double) <= 2 * dtr_rating_kva * 1000 / (sqrt(3) * 433))
+      ORDER BY pct_peak_loading DESC
+      LIMIT 10
+
+  - q: ["Feeders with the most overloaded DTs", "which feeder has the most overloaded transformers", "feeder-wise overloaded DTs"]
+    note: "dt_peak_loading_feeder: overloaded_90_dts = DTs above 90% (includes those above 100%)."
+    sql: |
+      SELECT data_date AS data_month, feeder_code, zone, overloaded_90_dts, overloaded_100_dts, assessed_dts,
+             max_loaded_dt, max_pct_peak_loading
+      FROM hes_gold.dt_peak_loading_feeder
+      WHERE data_date = (SELECT MAX(month_date) FROM (SELECT month_date FROM hes_gold.dt_load_profile WHERE month_date >= DATE '2026-06-01' GROUP BY month_date HAVING COUNT(DISTINCT data_date) >= 10) c)
+        AND overloaded_90_dts > 0
+      ORDER BY overloaded_90_dts DESC
+      LIMIT 10
+
+  - q: ["Most stressed DTs by hours above rating", "DTs with most hours above rating", "which DTs ran above rating the longest"]
+    note: "DT Load (kVA) card's Most Stressed DTs: dt_load_kva is per DT per DAY (month_date = month). Hours = overload half-hours / 2; implausible DTs left out."
+    sql: |
+      SELECT MAX(month_date) AS data_month, meter_no, dtr_code,
+             SUM(overload_slots) / 2.0 AS hours_above_rating,
+             MAX(peak_pct_loading) AS max_peak_loading_pct, COUNT(*) AS days_with_data
+      FROM hes_gold.dt_load_kva
+      WHERE month_date = (SELECT MAX(month_date) FROM (SELECT month_date FROM hes_gold.dt_load_profile WHERE month_date >= DATE '2026-06-01' GROUP BY month_date HAVING COUNT(DISTINCT data_date) >= 10) c)
+        AND (ct_ratio IS NULL OR dtr_rating_kva IS NULL OR TRY_CAST(split_part(ct_ratio, '/', 1) AS double) <= 2 * dtr_rating_kva * 1000 / (sqrt(3) * 433))
+      GROUP BY meter_no, dtr_code
+      HAVING SUM(overload_slots) > 0 AND MAX(peak_pct_loading) < 200
+      ORDER BY hours_above_rating DESC, meter_no
+      LIMIT 10
+
+  - q: ["DT load of meter AL2930421", "peak load and rating of a DT", "load profile of DT", "how many hours was DT X above its rating"]
+    note: "One DT's DT Load (kVA) card tiles: rating, CT, peak load, hours above rating (half-hours with load strictly above the rating / 2), days with data, readings. A DT code (e.g. 'CHI/CHE/DT087') filters dtr_code instead of meter_no."
+    sql: |
+      SELECT MAX(month_date) AS data_month, MAX(dtr_code) AS dtr_code, MAX(dtr_rating_kva) AS rating_kva, MAX(ct_ratio) AS ct_ratio,
+             ROUND(MAX(peak_load_kva), 1) AS peak_load_kva, ROUND(MAX(peak_pct_loading), 1) AS peak_loading_pct,
+             ROUND(AVG(avg_load_kva), 1) AS avg_load_kva,
+             SUM(cardinality(filter(load_profile, x -> x > dtr_rating_kva))) / 2.0 AS hours_above_rating,
+             COUNT(*) AS days_with_data, SUM(slots_reported) AS half_hour_readings
+      FROM hes_gold.dt_load_kva
+      WHERE month_date = (SELECT MAX(month_date) FROM (SELECT month_date FROM hes_gold.dt_load_profile WHERE month_date >= DATE '2026-06-01' GROUP BY month_date HAVING COUNT(DISTINCT data_date) >= 10) c)
+        AND meter_no = 'AL2930421'
+
+  - q: ["DT load rise since last month", "how much has DT loading changed since last month", "DTs whose load rose more than 10 points", "average DT loading this month vs last month"]
+    note: "DT Load Rise card: compared DTs have a previous month; averages are plain means of each DT's monthly average loading; rose = load_rise_pp >= 10, fell = < -10 (percentage points)."
+    sql: |
+      SELECT MAX(data_date) AS data_month,
+             COUNT_IF(prev_pct_loading IS NOT NULL) AS dts_compared,
+             COUNT_IF(prev_pct_loading IS NULL) AS new_dts_this_month,
+             ROUND(AVG(CASE WHEN prev_pct_loading IS NOT NULL THEN pct_loading END), 1) AS avg_loading_this_month_pct,
+             ROUND(AVG(prev_pct_loading), 1) AS avg_loading_last_month_pct,
+             COUNT_IF(load_rise_pp >= 10) AS rose_over_10_points,
+             COUNT_IF(load_rise_pp < -10) AS fell_over_10_points
+      FROM hes_gold.dt_load_rise
+      WHERE data_date = (SELECT MAX(month_date) FROM (SELECT month_date FROM hes_gold.dt_load_profile WHERE month_date >= DATE '2026-06-01' GROUP BY month_date HAVING COUNT(DISTINCT data_date) >= 10) c)
+
+  - q: ["Top 10 DTs with the biggest load rise", "DTs whose load increased the most", "biggest DT load rises since last month"]
+    note: "Biggest Load Rises panel: rise > 0, implausible DTs left out, top 10 by points (drops: load_rise_pp < 0 ORDER BY ASC)."
+    sql: |
+      SELECT data_date AS data_month, meter_no, dtr_code, zone,
+             ROUND(prev_pct_loading, 1) AS last_month_loading_pct, ROUND(pct_loading, 1) AS this_month_loading_pct,
+             ROUND(load_rise_pp, 1) AS rise_points
+      FROM hes_gold.dt_load_rise
+      WHERE data_date = (SELECT MAX(month_date) FROM (SELECT month_date FROM hes_gold.dt_load_profile WHERE month_date >= DATE '2026-06-01' GROUP BY month_date HAVING COUNT(DISTINCT data_date) >= 10) c)
+        AND load_rise_pp > 0 AND peak_pct_loading < 200 AND NOT COALESCE(prev_peak_pct_loading > 200, false)
+        AND (ct_ratio IS NULL OR dtr_rating_kva IS NULL OR TRY_CAST(split_part(ct_ratio, '/', 1) AS double) <= 2 * dtr_rating_kva * 1000 / (sqrt(3) * 433))
+      ORDER BY load_rise_pp DESC
+      LIMIT 10
+
+  - q: ["What % of consumers have load violation?", "% consumers with load violation", "consumers exceeding sanctioned load", "how many consumers have max demand above sanctioned load"]
+    note: "load_violation holds violators only (MD > 1.6 x sanctioned load); the denominator is SUM(assessed_meters) of load_assessed_consumers under the same filters."
+    sql: |
+      WITH m AS (SELECT MAX(month_date) AS mon FROM (SELECT month_date FROM hes_gold.dt_load_profile WHERE month_date >= DATE '2026-06-01' GROUP BY month_date HAVING COUNT(DISTINCT data_date) >= 10) c),
+           v AS (SELECT COUNT(DISTINCT meter_no) AS violators FROM hes_gold.load_violation WHERE data_date = (SELECT mon FROM m)),
+           a AS (SELECT SUM(assessed_meters) AS assessed FROM hes_gold.load_assessed_consumers WHERE data_date = (SELECT mon FROM m))
+      SELECT (SELECT mon FROM m) AS data_month, violators, assessed AS consumers_assessed,
+             ROUND(violators * 100.0 / NULLIF(assessed, 0), 2) AS pct_consumers_with_load_violation
+      FROM v, a
+
+  - q: ["% consumers with load violation project-wise", "load violation by project", "project-wise share of consumers with load violation"]
+    note: "Per area: violators and assessed grouped by the same column, joined on it. Use cluster for projects, zone / circle / division / sub_division otherwise."
+    sql: |
+      WITH m AS (SELECT MAX(month_date) AS mon FROM (SELECT month_date FROM hes_gold.dt_load_profile WHERE month_date >= DATE '2026-06-01' GROUP BY month_date HAVING COUNT(DISTINCT data_date) >= 10) c),
+           v AS (SELECT cluster, COUNT(DISTINCT meter_no) AS violators FROM hes_gold.load_violation WHERE data_date = (SELECT mon FROM m) GROUP BY cluster),
+           a AS (SELECT cluster, SUM(assessed_meters) AS assessed FROM hes_gold.load_assessed_consumers WHERE data_date = (SELECT mon FROM m) GROUP BY cluster)
+      SELECT (SELECT mon FROM m) AS data_month, a.cluster AS project, COALESCE(v.violators, 0) AS violators, a.assessed AS consumers_assessed,
+             ROUND(COALESCE(v.violators, 0) * 100.0 / NULLIF(a.assessed, 0), 2) AS pct_consumers_with_load_violation
+      FROM a LEFT JOIN v ON v.cluster = a.cluster
+      ORDER BY pct_consumers_with_load_violation DESC

@@ -32,6 +32,8 @@ from typing import Any
 
 import pandas as pd
 
+from gmr_agents.presentation import hes_charts
+
 # Gold table in the main SQL -> dashboard KPI card. The first table named wins.
 _TABLE_KPI: list[tuple[re.Pattern[str], str]] = [(re.compile(p, re.I), k) for p, k in [
     (r"gold_mi_installation_(?:day|month)_agg", "mi_progress"),
@@ -50,6 +52,8 @@ _TABLE_KPI: list[tuple[re.Pattern[str], str]] = [(re.compile(p, re.I), k) for p,
     (r"gold_om_closed_tickets_day_agg", "om_closed"),
     (r"gold_om_hhu_reading_day_agg", "hhu_reading"),
     (r"gold_revenue_ageing_snapshot", "revenue_ageing"),
+    # Technical (HES) boards -- drawn by hes_charts.py
+    *[(rf"hes_gold\.\"?(?:{p})\b", k) for p, k in hes_charts.TABLE_KPI],
 ]]
 
 # 'Show it as a pie' / 'line chart of ...': the user's own chart type is kept.
@@ -257,9 +261,12 @@ def _band_order(bars: list[dict]) -> list[dict]:
     return [s for _, s in sorted(zip(parsed, bars), key=lambda p: (int(p[0].group(1)), p[0].group(2) is None))]
 
 
-def shape(kpi: str, planned: str, cats: list[str], series: list[dict], x_alias: Any) -> dict:
+def shape(kpi: str, planned: str, cats: list[str], series: list[dict], x_alias: Any, rows: Any = None) -> dict | None:
     """The dashboard card's chart for these rows: {type, x, series, labels, rates?}.
-    `series` are the built series ({name, data, type?}); rates leave the bars."""
+    `series` are the built series ({name, data, type?}); rates leave the bars.
+    None (Technical boards only) = the board draws no such chart: keep the planner's."""
+    if kpi in hes_charts.HES_KPIS:
+        return hes_charts.shape(kpi, cats, series, x_alias, rows)
     cats = _merge_repeats(cats, series)
     rates = [s for s in series if _RATE_RE.search(s["name"]) or s.get("type") == "line"]
     bars = [s for s in series if s not in rates] or rates

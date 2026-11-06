@@ -351,6 +351,14 @@ class AthenaCatalog:
         # request that finds no catalog must never rebuild it concurrently.
         self._refresh_lock = threading.Lock()
 
+    def _allowlist(self) -> list[str]:
+        """'database.table' (Athena) / 'postgres:table' for every table this catalog may serve
+        (table_metadata.yaml)."""
+        names = [f"{db}.{t}" for db, tables in self._tables_by_db.items() for t in tables]
+        if self.domain == "wfm":
+            names += [f"postgres:{t}" for t in WFM_POSTGRES_TABLES]
+        return sorted(names)
+
     def _load_cache(self, *, ignore_age: bool = False) -> list[TableMeta] | None:
         if not self._cache_path.exists():
             return None
@@ -374,6 +382,16 @@ class AthenaCatalog:
         # live refresh() just failed -- a stale-but-real cache degrades the
         # ANSWER (structure/row-counts may be a bit old) far less than
         # having no WFM catalog at all for the whole outage.
+        # A cache written under a different table allowlist (an older process still running the
+        # previous table_metadata.yaml) is not this catalog. Seen live 6 Nov 2026: a backend on the
+        # old 5-table MDM list rewrote the shared cache an hour after the list grew to 22, and the
+        # next backend to start served 5 tables -- every power-quality question failed with
+        # 'Unknown table(s)'. Mismatched -> refresh live; as the last-resort fallback, only the
+        # allowed tables are served.
+        allowed = set(self._allowlist())
+        if not ignore_age and raw.get("allowlist") != sorted(allowed):
+            log.info("catalog[%s]: cache was built for a different table list -- will refresh live.", self.domain)
+            return None
         built_at = raw.get("built_at")
         if not ignore_age and (built_at is None or (time.time() - built_at) > MAX_CACHE_AGE_SECONDS):
             log.info(
@@ -384,6 +402,10 @@ class AthenaCatalog:
 
         tables = []
         for t in raw.get("tables", []):
+            key = (f"postgres:{t['table_name']}" if t.get("engine") == "postgres"
+                   else f"{t['database']}.{t['table_name']}")
+            if key not in allowed:
+                continue
             tables.append(TableMeta(
                 table_name=t["table_name"], database=t["database"], domain=t["domain"],
                 row_count=t["row_count"], engine=t.get("engine", "athena"),
@@ -396,6 +418,7 @@ class AthenaCatalog:
         _CACHE_DIR.mkdir(parents=True, exist_ok=True)
         payload = {
             "built_at": time.time(),
+            "allowlist": self._allowlist(),
             "tables": [
                 {
                     "table_name": t.table_name, "database": t.database, "domain": t.domain,

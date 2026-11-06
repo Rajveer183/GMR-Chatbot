@@ -27,7 +27,7 @@ from gmr_agents.agents.common import _METER_SERIAL_RE, _PERIOD_RE, _history_bloc
 _TRIAGE_SYSTEM = """You are the front desk of GMR's smart-meter analytics chatbot (Uttar Pradesh DISCOMs; projects agra, kashi, triveni).
 Data available:
 - WFM (workforce management): meter installations (MI), SAT, invoices/revenue/receivables, inventory/stock, O&M complaints/tickets, technicians, meter journey.
-- MDM: ONLY the consumer-to-feeder mapping audit / auto-indexing (confirmed, reassigned, review, no-data consumers; mapping accuracy, pending verification; feeders' MI, CI, reassign in/out, confidence; one consumer's index-based vs AI-based feeder, substation and outage match; correction queue; by project/zone/division/substation/feeder). Any other meter data (theft, voltage, power factor, billing, consumption, outages, load) is NOT available -> out_of_scope.
+- MDM: (1) the consumer-to-feeder mapping audit / auto-indexing (confirmed, reassigned, review, no-data consumers; mapping accuracy, pending verification; feeders' MI, CI, reassign in/out, confidence; one consumer's index-based vs AI-based feeder, substation and outage match; correction queue; by project/zone/division/substation/feeder); (2) power quality: voltage deviation index (VDI), voltage fluctuation index (VFI), voltage unbalance index (VUI), voltage drop, low-voltage pockets, meter current unbalance, % time beyond the voltage tolerance band, % time with unacceptable current imbalance; (3) load management: DT load (kVA), % DT loading, % DT peak loading (overloaded / underloaded DTs), DT load rise, % consumers with load violation (max demand above sanctioned load). Any other meter data (theft, power factor, billing, consumption, outages) is NOT available -> out_of_scope.
 Known values: OEMs (make/vendor) are only AEW, CAP, HPL, SEIPL; SAT batches are SAT-1 .. SAT-13 (no SAT-14 yet); 'varanasi'/'kasi' = kashi project, 'trivei'/'triveni' = triveni. SAT = Site Acceptance Test; MI = meter installation; DT/DTR = distribution transformer meter; PMPM = per meter per month payment.
 Dates: compare every date with Today, never with the verb tense -- a date before Today is in the past even when asked 'will be installed on ...' (answer it as data: what was installed that day); only a date after Today is a forecast.
 The user's screen: the chatbot cannot see or change the dashboard page the user has open. 'What filters are applied on my page / what am I looking at' -> kind chitchat, reply that you cannot see their page and offer to fetch the data if they name the project, period or other filters (never mention tables).
@@ -121,7 +121,15 @@ def _parse_triage(d: dict, state: dict, model: str) -> dict:
     # Mapping-audit wording is MDM whatever the model says: live 27 Oct, 'How many meters have been
     # audited in the mapping audit?' was triaged wfm and its SQL rejected (no mapping tables there).
     asked = f"{state['question']} {d.get('question') or ''}"
-    if kind in {"data", "explain", "out_of_scope"} and _MAPPING_RE.search(asked) and not _WFM_WORDS_RE.search(asked):
+    # Technical dashboard cards (power quality / DT load / load violation) are MDM whatever the model
+    # says -- before 6 Nov the triage prompt called voltage and load out_of_scope. Checked before the
+    # mapping words: '% consumers with load violation by feeder' also reads as a mapping question.
+    if kind in {"data", "explain", "out_of_scope"} and (pq_topic := technical_topic(asked)) \
+            and not _WFM_WORDS_RE.search(asked) and not _POWER_FACTOR_RE.search(asked):
+        kind, domain = ("data" if kind == "out_of_scope" else kind), "mdm"
+        chosen = [t for t in business_rules.valid_topics(d.get("topics"), "mdm") if t != "mdm_autoindexing"]
+        d = {**d, "topics": list(dict.fromkeys([pq_topic, *chosen])), "tables": technical_tables(asked, pq_topic)}
+    elif kind in {"data", "explain", "out_of_scope"} and _MAPPING_RE.search(asked) and not _WFM_WORDS_RE.search(asked):
         kind, domain = ("data" if kind == "out_of_scope" else kind), "mdm"
         d = {**d, "topics": ["mdm_autoindexing"]}
     known = {t.table_name for t in get_catalog(domain).list_tables()}
@@ -168,6 +176,65 @@ _MAPPING_RE = re.compile(
     r"|^\s*(?:show|details of) feeder\b|\bconfirmed\b.*\breassign|\bin review\b|\bsubstation\b.*\bmeter\b",
     re.I)
 
+# Words only the Technical dashboard cards use, most specific first (topic key, pattern).
+_TECHNICAL_RES = (
+    ("mdm_load_violation", re.compile(
+        r"\bload violation|\bsanctioned load|\bcontracted load|\b(?:max(?:imum)?|peak) demand\b.*\bsanctioned"
+        r"|\boverdraw|\bexcess (?:load|kw)\b", re.I)),
+    ("mdm_dt_load", re.compile(
+        r"\b(?:dts?|dtrs?|transformers?)\b[^?]*\b(?:load\w*|overload\w*|underload\w*|kva|rating|peak)\b"
+        r"|\b(?:load\w*|overload\w*|underload\w*|kva)\b[^?]*\b(?:dts?|dtrs?|transformers?)\b"
+        r"|\bload (?:rise|profile|duration)\b|\bpeak loading\b|\bstressed dts?\b|\bloading band", re.I)),
+    ("mdm_power_quality", re.compile(
+        r"\bvoltage|\bv[dfu]i\b|\b(?:current|phase) (?:unbalance|imbalance)\b|\bunbalance\b|\bpower quality\b"
+        r"|\btolerance band\b|\bout of band\b|\bover-? ?voltage|\bunder-? ?voltage", re.I)),
+)
+_POWER_FACTOR_RE = re.compile(r"\bpower factor\b|\bpf\b", re.I)
+
+
+def technical_topic(text: str) -> str | None:
+    """The Technical-card topic a question's wording names, else None."""
+    return next((key for key, rx in _TECHNICAL_RES if rx.search(text)), None)
+
+
+# Card wording -> its table(s). The planner's schema is only the tables triage names, and triage named
+# mapping_audit_summary for '% DT loading in Kashi' (6 Nov) -- so code picks them.
+_TECHNICAL_TABLE_WORDS = {
+    "mdm_power_quality": (
+        (r"low[- ]voltage|\bpockets?\b", ("low_voltage_pockets_meters", "low_voltage_pockets")),
+        (r"\bvdi\b|deviation", ("voltage_deviation_index",)),
+        (r"\bvfi\b|fluctuat|\bdips?\b|surges?|stabil|swing", ("voltage_fluctuation_index",)),
+        (r"\bvui\b|voltage (?:unbalance|imbalance)|phase voltage", ("voltage_unbalance_index",)),
+        (r"\bdrop", ("voltage_drop",)),
+        (r"(?:time|%|percent)[^?]*current (?:unbalance|imbalance)|current (?:unbalance|imbalance)[^?]*(?:10|time|compl)"
+         r"|unacceptable", ("pct_time_current_imbalance",)),
+        (r"current (?:unbalance|imbalance)|^(?!.*voltage).*\bunbalance\b", ("current_unbalance",)),
+        (r"tolerance|out of band|\bband\b|over-? ?voltage|under-? ?voltage", ("pct_time_out_of_band",)),
+    ),
+    # One DT card per question, most specific wording first (6 Nov: 'DTs by peak loading band' and 'DT-days
+    # by peak loading band' were answered from dt_loading when its table rode along).
+    "mdm_dt_load": (
+        (r"\brise\b|\brose\b|\bfell\b|\bdrops?\b|change|last month|increase|decrease", ("dt_load_rise",)),
+        (r"\bkva\b|profile|duration|stressed|hours|dt[- ]days", ("dt_load_kva",)),
+        (r"\bfeeders?\b", ("dt_peak_loading_feeder",)),
+        (r"monthly peak|above rating|never above|time above|% ?dt loading|dt loading", ("dt_loading",)),
+        (r"peak|overload|underload|90", ("dt_peak_loading",)),
+        (r"loading|rating|20%|band", ("dt_loading",)),
+    ),
+    "mdm_load_violation": ((r".", ("load_violation", "load_assessed_consumers")),),
+}
+
+
+def technical_tables(text: str, topic: str) -> list[str]:
+    """The tables a Technical-card question needs (+ dt_load_profile, which the default month reads)."""
+    picked = [t for rx, tables in _TECHNICAL_TABLE_WORDS.get(topic, ()) if re.search(rx, text, re.I) for t in tables]
+    if topic == "mdm_dt_load":
+        picked = picked[:1]
+    if not picked:
+        picked = list(business_rules.topics().get(topic, {}).get("tables") or [])
+    return list(dict.fromkeys([*picked, "dt_load_profile"]))[:5]
+
+
 _WFM_WORDS_RE = re.compile(r"\b(?:tickets?|complaints?|install\w*|sat\b|invoic\w*|stock|technicians?|o&m|journey|"
                            r"(?<!lose )(?<!lost )(?<!losing )supply|warehouse|replac\w*|defect\w*)", re.I)
 
@@ -205,6 +272,9 @@ def _route(state: dict, prior_turns: list[dict] | None) -> dict | None:
     # Topics that own the example's tables carry the rules for that SQL: they go first.
     owns = [t for t in ranked if any(f".{tbl}" in sql for tbl in all_topics[t].get("tables") or [])]
     topics = list(dict.fromkeys(owns + ranked))[:2]
+    if domain == "mdm" and (pq_topic := technical_topic(question)):
+        # A Technical-card question needs only its card's rules; the mapping-audit rules were riding along.
+        topics = [pq_topic, *[t for t in topics if t not in (pq_topic, "mdm_autoindexing")]][:2]
     if domain == "wfm" and _METER_SERIAL_RE.search(question):
         topics = ["meter_lookup"]  # one named meter = a lookup (see _parse_triage)
     triage = {"kind": "data", "question": question, "followup": False, "domain": domain,

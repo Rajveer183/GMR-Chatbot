@@ -205,6 +205,15 @@ def _build_chart(plan: dict, df: pd.DataFrame) -> dict | None:
     if ctype != "radial" and x in df.columns and (pd.api.types.is_numeric_dtype(df[x]) or x in ys + y2):
         labels = [c for c in df.columns if c != group and not pd.api.types.is_numeric_dtype(df[c])]
         x = labels[0] if labels else None
+    # A category that never changes is not an axis: the Technical answers lead with data_month (one month)
+    # and the planner charted it -- seen live 6 Nov, 'worst circles by VDI' drew '2026-07-01 · EDC II JAUNPUR'.
+    if x in df.columns and len(df) > 1 and df[x].astype(str).nunique() == 1 and ctype != "radial":
+        varying = [c for c in df.columns if c not in (x, group) and c not in ys + y2
+                   and not pd.api.types.is_numeric_dtype(df[c]) and df[c].astype(str).nunique() > 1]
+        if varying:
+            x = varying[0]
+        elif group in df.columns and df[group].astype(str).nunique() > 1:
+            x, group = group, None      # 'by band' pivoted under one month: the bands are the axis
     data = df
     if x in df.columns:
         data = df[~df[x].astype(str).str.strip().str.lower().isin({"total", "grand total"})]
@@ -217,6 +226,7 @@ def _build_chart(plan: dict, df: pd.DataFrame) -> dict | None:
 
     # A gauge is named by its measure: when x is missing, numeric or one of the plotted
     # columns (planner wrote x = the % column), its categories are the column labels.
+    cdf = None   # the plotted rows, when one row = one category
     radial_by_column = ctype == "radial" and len(data) == 1 and (
         x not in data.columns or x in ys + y2 or _number(data.iloc[0][x]) is not None)
     if radial_by_column or x not in data.columns or (
@@ -244,13 +254,19 @@ def _build_chart(plan: dict, df: pd.DataFrame) -> dict | None:
     # First priority: a question one of the dashboard's KPI cards answers is drawn the way
     # that card draws it (dashboard_charts.py); anything else keeps the planner's chart.
     kpi = dashboard_charts.kpi_for(plan.get("sql"), [s["name"] for s in series], plan.get("question"))
+    dash = None
     if kpi and not dashboard_charts.user_named_type(plan.get("question")):
-        dash = dashboard_charts.shape(kpi, ctype, cats, series, x)
+        # the plotted rows: Technical boards colour each DT by its band
+        dash = dashboard_charts.shape(kpi, ctype, cats, series, x, cdf)
+    if dash is not None:
         out = {"id": "primary_chart", "title": plan.get("table_title") or f"{dash['series'][0]['name']} by {_label(plan, x) if x else ''}",
                "type": dash["type"], "x": dash["x"], "y": dash["series"][0]["data"],
                **({"series": dash["series"]} if len(dash["series"]) > 1 else {}),
                "dashboard": kpi, "labels": dash["labels"],
                **({"rates": dash["rates"]} if dash["rates"] else {}),
+               # Technical boards: canonical colour key per bar / slice and per series (dashboardPalette.ts)
+               **({"point_keys": dash["point_keys"]} if dash.get("point_keys") else {}),
+               **({"series_keys": dash["series_keys"]} if dash.get("series_keys") else {}),
                **({"unit": str(chart["unit"])} if chart.get("unit") else {})}
         if dash["type"] != chosen:
             out["chosen_type"], out["fallback_reason"] = chosen, "dashboard chart"

@@ -77,6 +77,10 @@ export interface AIChartSpec {
   labels?: "segments" | "total" | "none";
   /** Rates (Productivity, Utilization Rate, % SAT vs MI) shown above each bar, not drawn as bars. */
   rates?: { name: string; data: number[] }[];
+  /** Technical (HES) boards: the board's colour key for each category (slice / bar) ... */
+  point_keys?: string[];
+  /** ... or for each series (Poor / Moderate, Dips / Surges, last / this month). */
+  series_keys?: string[];
   description?: string;
   /** Title / description in the answer's language; `title` stays English. */
   display_title?: string;
