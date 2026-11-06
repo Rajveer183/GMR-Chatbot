@@ -3553,3 +3553,53 @@ examples:
              ROUND(COALESCE(v.violators, 0) * 100.0 / NULLIF(a.assessed, 0), 2) AS pct_consumers_with_load_violation
       FROM a LEFT JOIN v ON v.cluster = a.cluster
       ORDER BY pct_consumers_with_load_violation DESC
+
+  - q: ["Top 10 consumers by excess load over sanctioned load", "consumers with the highest excess load", "which consumers overdraw the most", "list of load violators"]
+    note: "A list of violating consumers (not a project / area total): one row per meter_no from load_violation, biggest excess_kw first."
+    sql: |
+      SELECT data_date AS data_month, meter_no, cluster AS project, zone, circle, category,
+             sanctioned_load_kw, md_kw AS max_demand_kw, excess_kw, excess_pct
+      FROM hes_gold.load_violation
+      WHERE data_date = (SELECT MAX(month_date) FROM (SELECT month_date FROM hes_gold.dt_load_profile WHERE month_date >= DATE '2026-06-01' GROUP BY month_date HAVING COUNT(DISTINCT data_date) >= 10) c)
+      ORDER BY excess_kw DESC
+      LIMIT 10
+
+  - q: ["Compare average voltage deviation between Agra and Kashi", "VDI Agra vs Kashi", "compare VDI of two projects", "voltage deviation Agra versus Kashi"]
+    note: "Projects on the power-quality tables = their zones (no cluster column): a CASE on zone, both projects' zones in WHERE, one reading-weighted average per project."
+    sql: |
+      SELECT MAX(data_date) AS data_month,
+             CASE WHEN UPPER(zone) IN ('AGRA', 'ALIGARH', 'ETAH', 'FIROZABAD', 'MATHURA') THEN 'Agra' ELSE 'Kashi' END AS project,
+             COUNT(DISTINCT meter_no) AS eligible_meters,
+             ROUND(SUM(CASE WHEN status <> 'Offline' THEN vdi_mean * live_blocks END)
+                   / NULLIF(SUM(CASE WHEN status <> 'Offline' THEN live_blocks END), 0), 2) AS avg_vdi_pct
+      FROM hes_gold.voltage_deviation_index
+      WHERE data_date = (SELECT MAX(month_date) FROM (SELECT month_date FROM hes_gold.dt_load_profile WHERE month_date >= DATE '2026-06-01' GROUP BY month_date HAVING COUNT(DISTINCT data_date) >= 10) c)
+        AND UPPER(zone) IN ('AGRA', 'ALIGARH', 'ETAH', 'FIROZABAD', 'MATHURA', 'AZAMGARH', 'VARANASI I', 'VARANASI II')
+      GROUP BY 2
+      ORDER BY avg_vdi_pct DESC
+
+  - q: ["Last month vs this month average DT loading by zone", "DT loading this month vs last month zone-wise", "average DT loading change by zone"]
+    note: "Card panel 'Last Month vs This Month': DTs present in both months only, plain mean of each DT's average loading; the month is data_month and the previous calendar month before it."
+    sql: |
+      SELECT MAX(data_date) AS data_month, zone,
+             ROUND(AVG(prev_pct_loading), 1) AS last_month_avg_loading_pct,
+             ROUND(AVG(pct_loading), 1) AS this_month_avg_loading_pct,
+             ROUND(AVG(pct_loading) - AVG(prev_pct_loading), 1) AS change_points,
+             COUNT(DISTINCT meter_no) AS dts
+      FROM hes_gold.dt_load_rise
+      WHERE data_date = (SELECT MAX(month_date) FROM (SELECT month_date FROM hes_gold.dt_load_profile WHERE month_date >= DATE '2026-06-01' GROUP BY month_date HAVING COUNT(DISTINCT data_date) >= 10) c)
+        AND prev_pct_loading IS NOT NULL AND zone IS NOT NULL
+      GROUP BY zone
+      ORDER BY dts DESC
+
+  - q: ["Low-voltage pockets by band and ageing", "low voltage pockets band-wise and ageing-wise", "low voltage meters by severity and age", "low voltage pocket overview"]
+    note: "Card 'Low Voltage Pocket Overview': meters per band x ageing bucket from low_voltage_pockets (no ROLLUP -- a meter in two bands would count twice); the total is COUNT(DISTINCT meter_no) from low_voltage_pockets_meters, its own column."
+    sql: |
+      SELECT MAX(data_date) AS data_month, band AS low_voltage_band, ageing_bucket,
+             SUM(unique_meter_count) AS meters,
+             (SELECT COUNT(DISTINCT meter_no) FROM hes_gold.low_voltage_pockets_meters
+              WHERE data_date = (SELECT MAX(month_date) FROM (SELECT month_date FROM hes_gold.dt_load_profile WHERE month_date >= DATE '2026-06-01' GROUP BY month_date HAVING COUNT(DISTINCT data_date) >= 10) c)) AS total_distinct_meters_flagged
+      FROM hes_gold.low_voltage_pockets
+      WHERE data_date = (SELECT MAX(month_date) FROM (SELECT month_date FROM hes_gold.dt_load_profile WHERE month_date >= DATE '2026-06-01' GROUP BY month_date HAVING COUNT(DISTINCT data_date) >= 10) c)
+      GROUP BY band, ageing_bucket
+      ORDER BY CASE band WHEN 'Critical' THEN 1 WHEN 'Poor' THEN 2 ELSE 3 END, ageing_bucket

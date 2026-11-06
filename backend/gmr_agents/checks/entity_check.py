@@ -369,6 +369,20 @@ def _technical_problems(question: str, sql_texts: list[str]) -> list[str]:
             problems.append("these tables hold one row per meter per MONTH: pin one month -- data_date (month_date on "
                             f"dt_load_kva) = {TECHNICAL_DEFAULT_MONTH} when no month is asked (the dashboard's default "
                             "month), or DATE '2026-07-01' for a named month. Never add months together")
+        # Meter type on the power-quality tables is `role`. Live 6 Nov: 'average voltage unbalance for DT meters'
+        # filtered meter_type = '3PLTCTSM' (WFM's DT code) -> no rows.
+        pq_tables = {"voltage_deviation_index", "voltage_fluctuation_index", "voltage_unbalance_index", "voltage_drop",
+                     "current_unbalance", "pct_time_out_of_band", "pct_time_current_imbalance"}
+        if pq_tables & set(used) and re.search(r"\bmeter_type\s*(?:=|in\b|like\b)", low):
+            problems.append("meter type on these tables is role: '1ph', '3ph', 'ht', 'dtr' (DT meters), 'feeder' -- "
+                            "filter role = 'dtr', never meter_type")
+        # A meter can sit in several low-voltage bands: a Total over band rows counts it twice. Live 6 Nov:
+        # ROLLUP (band, ageing_bucket) over SUM(unique_meter_count) said 891,805 meters (card: 621,312 distinct).
+        if "low_voltage_pockets" in used and re.search(r"sum\s*\(\s*unique_meter_count\s*\)", low) \
+                and re.search(r"\brollup\b", low):
+            problems.append("low-voltage meters in several bands are counted once per band: no ROLLUP Total over "
+                            "SUM(unique_meter_count) -- give the per-band rows, and the total as COUNT(DISTINCT "
+                            "meter_no) FROM hes_gold.low_voltage_pockets_meters")
         # Athena has no Postgres casts. Live 6 Nov: ROUND(COUNT(DISTINCT meter_no)::numeric, 2) -> 'mismatched input'.
         if re.search(r"::\s*\w+", low):
             problems.append("Athena SQL: no '::' casts -- use CAST(x AS DOUBLE) (or nothing for a count)")
@@ -427,9 +441,10 @@ def _technical_problems(question: str, sql_texts: list[str]) -> list[str]:
                 problems.append(f"{t} is a 3-phase card: add blocks_3ph > 0 (the dashboard always applies it)")
         # Athena: a CASE label aliased with the grouped column's own name breaks GROUPING(col) in ORDER BY
         # (live 6 Nov: '% time current imbalance above 10% by circle').
-        for col in set(re.findall(r"grouping\s*\(\s*(\w+)\s*\)", low)):
-            if col in ("zone", "circle", "division", "sub_division", "cluster", "role", "status", "category") \
-                    and re.search(rf"\bend\s+as\s+{col}\b", low):
+        # (live 6 Nov again with peak_band: 'DTs by peak loading band' -- any grouped column, not only places)
+        for m in re.finditer(r"\border\s+by\b[^;]*?\bgrouping\s*\(\s*(\w+)\s*\)", low):   # Athena fails only here
+            col, head = m.group(1), low[:m.start()]
+            if re.search(rf"\bend\s+as\s+{col}\b", head[head.rfind("select"):]):     # ... in that same SELECT
                 problems.append(f"Athena: the ROLLUP label must not be named {col} (alias it {col}_name)")
         # The global 'Unmapped' CASE label does not work here (live 6 Nov: 'which division has the highest % time
         # out of band' -> EXPRESSION_NOT_AGGREGATE): select and group the bare column.

@@ -184,6 +184,11 @@ def shape(kpi: str, cats: list[str], series: list[dict], x_alias: Any, rows: Any
             s["data"] = [s["data"][i] for i in keep]
         if rows is not None:
             rows = rows.iloc[keep]
+    # One category whose series are the statuses / bands (low-voltage pockets by band under a single ageing
+    # bucket): the parts are the categories -- the board's band rings, drawn as its donut.
+    statuses = STATUS_ORDER.get(kpi)
+    if len(cats) == 1 and len(series) >= 2 and statuses and _match([s["name"] for s in series], statuses):
+        cats, series = [s["name"] for s in series], [{"name": str(cats[0]), "data": [s["data"][0] for s in series]}]
     if len(cats) < 2 or not series:
         return None
     k = len(series)
@@ -222,6 +227,14 @@ def shape(kpi: str, cats: list[str], series: list[dict], x_alias: Any, rows: Any
     if not geo:
         return None
 
+    # Load violation by area plots flagged consumers (Layout C), even when the planner charted only the %.
+    if kpi == "load_violation" and isinstance(rows, pd.DataFrame):
+        col = next((c for c in rows.columns if re.search(r"violat|flag", str(c), re.I)
+                    and not re.search(r"%|pct|percent|rate|share", str(c), re.I)
+                    and pd.api.types.is_numeric_dtype(rows[c])), None)
+        if col is not None and not any(x["name"] == str(col) for x in series):
+            series = [{"name": str(col).replace("_", " ").title(), "data": [float(v) for v in rows[col]]}]
+
     # 4. Per area. The voltage boards plot the average (MeanBars); counts riding along stay in the table.
     if k > 1 and kpi.startswith("pq_"):
         mean = [s for s in series if re.search(r"avg|average|mean|depth|wmean", s["name"], re.I)]
@@ -236,7 +249,8 @@ def shape(kpi: str, cats: list[str], series: list[dict], x_alias: Any, rows: Any
         else:
             series = [s for s in series if not _COUNT_RE.search(s["name"])][:1] or series[:1]
     elif k > 1 and kpi == "load_violation":
-        flagged = [s for s in series if re.search(r"violat|flag", s["name"], re.I) and not re.search(r"%|pct|percent", s["name"], re.I)]
+        flagged = [s for s in series if re.search(r"violat|flag", s["name"], re.I)
+                   and not re.search(r"%|pct|percent|rate|share", s["name"], re.I)]
         series = flagged[:1] or series
     elif k > 1 and kpi in ("dt_loading", "dt_peak"):
         pct = [s for s in series if re.search(r"%|pct|percent|share", s["name"], re.I)]

@@ -57,3 +57,23 @@ def test_unknown_shape_keeps_the_planners_chart():
     series = _s("a", [1, 2])
     assert D.shape("pq_vdi", "line", ["2026-06-01", "2026-07-01"], series, "data_month") is None
     assert series[0]["data"] == [1, 2]                                         # untouched for the fallback
+
+
+def test_load_violation_bars_plot_the_count_not_the_rate():
+    series = _s("Violators", [4394, 11765]) + _s("Violation Rate", [13.14, 7.11])
+    out = D.shape("load_violation", "bar", ["EDC I PRAYAGRAJ", "EDC PRATAPGARH"], series, "circle")
+    assert out["x"][0] == "EDC PRATAPGARH" and out["series"][0]["name"] == "Violators"
+
+
+def test_band_split_under_one_ageing_bucket_is_the_band_donut():
+    series = _s("Average", [479546]) + _s("Critical", [88972]) + _s("Poor", [323287])
+    out = D.shape("lv_pockets", "bar", ["3-30 Days"], series, "ageing_bucket")
+    assert out["type"] == "donut" and out["point_keys"] == ["Critical", "Poor", "Average"]
+
+
+def test_load_violation_chart_takes_the_count_from_the_rows():
+    rows = pd.DataFrame({"circle": ["EDC I PRAYAGRAJ", "EDC PRATAPGARH"], "violators": [4394, 11765],
+                         "pct_consumers_with_load_violation": [13.14, 7.11]})
+    out = D.shape("load_violation", "bar", list(rows.circle), _s("% Consumers With Load Violation", [13.14, 7.11]),
+                  "circle", rows)
+    assert out["x"][0] == "EDC PRATAPGARH" and out["series"][0]["data"][0] == 11765

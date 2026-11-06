@@ -869,6 +869,7 @@ topics:
     answer_notes:
       - "Always name the month (data_month in RESULT). With no month asked it is the dashboard's default month: the latest month with at least 10 days of readings (July 2026 now; August 2026 holds only 2-3 days)."
       - "% DT loading = half-hour load (kVAh x 2 x CT ratio) as % of the DT's kVA rating; 'peaked above rating' = its highest half-hour was 100% or more. % DT peak loading uses the DT's maximum demand: Overloaded > 100%, Overloaded 90-100%, Underloaded < 20%, else Normal. Load rise = this month's average loading minus last month's, in percentage points. The two loading cards differ because one uses half-hour energy and the other maximum demand."
+      - "Load rise / 'this month vs last month': 'this month' is the DATA month (data_month, e.g. July 2026) and 'last month' the month before it (June 2026) -- never today's calendar month (it is not October / November)."
       - "Lists of DTs leave out implausible ones (loading 200%+ or a CT far too large for the DT's rating), as the dashboard does. Quote DT counts as whole numbers, percentages with 1-2 decimals."
     rules:
       - "Month: every query pins ONE month. dt_loading / dt_peak_loading / dt_peak_loading_feeder / dt_load_rise: data_date = month 1st; dt_load_kva is one row per DT per DAY -- filter month_date (data_date is the day). No month / 'current' / 'latest' = the dashboard default month: (SELECT MAX(month_date) FROM (SELECT month_date FROM hes_gold.dt_load_profile WHERE month_date >= DATE '2026-06-01' GROUP BY month_date HAVING COUNT(DISTINCT data_date) >= 10) c). Named month = DATE 'YYYY-MM-01'. SELECT the month as data_month."
@@ -899,6 +900,7 @@ topics:
     keywords: [load violation, sanctioned load, contracted load, max demand, maximum demand, md, exceeds sanctioned, overdrawing, excess load, excess kw, violators, consumers with load violation, load violation percentage]
     tables: [load_violation, load_assessed_consumers]
     answer_notes:
+      - "'Consumers with load violation by circle / zone ...' is the card's chart: flagged consumers per area, most first -- lead with the area that has the MOST violators and its count, then give its % of assessed; name the highest % separately only if it is a different area."
       - "A load violation = the consumer's maximum demand in the month is more than 1.6 x (60% above) its sanctioned load. % = violators / consumers assessed (consumers with a sanctioned load and a max-demand reading). Quote violators, assessed and the % (2 decimals), and name the month (July 2026 is the dashboard default when no month is asked)."
     rules:
       - "Month: data_date = month 1st; no month / 'latest' = the dashboard default month (SELECT MAX(month_date) FROM (SELECT month_date FROM hes_gold.dt_load_profile WHERE month_date >= DATE '2026-06-01' GROUP BY month_date HAVING COUNT(DISTINCT data_date) >= 10) c). Months stored 2026-06..08."

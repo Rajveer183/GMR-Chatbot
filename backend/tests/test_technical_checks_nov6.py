@@ -56,3 +56,9 @@ def test_rollup_on_an_expression_and_under_voltage_measure():
            "GROUP BY ROLLUP (UPPER(circle))")
     probs = _technical_problems("% time under voltage by circle", [sql])
     assert any("ROLLUP" in p for p in probs) and any("uv_blocks" in p for p in probs)
+
+
+def test_low_voltage_total_over_bands_is_rejected():
+    sql = (f"SELECT band, SUM(unique_meter_count) FROM hes_gold.low_voltage_pockets WHERE {PINNED} "
+           "GROUP BY ROLLUP (band)")
+    assert any("COUNT(DISTINCT" in p for p in _technical_problems("Low-voltage pockets by band", [sql]))
