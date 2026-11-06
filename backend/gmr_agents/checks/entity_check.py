@@ -383,6 +383,15 @@ def _technical_problems(question: str, sql_texts: list[str]) -> list[str]:
             problems.append("low-voltage meters in several bands are counted once per band: no ROLLUP Total over "
                             "SUM(unique_meter_count) -- give the per-band rows, and the total as COUNT(DISTINCT "
                             "meter_no) FROM hes_gold.low_voltage_pockets_meters")
+        # A breakdown nobody asked for. Live 6 Nov: 'Load violation for 3-phase consumers in August' was split by
+        # project and the headline % (violators / assessed of the whole) was never given.
+        broke = re.findall(r"\bgroup\s+by\s+(?:rollup\s*\()?\s*(?:\w+\.)?(cluster|zone|circle|division|sub_division|"
+                           r"category|role|feeder_code|dtr_code)\b", low)
+        if broke and not re.search(r"-?\bwise\b|\bby\b|\beach\b|\bper\b|\bwhich\b|\btop\b|\bcompare|\bvs\b|\bversus\b|"
+                                   r"\bsplit\b|\bbreak|\bdistribution\b|\brank|\bhighest\b|\blowest\b|\bmost\b|\bleast\b|"
+                                   r"\bworst\b|\bbest\b|\bacross\b|\blist\b|\bshow\b|\bwhere\b|\bbetween\b", question, re.I):
+            problems.append(f"the question asks for one figure, not a {broke[0].replace('_', ' ')}-wise breakdown: "
+                            "remove that GROUP BY and give the whole scope (e.g. violators, assessed and the % overall)")
         # Athena has no Postgres casts. Live 6 Nov: ROUND(COUNT(DISTINCT meter_no)::numeric, 2) -> 'mismatched input'.
         if re.search(r"::\s*\w+", low):
             problems.append("Athena SQL: no '::' casts -- use CAST(x AS DOUBLE) (or nothing for a count)")
@@ -424,8 +433,13 @@ def _technical_problems(question: str, sql_texts: list[str]) -> list[str]:
             problems.append("the default month is not MAX(data_date) (August 2026 holds only 2-3 days): use "
                             f"{TECHNICAL_DEFAULT_MONTH}")
         named = [m for m in _MONTHS if re.search(rf"\b{m}\b", question, re.I)]
-        if len(named) == 1 and not month_wise and f"-{_MONTHS[named[0]]:02d}-01" not in low:
-            problems.append(f"the question names {named[0].title()}: pin DATE '2026-{_MONTHS[named[0]]:02d}-01'")
+        # The default-month subquery holds DATE '2026-06-01' itself -- it never pins June (live 6 Nov: 'load
+        # violation percentage in June' ran on the default month and said June had no data).
+        no_default = re.sub(r"\(\s*select\s+(?:max\s*\(\s*)?month_date\s*\)?(?:\s+as\s+\w+)?\s+from\s*\(?\s*(?:select\s+month_date\s+from\s+)?"
+                            r"hes_gold\.dt_load_profile.*?count\s*\(\s*distinct\s+data_date\s*\)\s*>=\s*10\s*\)?\s*\w*\s*\)", "x", low, flags=re.S)
+        if len(named) == 1 and not month_wise and f"-{_MONTHS[named[0]]:02d}-01" not in no_default:
+            problems.append(f"the question names {named[0].title()}: pin DATE '2026-{_MONTHS[named[0]]:02d}-01' "
+                            "(data_date = DATE '...', not the default month)")
         # Live 6 Nov: 'Load violation in EDC Ballia' took MAX(month_date) FROM dt_load_profile without the
         # 10-day condition and answered for August.
         if "dt_load_profile" in low and not re.search(r"count\s*\(\s*distinct\s+data_date\s*\)\s*>=\s*10", low):

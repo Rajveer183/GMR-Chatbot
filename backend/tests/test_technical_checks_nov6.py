@@ -62,3 +62,11 @@ def test_low_voltage_total_over_bands_is_rejected():
     sql = (f"SELECT band, SUM(unique_meter_count) FROM hes_gold.low_voltage_pockets WHERE {PINNED} "
            "GROUP BY ROLLUP (band)")
     assert any("COUNT(DISTINCT" in p for p in _technical_problems("Low-voltage pockets by band", [sql]))
+
+
+def test_named_june_is_not_pinned_by_the_default_month():
+    # Live 6 Nov: 'Load violation percentage in June' ran on the default month (its subquery holds DATE '2026-06-01').
+    sql = f"SELECT COUNT(DISTINCT meter_no) FROM hes_gold.load_violation WHERE {PINNED}"
+    assert any("June" in p for p in _technical_problems("Load violation percentage in June", [sql]))
+    ok = "SELECT COUNT(DISTINCT meter_no) FROM hes_gold.load_violation WHERE data_date = DATE '2026-06-01'"
+    assert not any("June" in p for p in _technical_problems("Load violation percentage in June", [ok]))
