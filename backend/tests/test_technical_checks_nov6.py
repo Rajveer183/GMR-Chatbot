@@ -77,3 +77,9 @@ def test_dt_band_edges_are_inclusive():
     assert any(">= 120" in p for p in _technical_problems("How many DT-days had peak loading above 120%?", [sql]))
     ok = sql.replace("peak_pct_loading > 120", "peak_band = '>120%'")
     assert not any(">= 120" in p for p in _technical_problems("How many DT-days had peak loading above 120%?", [ok]))
+
+
+def test_forecast_uses_the_month_series_not_the_empty_month():
+    series = ("SELECT data_date, SUM(vdi_mean * live_blocks) / SUM(live_blocks) FROM hes_gold.voltage_deviation_index "
+              "WHERE data_date BETWEEN DATE '2026-06-01' AND DATE '2026-08-01' GROUP BY data_date")
+    assert _technical_problems("Predict the average VDI for September 2026", [series]) == []

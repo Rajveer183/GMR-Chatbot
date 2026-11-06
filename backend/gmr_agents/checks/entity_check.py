@@ -359,6 +359,7 @@ def _technical_problems(question: str, sql_texts: list[str]) -> list[str]:
     (MAX(data_date), 2-3 days of readings) instead of the dashboard's default month."""
     problems: list[str] = []
     month_wise = re.search(r"\b(month[- ]?wise|monthly(?! peak)|trend|each month|every month|by month|over (?:the )?months|"
+                           r"predict\w*|forecast\w*|project(?:ed|ion)|next month|will be|likely|"
                            r"june to|from june|compare(?:d)? (?:june|july|august))\b", question, re.I)
     for s in sql_texts:
         low = (s or "").lower()
@@ -438,7 +439,11 @@ def _technical_problems(question: str, sql_texts: list[str]) -> list[str]:
                      rf"(?:{'|'.join(_TECHNICAL_TABLES)})\b", low):
             problems.append("the default month is not MAX(data_date) (August 2026 holds only 2-3 days): use "
                             f"{TECHNICAL_DEFAULT_MONTH}")
-        named = [m for m in _MONTHS if re.search(rf"\b{m}\b", question, re.I)]
+        # Only months with data (June-August 2026): a later month is a forecast from the month-wise series, and
+        # pinning it returns no rows (live 6 Nov: 'predict the average VDI for September 2026' -> '0 meters').
+        named = [m for m in ("june", "july", "august") if re.search(rf"\b{m}\b", question, re.I)]
+        if re.search(r"\b(?:predict|forecast|project(?:ed|ion)?|next month|if the trend|will be)\b", question, re.I):
+            named = []
         # The default-month subquery holds DATE '2026-06-01' itself -- it never pins June (live 6 Nov: 'load
         # violation percentage in June' ran on the default month and said June had no data).
         no_default = re.sub(r"\(\s*select\s+(?:max\s*\(\s*)?month_date\s*\)?(?:\s+as\s+\w+)?\s+from\s*\(?\s*(?:select\s+month_date\s+from\s+)?"
