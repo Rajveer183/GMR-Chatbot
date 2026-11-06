@@ -36,7 +36,11 @@ def _load(path: str) -> dict[str, Any]:
     try:
         mtime = os.path.getmtime(path)
     except OSError:
-        return {}
+        # File briefly missing (moved / being replaced): keep serving the last good copy. Live 4 Nov
+        # 10:54, a restructure moved the data folder under a running server: every question lost
+        # its rules and examples (rules block 31 tokens) and two verified wordings were refused.
+        log.error("%s not found -- keeping the previous version.", os.path.basename(path))
+        return (_CACHE.get(path) or {}).get("data") or {}
     with _LOCK:
         entry = _CACHE.setdefault(path, {"mtime": None, "data": {}})
         if entry["mtime"] != mtime:

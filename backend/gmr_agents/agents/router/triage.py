@@ -102,6 +102,19 @@ def _consistent_assumption(assumption: str, question: str) -> str:
     return assumption
 
 
+def _fallback_topics(question: str, domain: str, tables: list[str]) -> list[str]:
+    """Topics by code when the triage reply has no valid topic key. Without one the query writer
+    gets no KPI rules at all (only the global ones) and writes its own definitions. Measured
+    15 Oct - 6 Nov: 540 of 3,098 triaged data questions had none; nemotron-3.5-lightning
+    returns e.g. "topics": [1] (55% of its triages). Same choice as the code router: topics
+    owning the tables triage named first, then retrieval ranking, this domain only."""
+    all_topics = business_rules.topics()
+    ranked = [t for t in business_rules.rank_topics(question, len(all_topics))
+              if all_topics.get(t, {}).get("domain", "wfm") == domain]
+    owns = [t for t in ranked if set(all_topics[t].get("tables") or []) & set(tables)]
+    return list(dict.fromkeys(owns + ranked))[:2]
+
+
 def _parse_triage(d: dict, state: dict, model: str) -> dict:
     kind = d.get("kind") if d.get("kind") in {"data", "explain", "chitchat", "out_of_scope"} else "data"
     domain = d.get("domain") if d.get("domain") in {"wfm", "mdm"} else "wfm"
@@ -127,6 +140,8 @@ def _parse_triage(d: dict, state: dict, model: str) -> dict:
         "reply": str(d.get("reply") or "").strip(), "source": model,
         "named": str(d.get("named") or "").strip()[:80],
     }
+    if not triage["topics"] and kind in {"data", "explain"}:
+        triage["topics"] = _fallback_topics(f"{state['question']} {triage['question']}", domain, triage["tables"])
     # One named meter ('journey of meter AL1151970 from supply to revenue') is a lookup, not
     # the programme-wide funnel: the funnel's notes ('quote each conversion %') once turned
     # a correct one-meter result into "conversion percentages are not available".

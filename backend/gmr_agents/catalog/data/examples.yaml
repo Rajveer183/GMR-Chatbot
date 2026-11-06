@@ -167,11 +167,11 @@ examples:
                 FROM public.gold_revenue_ageing_snapshot), 5.0
         UNION ALL
         SELECT 'Installs: last 7 days vs previous 7 (% drop)',
-               (SELECT ROUND((1 - SUM(meter_count) FILTER (WHERE period_start > CURRENT_DATE - 7) * 1.0
-                       / NULLIF(SUM(meter_count) FILTER (WHERE period_start <= CURRENT_DATE - 7), 0)) * 100, 2)
+               (SELECT ROUND((1 - SUM(meter_count) FILTER (WHERE period_start >= CURRENT_DATE - 7) * 1.0
+                       / NULLIF(SUM(meter_count) FILTER (WHERE period_start < CURRENT_DATE - 7), 0)) * 100, 2)
                 FROM public.gold_mi_installation_day_agg
                 WHERE has_meter_serial AND progress_category IS NOT NULL AND NOT is_replacement
-                  AND period_start > CURRENT_DATE - 14), 20.0
+                  AND period_start BETWEEN CURRENT_DATE - 14 AND CURRENT_DATE - 1), 20.0
         UNION ALL
         SELECT 'Defect rate (%)',
                (SELECT ROUND((SELECT SUM(defect_rate_numerator_count) FROM public.gold_meter_defect_event_day_agg) * 100.0
@@ -2610,7 +2610,7 @@ examples:
                     SUM(meter_count) FILTER (WHERE age_key = 'age_120_plus') AS non_sat_120_plus
              FROM public.gold_non_sat_ageing_snapshot GROUP BY 1),
       wk AS (SELECT LOWER(project) AS project, SUM(meter_count) AS installs_last_7_days FROM public.gold_mi_installation_day_agg
-             WHERE has_meter_serial AND progress_category IS NOT NULL AND NOT is_replacement AND period_start > CURRENT_DATE - 7 GROUP BY 1),
+             WHERE has_meter_serial AND progress_category IS NOT NULL AND NOT is_replacement AND period_start BETWEEN CURRENT_DATE - 7 AND CURRENT_DATE - 1 GROUP BY 1),
       df AS (SELECT LOWER(project) AS project, SUM(defect_count) AS replacements FROM public.gold_meter_defect_event_day_agg GROUP BY 1),
       rv AS (SELECT LOWER(project) AS project,
                     ROUND((lumpsum_realised + pmpm_realised) * 100.0 / NULLIF(lumpsum_invoiced + pmpm_invoiced, 0), 2) AS collection_pct
