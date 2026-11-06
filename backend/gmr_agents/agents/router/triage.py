@@ -109,9 +109,10 @@ def _fallback_topics(question: str, domain: str, tables: list[str]) -> list[str]
     returns e.g. "topics": [1] (55% of its triages). Same choice as the code router: topics
     owning the tables triage named first, then retrieval ranking, this domain only."""
     all_topics = business_rules.topics()
+    # rank_topics' index can trail a hot-reloaded business_rules.yaml: skip keys the topics no longer have
     ranked = [t for t in business_rules.rank_topics(question, len(all_topics))
-              if all_topics.get(t, {}).get("domain", "wfm") == domain]
-    owns = [t for t in ranked if set(all_topics[t].get("tables") or []) & set(tables)]
+              if t in all_topics and all_topics[t].get("domain", "wfm") == domain]
+    owns = [t for t in ranked if set(all_topics.get(t, {}).get("tables") or []) & set(tables)]
     return list(dict.fromkeys(owns + ranked))[:2]
 
 
@@ -267,8 +268,10 @@ def _route(state: dict, prior_turns: list[dict] | None) -> dict | None:
     sql = str(examples[int(example_id)].get("sql") or "") if example_id.isdigit() and int(example_id) < len(examples) else ""
     domain = "mdm" if "hes_gold." in sql else "wfm"
     all_topics = business_rules.topics()
+    # Only keys the (possibly just reloaded) topics still have -- live 6 Nov: KeyError 'mdm_dt_load' on every
+    # routed question while business_rules.yaml was swapped under a running server.
     ranked = [t for t in business_rules.rank_topics(question, len(all_topics))
-              if all_topics.get(t, {}).get("domain", "wfm") == domain]
+              if t in all_topics and all_topics[t].get("domain", "wfm") == domain]
     # Topics that own the example's tables carry the rules for that SQL: they go first.
     owns = [t for t in ranked if any(f".{tbl}" in sql for tbl in all_topics[t].get("tables") or [])]
     topics = list(dict.fromkeys(owns + ranked))[:2]

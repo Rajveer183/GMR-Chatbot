@@ -70,3 +70,10 @@ def test_named_june_is_not_pinned_by_the_default_month():
     assert any("June" in p for p in _technical_problems("Load violation percentage in June", [sql]))
     ok = "SELECT COUNT(DISTINCT meter_no) FROM hes_gold.load_violation WHERE data_date = DATE '2026-06-01'"
     assert not any("June" in p for p in _technical_problems("Load violation percentage in June", [ok]))
+
+
+def test_dt_band_edges_are_inclusive():
+    sql = f"SELECT COUNT(*) FROM hes_gold.dt_load_kva WHERE month_date = {TECHNICAL_DEFAULT_MONTH} AND peak_pct_loading > 120"
+    assert any(">= 120" in p for p in _technical_problems("How many DT-days had peak loading above 120%?", [sql]))
+    ok = sql.replace("peak_pct_loading > 120", "peak_band = '>120%'")
+    assert not any(">= 120" in p for p in _technical_problems("How many DT-days had peak loading above 120%?", [ok]))

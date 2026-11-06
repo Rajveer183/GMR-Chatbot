@@ -383,6 +383,12 @@ def _technical_problems(question: str, sql_texts: list[str]) -> list[str]:
             problems.append("low-voltage meters in several bands are counted once per band: no ROLLUP Total over "
                             "SUM(unique_meter_count) -- give the per-band rows, and the total as COUNT(DISTINCT "
                             "meter_no) FROM hes_gold.low_voltage_pockets_meters")
+        # DT loading bands include their lower edge ('>120%' = 120 and above). Live 6 Nov: 'DT-days with peak loading
+        # above 120%' filtered peak_pct_loading > 120 -> 758 (card 779; 21 DT-days sit at exactly 120%).
+        if {"dt_load_kva", "dt_loading"} & set(used) and re.search(
+                r"\b(?:peak_pct_loading|max_pct_loading|pct_loading)\s*>\s*(?:20|35|55|70|85|100|120)(?:\.0+)?\b(?!\s*=)", low):
+            problems.append("DT loading bands include their lower edge: 'above 120%' = peak_band = '>120%' "
+                            "(peak_block_band on dt_loading), i.e. >= 120 -- use the band column, not a strict >")
         # A breakdown nobody asked for. Live 6 Nov: 'Load violation for 3-phase consumers in August' was split by
         # project and the headline % (violators / assessed of the whole) was never given.
         broke = re.findall(r"\bgroup\s+by\s+(?:rollup\s*\()?\s*(?:\w+\.)?(cluster|zone|circle|division|sub_division|"

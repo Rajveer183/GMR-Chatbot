@@ -171,7 +171,9 @@ def similar_examples(question: str, k: int = 2) -> list[dict]:
     from gmr_agents.retrieval import knowledge
 
     all_ex = examples()
-    return [all_ex[int(i)] for i in knowledge.examples_for(question, k)]
+    # The retrieval index can trail a hot-reloaded examples.yaml by a moment and hand back ids past the end
+    # (live 6 Nov: IndexError on every question while the YAML was swapped under a running server).
+    return [all_ex[int(i)] for i in knowledge.examples_for(question, k) if int(i) < len(all_ex)]
 
 
 def rank_topics(question: str, k: int = 3) -> list[str]:
@@ -229,7 +231,7 @@ def example_menu(question: str | None = None, k: int | None = None) -> str:
 
     all_ex = examples()
     if question and k:
-        ids = [int(i) for i in knowledge.examples_for(question, k)]
+        ids = [int(i) for i in knowledge.examples_for(question, k) if int(i) < len(all_ex)]   # see similar_examples
     else:
         ids = list(range(len(all_ex)))
     lines = []
