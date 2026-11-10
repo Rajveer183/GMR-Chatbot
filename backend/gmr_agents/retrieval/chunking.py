@@ -7,10 +7,10 @@ own boundaries instead of every-N-tokens windows:
 
     kpi_definitions.yaml   one PARENT chunk per KPI (title, card, aliases, summary)
                            + one CHILD chunk per section: logic, formulas, caveats,
-                             sql_recipe, filters, response, example, tables
+                             sql_recipe, filters, response, tables (no worked example)
                            -- a list section is split only BETWEEN items when it is
                              over max_tokens (a logic step / caveat is never cut);
-                             SQL, formulas and worked examples are atomic
+                             SQL and formulas are atomic
                            -- tiny sections are merged into a neighbour so no chunk
                              is too thin to retrieve on its own
     gold_tables            one chunk per table (name, builder, sources, notes)

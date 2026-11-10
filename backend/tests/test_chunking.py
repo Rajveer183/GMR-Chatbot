@@ -58,7 +58,8 @@ class KpiChunkTests(unittest.TestCase):
         self.assertEqual(len(sql_chunks), 1)
         self.assertIn(sql.strip(), sql_chunks[0].text)
         self.assertTrue(any(c.section == "formulas" for c in cs))
-        self.assertTrue(any(c.section == "example" for c in cs))
+        # Worked examples are a dated run -- never chunked, so they can't be quoted as today's figures.
+        self.assertFalse(any(c.section.startswith("example") for c in cs))
 
     def test_small_sections_merged(self):
         cs = chunks(kpi(filters=[{"filter": "date", "values": "from/to"}],

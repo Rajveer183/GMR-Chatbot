@@ -38,8 +38,9 @@ class TechnicalRoutingTests(unittest.TestCase):
         self.assertIsNone(RT.technical_topic("How many DT meters were installed in Agra?"))
         t = self._parse("How many DT meters were installed in Agra?", kind="data")
         self.assertEqual(t["domain"], "wfm")
+        # Power factor is trained since 10 Nov 2026 (Low Power Factor by DT/Feeder card).
         t = self._parse("Low power factor DTs by feeder")
-        self.assertEqual(t["kind"], "out_of_scope")
+        self.assertEqual((t["kind"], t["domain"], t["topics"][0]), ("data", "mdm", "mdm_power_factor"))
 
     def test_explain_keeps_its_kind(self):
         t = self._parse("What does voltage unbalance index mean?", kind="explain")

@@ -83,3 +83,21 @@ def test_forecast_uses_the_month_series_not_the_empty_month():
     series = ("SELECT data_date, SUM(vdi_mean * live_blocks) / SUM(live_blocks) FROM hes_gold.voltage_deviation_index "
               "WHERE data_date BETWEEN DATE '2026-06-01' AND DATE '2026-08-01' GROUP BY data_date")
     assert _technical_problems("Predict the average VDI for September 2026", [series]) == []
+
+
+def test_sql_without_a_table_is_rejected():
+    # Live 6 Nov: a forecast 'answered' with SELECT DATE '2026-09-01', 0 AS eligible_meters, NULL AS avg_vdi_pct.
+    from gmr_agents.checks.entity_check import check
+    made_up = "SELECT DATE '2026-09-01' AS data_month, 0 AS eligible_meters, NULL AS avg_vdi_pct"
+    assert any("reads no table" in p for p in check("Predict the average VDI for September 2026", [made_up]))
+
+
+def test_rollup_total_is_not_labelled_unmapped():
+    # Live 10 Nov: the ROLLUP total row (NULL category) was labelled 'Unmapped' and counted twice (1,208 for 604).
+    from gmr_agents.checks.entity_check import check
+    bad = ("SELECT CASE WHEN progress_category IS NULL OR progress_category = '' THEN 'Unmapped' ELSE UPPER(progress_category) END AS c, "
+           "SUM(meter_count) FROM public.gold_mi_installation_day_agg WHERE period_start = CURRENT_DATE - 1 "
+           "GROUP BY ROLLUP (progress_category)")
+    assert any("ROLLUP total" in p for p in check("installs yesterday category wise", [bad]))
+    ok = bad.replace("CASE WHEN progress_category IS NULL", "CASE WHEN GROUPING(progress_category) = 1 THEN 'Total' WHEN progress_category IS NULL")
+    assert not any("ROLLUP total" in p for p in check("installs yesterday category wise", [ok]))

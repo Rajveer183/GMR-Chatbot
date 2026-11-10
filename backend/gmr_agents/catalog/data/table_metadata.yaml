@@ -74,7 +74,7 @@ mdm_tables:
     - pct_time_current_imbalance
     - low_voltage_pockets
     - low_voltage_pockets_meters
-    # Technical > Load Management cards (kpi_63 / 64 / 65 / 66 / 60). Low Power Factor is not trained.
+    # Technical > Load Management cards (kpi_63 / 64 / 65 / 66 / 60). Low Power Factor = the lpf2_* tables below (the legacy low_power_factor* twin is not loaded).
     - dt_loading
     - dt_peak_loading
     - dt_peak_loading_feeder
@@ -83,6 +83,53 @@ mdm_tables:
     - load_violation
     - load_assessed_consumers
     - dt_load_profile
+    # Operation Analytics / Parameters, Power factor, Theft, Finance cards (added 10 Nov 2026)
+    - voltage_imbalance
+    - current_imbalance
+    - voltage_imbalance_alerts
+    - current_imbalance_alerts
+    - voltage_imbalance_reduction
+    - current_imbalance_reduction
+    - reverse_flow
+    - data_quality_issues
+    - data_quality_issues_daily
+    - communication_failures
+    - hidden_outage_summary
+    - hidden_outage_events
+    - consumption_spike_drop
+    - consumption_spike_drop_detail
+    - lpf2_low_power_factor
+    - lpf2_low_power_factor_meters
+    - lpf2_low_power_factor_daily
+    - power_factor_deterioration
+    - power_factor_deterioration_meters
+    - reliability_indices
+    - outage_ranking
+    - reliability_improvement_trends
+    - feeder_loss
+    - feeder_loss_ai
+    - dt_loss
+    - feeder_loss_consumers
+    - feeder_loss_ai_consumers
+    - dt_loss_consumers
+    # Operation Analytics / Parameters, Power factor, Theft, Finance cards (added 10 Nov 2026)
+    - overload_md_breach
+    - load_diversion
+    - energy_theft_suspect
+    - theft_risk_by_area
+    - theft_reduction_trend
+    - total_anomalies_detected
+    - repeat_anomaly_tracking
+    # Operation Analytics / Parameters, Power factor, Theft, Finance cards (added 10 Nov 2026)
+    - dim_meter
+    - dim_meter_replaced
+
+  # One meter's raw readings -- the dashboard's KPI drill drawer (block_usage, half-hours) and energy-audit evidence
+  # (daily_usage). Huge (block_usage ~3.1 billion rows, partitioned by discom_code / data_date only): every query
+  # needs meter_no = 'X' AND a literal date range (entity_check._meter_reading_problems). Added 10 Nov 2026.
+  hes_silver:
+    - block_usage
+    - daily_usage
 
 wfm_tables:
   gmr_wfm_silver:
@@ -104,6 +151,8 @@ wfm_tables:
     # SAT (site acceptance test) tracking
     - sat_meter_mappings
     - sat_milestones
+    # discom escalations (SmartEMS DISESC), one row per escalation -- detail behind gold_om_discom_escalation_snapshot
+    - unified_discom_escalations
 
 # Postgres database (DB_NAME), public schema -- same gold-tier-only
 # principle as MDM above, by the same explicit instruction: only
@@ -446,11 +495,19 @@ column_hints:
     'With GMR'. NOTE: only 'Decommissioned' means the meter is actually fully decommissioned -- the
     other 4 values are intermediate custody states in the decommissioning workflow, not synonyms for
     "decommissioned".
+  # Verified live 10 Nov: Oct 2026 = 54,724 rows but 54,611 distinct old_meter_number -- a meter can have several rows.
+  "unified_decommissioned_meter.old_meter_number": >-
+    The removed meter's serial. Count meters with COUNT(DISTINCT old_meter_number), never COUNT(*): a meter can have
+    several rows (one per custody step / report). 'Decommissioned last month' = decommissioned_on in that month.
   "unified_decommissioned_meter.meter_condition": &hint46 >-
     Free-form, NOT a clean enum -- verified live: casing is inconsistent ('Faulty' vs 'faulty', 'Working' vs
     'working', 'Burnt' vs 'burnt' are each counted as different stored values), plus a long tail of one-off
     free-text entries ('Denger zone', 'meter disconncet', 'Power outage'). Use LOWER() for a case-insensitive
     equality filter on the common values (ok/faulty/damage/burnt/working).
+  # Verified live 10 Nov: CONSUMER rows 10,597,214 but 10,004,337 distinct consumer_number.
+  "unified_discom_meter_asset.consumer_number": >-
+    The DISCOM consumer id. Count consumers with COUNT(DISTINCT consumer_number), never COUNT(*): the register
+    repeats consumers across report snapshots (about 6% extra rows).
   "unified_discom_meter_asset.connection_status": &hint47 >-
     NOT a small clean enum -- verified live, 16+ distinct values including inconsistent casing ('In Service' vs 'In
     service' are two different stored strings). Dominant values: 'In Service' (~76%), 'TD' (temporarily
@@ -604,6 +661,112 @@ column_hints:
     A JSON array of {meter_type, label, count} objects (jsonb), pre-computed for the dashboard UI -- see
     gold_inventory_unutilized_stock_snapshot for the equivalent real, queryable table. Not directly
     filterable/summable in SQL.
+  # ---- grpA (10 Nov 2026) ----
+  "voltage_imbalance.ageing_bucket": &ihint1 >-
+    NULL means NOT flagged (fewer than 3 imbalanced days) -- flagged meters = ageing_bucket IS NOT NULL. The table
+    holds every meter assessed, so COUNT(*) alone is the assessed population, not meters with imbalance.
+  "current_imbalance.ageing_bucket": *ihint1
+  "voltage_imbalance_reduction.qualifies": &ihint2 >-
+    TRUE = imbalance fell by 30+ percentage points vs last month (the card's 'improved' meters). The table holds
+    every meter compared -- always filter qualifies to count improvements.
+  "current_imbalance_reduction.qualifies": *ihint2
+  "voltage_imbalance_reduction.data_date": &ihint3 >-
+    The CURRENT month of the comparison: 2026-07-01 = June -> July, 2026-08-01 = July -> August.
+  "current_imbalance_reduction.data_date": *ihint3
+  "voltage_imbalance_alerts.severity": &ihint4 >-
+    The meter's dominant day grade, Critical / Poor / Average (by share of imbalanced half-hours: >= 85 / 70 / 50%)
+    -- not the Power Quality status bands.
+  "current_imbalance_alerts.severity": *ihint4
+  # ---- grpB (10 Nov 2026) ----
+  "communication_failures.nc_bucket": >-
+    Stored as 'Non_Communicating_3_30_Days', 'Non_Communicating_31_60_Days', 'Non_Communicating_61_90_Days',
+    'Non_Communicating_More_than_90_Days' -- never '3-30 Days'.
+  "hidden_outage_summary.event_count": >-
+    Same value as total_block_count_flagged: flagged HALF-HOURS, not outage events (those are total_flagged_occurrences).
+  "hidden_outage_summary.total_block_count": >-
+    Half-hours the detector checked (NULL for abnormal_current_flow) -- the % denominator, not a count of flagged slots.
+  "reverse_flow.has_export": >-
+    TRUE for every meter that exported, net meters included (normal for solar) -- the finding is is_anomaly / anomaly_type.
+  "consumption_spike_drop.meter_flag": >-
+    Spike / Drop is set for any meter with an outlier reading; only is_spike_or_drop_suspect = true meters are flagged by the card.
+  # ---- grpC (10 Nov 2026) ----
+  "lpf2_low_power_factor.max_ageing_days": "Longest run in the group -- combine groups with MAX(), never SUM()."
+  "lpf2_low_power_factor.total_block_count": "Low-PF half-hours (SUM of low_blocks), not all half-hours; PF-valid half-hours = pf_live_block_count."
+  "lpf2_low_power_factor_meters.total_blocks": "PF-valid half-hours only (kVAh > 0), the low_pf_pct denominator."
+  "lpf2_low_power_factor_meters.ageing_days": "Count of OBSERVED flagged days in the current run, not calendar days (calendar span = ageing_span_days)."
+  "lpf2_low_power_factor_meters.dtr_name": "Always NULL -- use dtr_code."
+  "power_factor_deterioration.event_count": "Same as unique_meter_count; do not add the two."
+  # ---- grpD (10 Nov 2026) ----
+  reliability_indices.saidi: "The feeder's OWN ratio (rounded). For an area/fleet SAIDI use SUM(dur) / SUM(total_consumers), never AVG(saidi)."
+  reliability_indices.events: "Interruptions, momentary ones included (SAIFI here is not IEEE sustained-only; saifi_sustained / events_sustained are)."
+  outage_ranking.rank_by_count: "Rank within discom_code x category for the whole month -- not within a zone/circle filter; rank by ORDER BY outage_count instead."
+  reliability_improvement_trends.data_date: "2026-07-16 is the 'halves' comparison, not a day of data: a July filter must be data_date >= DATE '2026-07-01' AND < DATE '2026-08-01'."
+  # ---- grpF (10 Nov 2026) ----
+  "feeder_loss.current_date": &hintcd >-
+    Last day of the feeder's/DT's reporting window (a DATE column). Always write "current_date" in double quotes --
+    bare current_date is Athena's today. previous_date = first day of the window.
+  "dt_loss.current_date": *hintcd
+  "feeder_loss_ai.current_date": *hintcd
+  "feeder_loss.loss_pct": &hintlp >-
+    This feeder's/DT's own loss %; NULL when no consumers are mapped or input is 0. Never AVG it for an area:
+    area loss = SUM(loss_kwh) * 100 / SUM(net_input).
+  "dt_loss.loss_pct": *hintlp
+  "feeder_loss_ai.loss_pct": *hintlp
+  "feeder_loss.asset_billed": &hintab >-
+    kWh recorded by the consumers mapped to this feeder/DT over its window (the card's 'Output Unit'), not a bill amount.
+  "dt_loss.asset_billed": *hintab
+  "feeder_loss_ai.asset_billed": *hintab
+  "feeder_loss.mapping_coverage": "children_reporting / children_mapped as a 0-1 fraction (x 100 for %)."
+  # ---- grpG_m (10 Nov 2026) ----
+  "unified_discom_escalations.escalation_supervisor": >-
+    The DISCOM officer who approved/rejected the escalation (not a GMR supervisor); NULL while pending.
+  "unified_discom_escalations.escalation_supervisor_remarks": >-
+    The discom officer's free-text decision remark ('why rejected / approved'), not the technician's remark.
+  "unified_discom_escalations.escalation_attended_on": >-
+    When the discom decided (approved/rejected) -- UTC; days to decide = escalated_on -> this.
+  "unified_discom_escalations.escalation_status": >-
+    Mixed case ('Pending','Approved','Rejected') or blank: compare UPPER(TRIM(...)); blank = 'UNKNOWN' on the card.
+  "unified_discom_escalations.technician_remarks": >-
+    GMR technician's reason for escalating (the card's technician_remark, upper-cased there).
+
+# --- only if the MVs are swapped in later (not recommended now) ---
+# gold_mi_sat_eligibility_mv: >-
+#   MI vs SAT vs invoice by place, category, meter_type, sat_stage, invoice/collection flags and is_sat_eligible
+#   (installed on/before the project cutoff in sat_eligibility_config, applied at refresh); SUM(meter_count).
+#   The dashboard's MI vs SAT card and home SAT tiles read this; same rows as gold_mi_sat_invoice_snapshot.
+# gold_non_sat_ageing_mv: >-
+#   Eligible meters still without SAT by place, category, meter_type and age_key (days since install at refresh);
+#   the Non-SAT Ageing card's table; same rows as gold_non_sat_ageing_snapshot.
+# gold_mi_eligible_installations_mv: >-
+#   3 rows: eligible installations per project (replacements included) -- denominator of the home 'SAT % of eligible MI'.
+  # ---- grpE (10 Nov 2026) ----
+  overload_md_breach:
+    assessed_meters: "Fleet-wide consumers assessed, the SAME constant on every row -- never SUM it and never use it as a filtered denominator; use SUM(assessed_meters) FROM load_assessed_consumers with the same filters."
+    risk_bucket: "'90-105%' = 90 to under 106, '106-120%' = 106 to 120, '>120%' = above 120 (% of sanctioned load). Below 90% is not stored."
+    md_source: "'Billing MD' (June) or 'Block data' (July, August: MD derived from half-hour energy). Not a filter users ask for."
+    sanctioned_load_kw: "1 kW for ~63% of consumers (system default). Credible = sanctioned_load_kw > 1 (there is no assessment_credible column)."
+  load_diversion:
+    utilisation_factor: "Same value as uf_value (legacy alias) -- use uf_value."
+    is_uf_suspect: "Identical to is_diversion_suspect -- use is_diversion_suspect."
+  energy_theft_suspect:
+    data_date: "The DAY, not the month -- filter month_date for a month."
+    suspect_pattern: "NULL unless is_theft_suspect; a meter can carry both patterns on different days."
+  theft_reduction_trend:
+    reduction_pct: "Per sub-division and NULL where prev_suspects = 0 -- never AVG it; recompute from SUM(prev_suspects) and SUM(curr_suspects)."
+  total_anomalies_detected:
+    distinct_meters: "Meters flagged for THIS anomaly_type in this area/category; additive within one type, but a meter with two types counts in both (sum over types = anomaly flags, not meters)."
+  repeat_anomaly_tracking:
+    repeat_band: "Text '3' / '5' / '7' / '9' -- exact detector counts; 4, 6, 8 are not stored. Sort with CAST(repeat_band AS INTEGER)."
+  # ---- grpH (10 Nov 2026) ----
+  "block_usage.wh_import": >-
+    Wh imported in THIS half-hour (not cumulative): kWh = wh_import / 1000.0. Feeder meters read secondary side:
+    true energy = x MF (dim_meter.mf).
+  "block_usage.data_date": Partition column (IST day). Always pin it to one day (max 3) together with meter_no.
+  "daily_usage.wh_import": >-
+    CUMULATIVE register reading in Wh at 00:00 IST of data_date (not the day's use): consumption = later reading
+    minus earlier reading, / 1000 = kWh.
+  "dim_meter.consumer_id": >-
+    Consumer (account) number as text; may carry leading zeros -- match regexp_replace(TRIM(consumer_id), '^0+', '').
 
 # Deterministic label overrides for a handful of columns whose raw name
 # reads badly once title-cased into a KPI/table-header label (see
@@ -650,14 +813,7 @@ header_label_overrides:
 # it can be corrected the same verified way those were.
 table_descriptions:
   # hes_gold -- theft / loss
-  energy_theft_suspect: >-
-    Per-meter theft-suspicion detection from usage-pattern anomalies (evening spikes, day/night imbalance streaks).
-  theft_risk_by_area: Feeder/area-level aggregated theft and diversion risk score.
-  theft_reduction_trend: Period-over-period change in theft-suspect counts per zone (prev vs curr counts, reduction %).
   # hes_gold -- voltage quality
-  voltage_imbalance: Per-meter voltage-imbalance event rate and how long it's persisted (ageing bucket).
-  voltage_imbalance_alerts: Severity-tiered active voltage-imbalance alerts with streak/run-length tracking.
-  voltage_imbalance_reduction: Period-over-period voltage-imbalance percentage comparison (did it improve).
   low_voltage_pockets: >-
     Low-voltage pockets card: per month x discom/category/zone/circle/division/sub_division x band (Critical /
     Poor / Average) x ageing_bucket, unique_meter_count. A meter can sit in several bands -- count meters from
@@ -678,9 +834,6 @@ table_descriptions:
   voltage_unbalance_index: >-
     Voltage Unbalance Index (VUI) card: 3-phase meters, one row per meter per month -- vui_mean / vui_max, block
     counts 0-2% / 2-3% / >3%, status Good / Moderate / Poor (Phase missing / Offline excluded).
-  current_imbalance: Per-meter current-imbalance event rate and ageing bucket (mirrors voltage_imbalance, for current).
-  current_imbalance_alerts: Severity-tiered active current-imbalance alerts with streak/run-length tracking.
-  current_imbalance_reduction: Period-over-period current-imbalance percentage comparison.
   current_unbalance: >-
     Meter Current Unbalance card: 3-phase meters, one row per meter per month -- current_unbalance_mean / _max (%),
     block counts <3 / 3-5 / 5-10 / >=10%, status Good / Moderate / Elevated / Poor / Offline/NoLoad.
@@ -693,13 +846,6 @@ table_descriptions:
   # hes_gold -- power factor
   low_power_factor: Zone/area-level count of low-power-factor meters/events, banded by severity and ageing.
   low_power_factor_meters: Meter-level detail behind low_power_factor (per-meter low-PF %, min/avg PF, ageing).
-  lpf2_low_power_factor: >-
-    Zone/area-level low-power-factor summary, v2 (adds live-block coverage and ageing-streak stats over
-    low_power_factor).
-  lpf2_low_power_factor_daily: 'Per-meter PER-DAY power-factor detail, v2: PF bands, kWh/kVAh, flagged/scored-day markers.'
-  lpf2_low_power_factor_meters: Meter-level low-power-factor summary across the full observed window, v2, including streak/ageing history.
-  power_factor_deterioration: Zone/area-level count of meters whose power factor has been DETERIORATING (getting worse), banded.
-  power_factor_deterioration_meters: Meter-level detail behind power_factor_deterioration (which meters, how many qualifying days).
   # hes_gold -- load / DTR / feeder network loss
   dim_dtr_capacity: DTR (distribution transformer) rated capacity (kVA) reference/dimension table.
   dt_loading: >-
@@ -720,47 +866,17 @@ table_descriptions:
   load_assessed_consumers: >-
     Denominator of % Consumers with Load Violation: consumers assessed (assessed_meters) per month x discom /
     category / cluster / zone..sub_division.
-  dt_loss: DTR-level technical energy loss (input reading vs billed/child energy), with data-credibility flags.
-  dt_loss_consumers: >-
-    Per-consumer detail behind dt_loss (each connected meter's billed/raw energy contributing to the DTR's loss
-    calc).
   dt_peak_loading: >-
     % DT Peak Loading card: one row per DT per month -- peak_load_kva, pct_peak_loading (% of dtr_rating_kva),
     peak_band, load_status Overloaded >100% / Overloaded 90-100% / Normal / Underloaded <20%.
-  feeder_loss: Feeder-level technical energy loss (mirrors dt_loss, one network level up).
-  feeder_loss_ai: >-
-    Feeder-level technical loss -- AI-adjusted variant of feeder_loss (same shape, different loss-estimation
-    method).
-  feeder_loss_ai_consumers: Per-consumer detail behind feeder_loss_ai.
-  feeder_loss_consumers: Per-consumer detail behind feeder_loss.
   load_violation: >-
     % Consumers with Load Violation card: VIOLATORS ONLY, one row per consumer per month whose max demand md_kw is
     over 1.6 x sanctioned_load_kw (excess_kw, excess_pct, category consumer_1_phase / consumer_3_phase, cluster,
     zone..sub_division). Denominator = load_assessed_consumers.
-  overload_md_breach: Per-meter maximum-demand (MD) overload risk, bucketed by severity.
   # hes_gold -- outage / reliability
-  hidden_outage_events: Individual detected 'hidden' (undetected/unreported through normal channels) outage events per meter.
-  hidden_outage_summary: Per-meter rollup of hidden-outage event counts and days affected (summarizes hidden_outage_events).
-  outage_ranking: Per-meter outage count and duration, pre-ranked (rank_by_count/rank_by_duration columns already computed).
-  reliability_improvement_trends: Feeder-level period-over-period reliability-index comparison (SAIDI/SAIFI/CAIDI/CAIFI/MAIFI, prev vs curr).
-  reliability_indices: >-
-    Feeder-level reliability indices (SAIDI/SAIFI/CAIDI/CAIFI/MAIFI) -- one row per feeder PER DATE, not a single
-    per-feeder total.
   # hes_gold -- anomaly / consumption
-  consumption_spike_drop: Per-meter monthly count of consumption spikes/drops (anomalous jumps or falls vs its own baseline).
-  consumption_spike_drop_detail: Block-level (individual reading) detail behind consumption_spike_drop -- the actual anomalous readings.
-  repeat_anomaly_tracking: Per-meter count of how many times it has repeatedly triggered anomaly flags, banded.
-  total_anomalies_detected: Zone-level count of distinct meters flagged, broken down by anomaly type.
-  reverse_flow: Per-meter reverse/export energy-flow detection (net-meter export vs an unexpected/anomalous reverse flow).
   # hes_gold -- communication / data quality
-  communication_failures: Per-meter communication-failure tracking (days since last seen, or never reported), bucketed.
-  data_quality_issues: Per-meter rollup of data-completeness issues (partial days, % complete) over the observed window.
-  data_quality_issues_daily: Per-meter PER-DAY data-completeness detail (missing blocks, % complete) behind data_quality_issues.
   # hes_gold -- meter master
-  dim_meter: >-
-    Meter master/dimension table -- one row per meter with its category, type, network hierarchy, and sanctioned
-    load.
-  dim_meter_energy: Meter master/dimension table, energy-metering scope (same shape as dim_meter).
   # hes_gold -- ETL staging (internal plumbing, not a business metric)
   _stage_pq_phase: >-
     ETL staging table (intermediate build artifact) for phase-level power-quality metrics -- not a finished business
@@ -809,8 +925,6 @@ table_descriptions:
     its zones).
   # hes_silver
   billing: 'Per-meter billing-cycle record: cumulative energy (import/export, tariff-zone-wise) and max-demand readings.'
-  block_usage: Per-meter block-interval (sub-daily) usage, voltage, and current readings.
-  daily_usage: Per-meter daily cumulative energy-usage readings.
   power_outage: Per-meter individual power-outage event records (start, end, duration, category).
   dim_installation: Per-meter installation/location dimension table (network hierarchy, sanctioned load, GPS coordinates).
   # gmr_wfm_silver -- complaints/tickets, installations, assets
@@ -910,6 +1024,202 @@ table_descriptions:
     One row per meter (meter_serial_number) with its O&M complaint counts (total/open/closed_complaints) and SAT status
     (sat_status 'SAT Done'/'Non-SAT', sat_number). Place values UPPER-case. CONSUMER rows carry only open complaints,
     DT/FEEDER rows only closed ones.
+  # ---- grpA (10 Nov 2026) ----
+  # hes_gold -- Operation Analytics phase imbalance (3-sigma test; NOT the Power Quality VUI / current_unbalance cards)
+  voltage_imbalance: >-
+    Voltage Imbalance card (Operation Analytics): EVERY feeder / DT / 3-phase / HT meter assessed, one row per meter
+    per month -- total_blocks, imbalanced_blocks (half-hours failing the 3-sigma phase-voltage test), imbalance_pct,
+    imbalance_days (days with > 50% imbalanced half-hours), days_with_data, ageing_bucket ('3-30 Days'... ; NULL =
+    under 3 days, not flagged), category, cluster, zone..sub_division, feeder_code, dtr_code.
+  current_imbalance: >-
+    Current Imbalance card: same shape as voltage_imbalance for phase currents -- every meter assessed, flagged =
+    ageing_bucket IS NOT NULL.
+  voltage_imbalance_alerts: >-
+    Voltage Imbalance Alerts card: alert meters ONLY, one row per meter per month -- severity (dominant day grade:
+    Critical >= 85% / Poor >= 70% / Average >= 50% of half-hours imbalanced), severity_blocks, severity_days (3+),
+    ageing_bucket; severity_run_days / ageing_bucket_run = consecutive-day reading.
+  current_imbalance_alerts: >-
+    Current Imbalance Alerts card: alert meters only, same shape as voltage_imbalance_alerts for phase currents.
+  voltage_imbalance_reduction: >-
+    'Phase imbalance reduced by minimum 30%' card, voltage half: EVERY meter compared, one row per meter;
+    data_date = the CURRENT month (2026-07-01 = June -> July). prev_pct / curr_pct (imbalance % last / this month),
+    reduction_pp (points), qualifies (reduction_pp >= 30 -- filter it to count improved meters), qualifies_relative,
+    qualifies_live / *_live (usable 3-phase readings only), live_share_prev / _curr, comparable.
+  current_imbalance_reduction: >-
+    'Phase imbalance reduced by minimum 30%' card, current half: same shape as voltage_imbalance_reduction.
+  imbalance_thresholds: >-
+    Diagnostic only, not a dashboard card: the 3-sigma threshold per quantity (voltage / current), reference_group
+    (meter type) and block_time, per month, written beside the imbalance jobs (source_kpi phase_imbalance /
+    imbalance_reduction). Never used to count meters.
+  # ---- grpB (10 Nov 2026) ----
+  reverse_flow: >-
+    Reverse Flow card: one row per CONSUMER meter (consumer_1_phase / consumer_3_phase) per month, every consumer
+    checked -- is_anomaly marks findings; anomaly_type 'net_meter_non_exporting' (net meter NSM1-PH / NSM3-PH that
+    exported nothing) / 'non_net_meter_exporting' (not a net meter, exported) / NULL; total_kwh_export, max_kwh_export
+    (kWh), smart_meter_type, cluster, zone..sub_division, feeder_code, dtr_code. data_date = month 1st.
+  data_quality_issues: >-
+    Data Quality Issues card: one row per meter per month, EVERY meter with readings -- days_with_data, partial_days
+    (days with 2-46 of 48 half-hour readings), partial_day_pct, total_blocks, avg_completeness_pct, category, cluster,
+    zone..sub_division. data_date = month 1st.
+  data_quality_issues_daily: >-
+    Data Quality Issues weekly / daily view: one row per PARTIAL meter-day only -- month_date (month 1st), data_date
+    (the day), week_label ('Week 1 July' = days 1-7 ... 'Week 5 July'), blocks, missing_blocks, completeness_pct.
+  communication_failures: >-
+    Meters Stopped Communicating card: one row per SILENT meter per month (no reading for 3+ days at the end of the
+    month's data, incl. meters that never reported) -- last_seen_date, days_since_last_seen, never_reported, nc_bucket
+    ('Non_Communicating_3_30_Days' / '_31_60_Days' / '_61_90_Days' / '_More_than_90_Days'), window_end (last data
+    day), category, cluster, zone..sub_division. HES readings, not O&M tickets.
+  hidden_outage_summary: >-
+    Hidden Outage Pockets card (+ its four detector rows): one row per meter x detector per month -- detector
+    'hidden_power_event' / 'outage_not_recorded' / 'unreported_blockload_gap' / 'abnormal_current_flow',
+    total_block_count_flagged (flagged half-hours), total_block_count (half-hours checked), pct_blocks_flagged,
+    total_flagged_occurrences / total_occurrences (outages), days_affected, first_slot / last_slot (UTC), category,
+    cluster, zone..sub_division, feeder_code. data_date = month 1st. Not outage counts / SAIDI.
+  hidden_outage_events: >-
+    Slot-level rows behind hidden_outage_summary: one row per flagged 30-minute slot (slot UTC, detector, detail),
+    month_date + data_date (day). 300M+ rows a month -- only for one meter (WHERE meter_no AND month_date).
+  consumption_spike_drop: >-
+    Consumption Spikes / Drops card: one row per meter per month, the WHOLE fleet -- is_spike_or_drop_suspect (10+
+    outlier readings), spike_count, drop_count, total_outliers, meter_flag 'Spike' / 'Drop' / NULL, profile_std,
+    category, cluster, zone..sub_division. Month column month_date (no data_date).
+  consumption_spike_drop_detail: >-
+    One row per outlier half-hour reading of flagged spike/drop meters -- month_date, data_date, block_time (UTC
+    'HH:MM'), actual_kwh_import, baseline_mean, upper, lower, flag 'Spike' / 'Drop', deviation. 90M+ rows a month: only
+    WHERE meter_no = 'X'.
+  # ---- grpC (10 Nov 2026) ----
+  lpf2_low_power_factor: >-
+    Low Power Factor (%) by DT/Feeder card (LIVE): rollup of meters with 3+ observed flagged days, one row per month x
+    discom_code x category x zone/circle/division/sub_division/sub_station x severity x ageing_bucket -- unique_meter_count,
+    avg_low_pf_pct, max_ageing_days, avg_streak_coverage_pct, total_block_count (low-PF half-hours), pf_live_block_count.
+    Card = WHERE severity NOT IN ('Normal','NoData'). No cluster / feeder / meter columns. Each month = rolling 90-day window.
+  lpf2_low_power_factor_meters: >-
+    One row per meter per month (every meter, incl. Not Aged / Normal / NoData): low_pf_pct = low_blocks / total_blocks
+    (PF-valid half-hours, PF < 0.9), severity Critical > 50 / Poor > 35 / Average > 25 / Borderline >= 20 / Normal / NoData,
+    ageing_days (observed flagged days in current run), ageing_bucket, streak_coverage_pct, avg_pf, min_pf, category,
+    cluster, zone..sub_station, feeder_code, dtr_code, as_of_date. Rolling 90-day window ending as_of_date.
+  lpf2_low_power_factor_daily: >-
+    One row per meter per delivered DAY: pf_live_blocks, low_pf_blocks, pct_time_low_pf, avg/min/max_power_factor,
+    energy_power_factor, status (Insufficient when < 12 PF-valid half-hours), is_flagged_day (>= 20%). Filter data_date by day range.
+  power_factor_deterioration: >-
+    Power factor deterioration card: one row per month x discom/category/zone..sub_division x pf_band ('Critical' < 0.30,
+    'Poor' < 0.85, 'Moderate' < 0.95, 'Leading PF' > 1.0) x ageing_bucket -- unique_meter_count (meters with > 3 consecutive
+    qualifying days), total_block_count = qualifying days. No cluster.
+  power_factor_deterioration_meters: >-
+    One row per meter x pf_band per month: qualifying_days, ageing_bucket, category, feeder_code, dtr_code, zone..sub_division.
+    A meter can appear in two bands -- total meters = COUNT(DISTINCT meter_no).
+  # ---- grpD (10 Nov 2026) ----
+  reliability_indices: >-
+    SAIDI / SAIFI / CAIDI / CAIFI / MAIFI cards and the Reliability Trends chart: ONE row per feeder per month
+    (data_date = month 1st; 4,976 feeders every month, zero-outage feeders included). Consumer outages rolled up to
+    the consumer's feeder: total_consumers (consumers mapped to the feeder), events (interruptions), dur (outage
+    minutes), affected (consumers hit at least once), momentary (< 5 min events); the feeder's own saidi / saifi /
+    caidi / caifi / maifi (rounded, for ranking feeders only). Area / fleet index = SUM(numerator) / SUM(denominator),
+    never AVG of the ratios. below_min_consumers = under 100 consumers (left out of worst/best lists). cluster
+    'Agra' / 'Kashi' / 'Triveni', zone..sub_division, sub_station, feeder_code, feeder_name, feeder_category.
+    Outage data: June = Agra only, July = all, August = none (all zeros).
+  outage_ranking: >-
+    Number of Outages (Frequency) / Duration of Outages (Minutes) / Feeders with Maximum Outages cards: one row per
+    METER per month (2026-06, 2026-07) with the outages that meter itself recorded -- outage_count,
+    total_duration_min, avg_duration_min, max_duration_min, days_with_outage. category = 'feeder' (feeder meters) /
+    'dt_meter' / 'consumer_1_phase' / 'consumer_3_phase' / 'consumer_ht' -- always pin one, never add categories.
+    below_min_outages = fewer than 5 outages (left out of the top-10 lists). rank_by_count / rank_by_duration rank
+    within discom_code x category, not within an area. feeder_code / dtr_code / meter_no, cluster, zone..sub_division.
+  reliability_improvement_trends: >-
+    Reliability Improvement Trend card: one row per feeder per COMPARISON. comparison_mode 'months'
+    (comparison_label '2026-06 vs 2026-07', data_date = later month 1st) or 'halves' ('2026-07 days 1-15 vs 16-EOM',
+    data_date 2026-07-16) -- July holds both, so always group by comparison_mode. prev_/curr_ saidi, saifi, caidi,
+    caifi, maifi; <index>_delta = prev - curr; <index>_improvement_pct = delta * 100 / prev (positive = improved,
+    NULL when prev = 0); prev_total_consumers / curr_total_consumers are the weights for fleet figures.
+  # ---- grpF (10 Nov 2026) ----
+  feeder_loss: >-
+    Feeder Loss (%) / Energy Gap / Top X cards: one row per feeder per month (data_date = 1st; June-July 2026) --
+    net_input (feeder meter kWh x MF), asset_billed (kWh its mapped consumers recorded), loss_kwh, loss_pct,
+    added_kwh, children_mapped / children_reporting, loss_category, loss_credible, cluster, zone..sub_division.
+  feeder_loss_ai: >-
+    Feeder Loss on the AI mapping basis: same shape as feeder_loss, but consumers are attached by the mapping
+    audit's auto_feeder (CONFIRMED / REASSIGN only) instead of the declared feeder. Use only when AI basis is asked.
+  dt_loss: >-
+    LT Loss (%) card: one row per DT per month -- dtr_code, parent feeder_code, net_input (DT meter kWh, MF 1.0
+    placeholder), asset_billed, loss_kwh, loss_pct, loss_category, loss_credible, cluster, zone..sub_division.
+  feeder_loss_consumers: >-
+    Consumers behind one feeder's loss: one row per reporting consumer per month -- feeder_code, meter_no,
+    category, mapping_confidence, raw_kwh, billed_kwh (pro-rated; sums to the feeder's asset_billed), added_kwh.
+  feeder_loss_ai_consumers: Consumers behind one feeder on the AI mapping basis (same shape as feeder_loss_consumers).
+  dt_loss_consumers: >-
+    Consumers behind one DT's LT loss: one row per reporting consumer per month -- dtr_code, meter_no, category,
+    raw_kwh, billed_kwh, added_kwh.
+  # ---- grpG_m (10 Nov 2026) ----
+  unified_discom_escalations: >-
+    Every escalation of an O&M ticket to the discom (SmartEMS DISESC), one row per (discom, ticket_id,
+    escalated_on); a ticket escalated 6 times has 6 rows -- count tickets at their latest escalation. Ticket,
+    consumer_number, old_meter_serial_number, feeder / dtr / sub_station, technician_name, escalation_status
+    (Pending / Approved / Rejected / blank), escalated_on and escalation_attended_on (UTC timestamps),
+    escalation_supervisor (discom officer) and remarks. Detail behind the Escalated to Discom card; card
+    totals come from gold_om_discom_escalation_snapshot.
+  # ---- grpE (10 Nov 2026) ----
+  # hes_gold -- Technical > Load Management (remainder) + Theft Analysis cards (gmr-etl kpi_60 / kpi_70 / kpi_72 /
+  # kpi_45). Verified live 10 Nov 2026; months 2026-06..08, dashboard default month July 2026.
+  overload_md_breach: >-
+    Overload / MD breach risk card: AT-RISK consumers ONLY, one row per consumer per month whose maximum demand md_kw
+    is 90%+ of sanctioned_load_kw -- overload_pct, risk_bucket '90-105%' / '106-120%' / '>120%' (healthy < 90% rows are
+    not stored), category consumer_1_phase / consumer_3_phase, cluster, zone..sub_division, feeder_code, dtr_code.
+    assessed_meters = fleet-wide constant; per-area denominator = load_assessed_consumers.
+  load_diversion: >-
+    Theft / Load diversion card: EVERY scored consumer, one row per consumer per month -- md_kw, monthly_kwh,
+    active_hours, uf_value (utilisation factor = kWh / (md_kw x active hours)), is_diversion_suspect (= uf_value < 0.3),
+    sanctioned_load_kw, category, cluster, zone..sub_division. Suspects = FILTER (WHERE is_diversion_suspect).
+  energy_theft_suspect: >-
+    Theft Suspect Flags card: EVERY meter, one row per meter per DAY (month_date = month, data_date = day) --
+    is_theft_suspect (10+ day streak), suspect_pattern 'evening_high' / 'day_night_pattern', streak_length,
+    evening_pct, day_avg_kwh, night_avg_kwh, category, cluster, zone..sub_division. Filter month_date AND
+    is_theft_suspect; count COUNT(DISTINCT meter_no).
+  theft_risk_by_area: >-
+    Areas with Highest Theft Risk card: one row per DISTINCT at-risk meter per month -- theft_flag (theft suspect),
+    diversion_flag (load diversion suspect), risk_score 1-2, cluster, zone..sub_division, feeder_code, dtr_code (no
+    category). Count meters per area with COUNT(DISTINCT meter_no).
+  theft_reduction_trend: >-
+    % Reduction in Theft Events card: one row per sub-division per month -- prev_suspects (month in prev_period),
+    curr_suspects, delta, reduction_pct; discom_code, zone..sub_division, NO cluster. Reduction % =
+    (SUM(prev) - SUM(curr)) / SUM(prev).
+  total_anomalies_detected: >-
+    Total Anomalies Detected card: one row per area x category x anomaly_type per month -- distinct_meters flagged
+    under that type (Hidden_Outage_Pockets, Consumption_Spike_Drop, Theft_Suspect_Flags, Load_Diversion,
+    MD_Breach_Risk, ... 14 types). Per type = SUM(distinct_meters); no meter_no column.
+  repeat_anomaly_tracking: >-
+    Repeat Anomaly Tracking card: one row per meter per month flagged by EXACTLY 3, 5, 7 or 9 detector KPIs --
+    repeat_count, repeat_band ('3'/'5'/'7'/'9'), flagged_kpis (e.g. 'Hidden Outage, Spike/Drop, PF Deterioration'),
+    cluster, zone..sub_division (no category).
+  # ---- grpH (10 Nov 2026) ----
+  # hes_silver -- per-meter source readings (the dashboard's drill drawer 'Fetch from source data'). Replace the old
+  # one-line entries. ADD a `hes_silver:` key under mdm_tables with block_usage and daily_usage (today the shortlist
+  # has only hes_gold, so neither table is queryable), and dim_meter + dim_meter_replaced under hes_gold.
+  block_usage: >-
+    HUGE (~3.1 billion rows, ~175M a day, ~0.4-0.8 GB scanned per day even for one meter): one row per meter per
+    half-hour, partitioned ONLY by discom_code + data_date (IST day) -- ALWAYS filter meter_no = 'X' AND data_date =
+    one day (max 3). rtc = IST block start text, reading_ts_utc; wh_import / wh_export / vah_import = Wh / VAh in the
+    half-hour (/ 1000 = kWh); 1-phase average_voltage / average_current (DOUBLE); 3-phase, DT and feeder voltage_rn /
+    voltage_yn / voltage_bn, current_r / current_y / current_b (VARCHAR -> TRY_CAST); power_factor_total always NULL
+    (PF = wh_import / vah_import); meter_type 'consumer' / 'dtr' / 'feeder'. Dates: Jun 1-2, Jun 27-30, Jul 5-9,
+    13-17, 20-24, Aug 1-2 2026.
+  daily_usage: >-
+    One row per meter per IST day (data_date; partitioned by discom_code + data_date, ~4 GB in all): the CUMULATIVE
+    register at 00:00 -- wh_import / wh_export / vah_import / vah_export in Wh (/ 1000 = kWh reading; consumption =
+    later reading minus earlier), md_w_import (VARCHAR W, billing-period maximum demand) at md_w_date_time. Always
+    meter_no = 'X' AND a data_date range of at most a month. Dates: Jun 1-2, Jun 27-30, Jul 5-8, 13-16, 20-23 2026
+    (no August). The Energy Audit drawer's daily evidence.
+  # hes_gold -- meter master
+  dim_meter: >-
+    HES meter master, one row per CURRENT meter (4,381,272): category ('consumer_1_phase', 'consumer_3_phase',
+    'consumer_ht', 'dt_meter', 'feeder'), meter_type ('CONSUMER' / 'DT' / 'FEEDER'), smart_meter_type, discom_code
+    ('DVVNL' / 'PUVVNL'), cluster (project 'Agra' / 'Kashi' / 'Triveni'; NULL for 107,509 unplaced meters), zone,
+    circle, division, sub_division, sub_station, feeder_code, feeder_name, dtr_code, dtr_name, feeder_meter_no,
+    consumer_id (text, leading zeros), mf, sanctioned_load_kw, installation_date. Swapped-out meters are in
+    dim_meter_replaced.
+  dim_meter_replaced: >-
+    Meters swapped out in a replacement (3.46M, mostly the pre-smart meters a smart meter replaced), one row each,
+    located where the replacing meter is: meter_no (old), replaced_by (new meter_no), replaced_on, category,
+    cluster, zone .. sub_station, feeder_code, dtr_code. Look here when a meter serial is not in dim_meter.
+  dim_meter_energy: Retired 16 Sep 2026 (stale copy of dim_meter) -- do not use; dim_meter replaces it.
 
 # Well-known historical/former names for places that also appear as real
 # zone/circle values in this DISCOM's schema -- mapped to the LIST of real

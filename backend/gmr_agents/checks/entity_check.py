@@ -343,7 +343,18 @@ _MONTHS = {m: i for i, m in enumerate(("january", "february", "march", "april", 
 _TECHNICAL_TABLES = ("voltage_deviation_index", "voltage_fluctuation_index", "voltage_unbalance_index", "voltage_drop",
                      "current_unbalance", "pct_time_out_of_band", "pct_time_current_imbalance", "low_voltage_pockets",
                      "low_voltage_pockets_meters", "dt_loading", "dt_peak_loading", "dt_peak_loading_feeder",
-                     "dt_load_kva", "dt_load_rise", "load_violation", "load_assessed_consumers")
+                     "dt_load_kva", "dt_load_rise", "load_violation", "load_assessed_consumers",
+                     # 10 Nov 2026: Operation Analytics / Parameters, power factor, theft, energy audit cards
+                     "voltage_imbalance", "current_imbalance", "voltage_imbalance_alerts", "current_imbalance_alerts",
+                     "voltage_imbalance_reduction", "current_imbalance_reduction", "reverse_flow", "data_quality_issues",
+                     "data_quality_issues_daily", "communication_failures", "hidden_outage_summary",
+                     "hidden_outage_events", "consumption_spike_drop", "consumption_spike_drop_detail",
+                     "lpf2_low_power_factor", "lpf2_low_power_factor_meters", "lpf2_low_power_factor_daily",
+                     "power_factor_deterioration", "power_factor_deterioration_meters", "reliability_indices",
+                     "outage_ranking", "reliability_improvement_trends", "overload_md_breach", "load_diversion",
+                     "energy_theft_suspect", "theft_risk_by_area", "theft_reduction_trend", "total_anomalies_detected",
+                     "repeat_anomaly_tracking", "feeder_loss", "feeder_loss_consumers", "dt_loss", "dt_loss_consumers",
+                     "feeder_loss_ai", "feeder_loss_ai_consumers")
 _THREE_PHASE_TABLES = ("voltage_unbalance_index", "current_unbalance", "pct_time_current_imbalance")
 TECHNICAL_DEFAULT_MONTH = ("(SELECT MAX(month_date) FROM (SELECT month_date FROM hes_gold.dt_load_profile WHERE "
                            "month_date >= DATE '2026-06-01' GROUP BY month_date HAVING COUNT(DISTINCT data_date) >= 10) c)")
@@ -354,19 +365,241 @@ _PROJECT_ZONES = {"agra": ("agra", "aligarh", "etah", "firozabad", "mathura"),
                   "triveni": ("mirzapur", "prayagraj i", "prayagraj ii")}
 
 
+_SILVER_READINGS = re.compile(r"\bhes_silver\.(block_usage|daily_usage)\b", re.I)
+
+
+def _meter_reading_problems(question: str, sql_texts: list[str]) -> list[str]:
+    """hes_silver.block_usage (~3.1 billion rows, partitioned only by discom_code / data_date: one meter-day scans
+    0.4-0.8 GB) and daily_usage: one meter and a short literal date range, always (measured 10 Nov 2026)."""
+    from datetime import date
+    problems: list[str] = []
+    for s in sql_texts:
+        low = (s or "").lower()
+        for t in sorted(set(_SILVER_READINGS.findall(low))):
+            if not re.search(r"\bmeter_no\s*(?:=\s*'|in\s*\(\s*'|in\s*\(\s*select\s+meter_no\s+from\s+hes_gold\.dim_meter\b)", low):
+                problems.append(f"hes_silver.{t} is huge: filter meter_no = '<serial>' (or meter_no IN (SELECT meter_no "
+                                "FROM hes_gold.dim_meter WHERE consumer_id = ...)) -- never a place filter instead")
+            days = re.findall(r"date\s*'(\d{4}-\d{2}-\d{2})'", low)
+            if not re.search(r"\bdata_date\s*(?:=|between\b|>=|>|<=|<|in\s*\()", low) or not days:
+                problems.append(f"hes_silver.{t}: pin data_date with DATE literals (one day for half-hour readings; no "
+                                "date asked = DATE '2026-08-02' on block_usage, July 2026 on daily_usage)")
+            elif len(days) >= 2 and (date.fromisoformat(max(days)) - date.fromisoformat(min(days))).days > \
+                    (3 if t == "block_usage" else 32):
+                problems.append("block_usage: at most 3 days per query (~0.5 GB a day) -- use daily_usage for consumption "
+                                "over a longer range" if t == "block_usage" else "daily_usage: at most one month per query")
+            if re.search(r"select\s+\*", low):
+                problems.append(f"hes_silver.{t}: name the columns (no SELECT *): every extra column is scanned")
+            if t == "block_usage" and re.search(r"\bmax\s*\(\s*data_date\s*\)", low):
+                problems.append("block_usage: never MAX(data_date) over the table (full scan) -- the latest full day is "
+                                "DATE '2026-08-02'")
+            if t == "block_usage" and re.search(r"\bpower_factor_total\b", low):
+                problems.append("power_factor_total is always NULL: PF = wh_import / NULLIF(vah_import, 0)")
+            if re.search(r"\bkwh_import\b|\bkvah_import\b", low) and not re.search(r"\bas\s+kwh_import\b|\bas\s+kvah_import\b", low):
+                problems.append("hes_silver energy columns are wh_import / wh_export / vah_import (Wh): kWh = "
+                                "wh_import / 1000.0 (kwh_import does not exist)")
+        # Live 10 Nov: 'total units used by AL1159584 last month' read October on daily_usage (no data after August).
+        if _SILVER_READINGS.search(low) and re.search(r"date\s*'2026-(?:09|1[0-2])-\d{2}'", low):
+            problems.append("HES readings run June - early August 2026: 'last month' / 'this month' = July 2026 "
+                            "(daily_usage) or the latest full day DATE '2026-08-02' (block_usage), never the calendar month")
+        # Live 10 Nov: replaced meter AL1228741 'not found' -- swapped-out meters live only in dim_meter_replaced.
+        if re.search(r"\bhes_gold\.dim_meter\b", low) and re.search(r"\b(?=[A-Za-z]{1,4}\d)[A-Za-z]{1,4}\d{6,10}\b", question) \
+                and "dim_meter_replaced" not in low and not _SILVER_READINGS.search(low):
+            problems.append("one meter's master row: dim_meter UNION ALL dim_meter_replaced (a replaced meter is only in "
+                            "hes_gold.dim_meter_replaced) -- say which one it was found in")
+        if re.search(r"\bhes_gold\.dim_meter_(?:energy|asof_\w+)\b", low):
+            problems.append("use hes_gold.dim_meter (current) + dim_meter_replaced; dim_meter_energy is retired and "
+                            "dim_meter_asof_* is a frozen 8 Sep copy")
+    return problems
+
+
+def _card_problems_nov10(question: str, sql_texts: list[str], asked: str | None = None) -> list[str]:
+    """Cards added 10 Nov 2026. Each rule names the wrong figure it prevents, measured on live July data."""
+    problems: list[str] = []
+    q = question.lower()
+    everyone = re.search(r"\b(?:all|every|fleet|assessed|checked|scored|compared|total meters)\b", q)
+    for s in sql_texts:
+        low = (s or "").lower()
+        has = lambda t: re.search(rf"\bhes_gold\.{t}\b", low)  # noqa: E731
+        counts = re.search(r"\bcount\s*\(|\bcount_if\s*\(|\bsum\s*\(", low)
+        # Reduction tables hold every meter compared: unfiltered = ~168,000 'improved' (card 1,522 / 735).
+        if (has("voltage_imbalance_reduction") or has("current_imbalance_reduction")) and counts \
+                and not re.search(r"\bqualifies(?:_live|_relative)?\b", low) and not everyone:
+            problems.append("the reduction tables hold every meter compared: count improved meters WHERE qualifies "
+                            "(imbalance fell 30+ points)")
+        # Low PF card counts Borderline-or-worse only (796,038 unfiltered vs 711,642); max ageing is a MAX (17, not 173,732).
+        if has("lpf2_low_power_factor") and re.search(r"\bunique_meter_count\b", low) and "severity" not in low:
+            problems.append("the Low PF card counts graded meters only: add severity NOT IN ('Normal', 'NoData')")
+        # Live 10 Nov (PF hard set): flagged meters on the per-meter table without the 3-day ageing rule ->
+        # 505 DTs for 484, 704,059 'both months' for 483,550 (the card only holds meters aged 3+ days).
+        if has("lpf2_low_power_factor_meters") and re.search(r"\bseverity\s*(?:not\s+in\b|in\s*\(|=)", low) \
+                and not re.search(r"\bageing_days\s*>=?\s*[1-9]|\bageing_bucket\b", low) \
+                and not re.search(r"\bmeter_no\s*=\s*'", low):
+            problems.append("a Low PF finding = severity NOT IN ('Normal', 'NoData') AND ageing_days >= 3 on "
+                            "lpf2_low_power_factor_meters (the card's rule; 868,698 without the ageing filter vs 711,642)")
+        # Live 10 Nov: 'median low PF % of flagged DT meters' took a percentile of rollup group means (40.19 vs 62.9).
+        if has("lpf2_low_power_factor") and re.search(r"\bapprox_percentile\s*\(\s*(?:\w+\.)?avg_low_pf_pct\b", low):
+            problems.append("a median / percentile of low PF % is over meters: APPROX_PERCENTILE(low_pf_pct, p) FROM "
+                            "hes_gold.lpf2_low_power_factor_meters WHERE severity NOT IN ('Normal', 'NoData') AND "
+                            "ageing_days >= 3")
+        if re.search(r"\bsum\s*\(\s*max_ageing_days\b", low):
+            problems.append("max_ageing_days is a maximum: combine groups with MAX(max_ageing_days), never SUM")
+        # Area reliability indices are re-derived from sums (AVG(saidi) is a mean of feeders, not the card's 3,004.44).
+        if has("reliability_indices") and re.search(r"\bavg\s*\(\s*(?:\w+\.)?(?:saidi|saifi|caidi|caifi|maifi)\b", low):
+            problems.append("an area's index is re-derived from sums: SAIDI = SUM(dur) / SUM(total_consumers), SAIFI = "
+                            "SUM(events) / SUM(total_consumers), CAIDI = SUM(dur) / SUM(events), CAIFI = SUM(events) / "
+                            "SUM(affected), MAIFI = SUM(momentary) / SUM(total_consumers) -- never AVG of feeder ratios")
+        # Energy audit: AVG(loss_pct) = -187.82% (feeders) vs the card's 61.42%; bare current_date is today in Athena.
+        loss = any(has(t) for t in ("feeder_loss", "dt_loss", "feeder_loss_ai"))
+        if loss and re.search(r"\bavg\s*\(\s*(?:\w+\.)?loss_pct\b", low):
+            problems.append("area loss is energy-weighted: SUM(loss_kwh) * 100.0 / SUM(net_input), never AVG(loss_pct)")
+        if loss and re.search(r'(?<!")\bcurrent_date\b(?!")', s or ""):
+            problems.append('the window-end column is "current_date" in double quotes (bare current_date is today)')
+        if loss and re.search(r"\bdata_date\s*=\s*date\s*'2026-(?:0[89]|1[0-2])-01'", low):
+            problems.append("energy-audit tables hold June and July 2026 only (August was not computed): say so "
+                            "instead of pinning August")
+        # Slot / reading tables are 300M+ / 92M rows a month: one-meter lookups only.
+        for big, small in (("hidden_outage_events", "hidden_outage_summary"),
+                           ("consumption_spike_drop_detail", "consumption_spike_drop")):
+            if has(big) and not re.search(r"\bmeter_no\s*(?:=|in\s*\()", low):
+                problems.append(f"hes_gold.{big} is a per-slot table (hundreds of millions of rows): counts come from "
+                                f"hes_gold.{small}; use {big} only WHERE meter_no = 'X'")
+        # Flag filters: reverse_flow / consumption_spike_drop / energy_theft_suspect hold every meter checked.
+        if has("reverse_flow") and counts and not re.search(r"\bis_anomaly\b|\banomaly_type\b|\bmeter_no\s*=", low) \
+                and not everyone:
+            problems.append("reverse_flow holds every consumer checked: flagged = COUNT_IF(is_anomaly) (133,844 in July, "
+                            "not 3.75M)")
+        if has("consumption_spike_drop") and counts and not re.search(r"\bis_spike_or_drop_suspect\b|\bmeter_no\s*=", low) \
+                and not everyone:
+            problems.append("consumption_spike_drop holds every meter checked: flagged = WHERE is_spike_or_drop_suspect")
+        if has("energy_theft_suspect"):
+            if re.search(r"\bdata_date\s*=", low) and "month_date" not in low:
+                problems.append("energy_theft_suspect has one row per meter per DAY: filter month_date = <month>, not "
+                                "data_date (that is a single day)")
+            if counts and not re.search(r"\bis_theft_suspect\b|\bmeter_no\s*=", low) and not everyone:
+                problems.append("energy_theft_suspect holds every meter: suspects = COUNT(DISTINCT meter_no) ... AND "
+                                "is_theft_suspect")
+            if re.search(r"\bcount\s*\(\s*\*\s*\)", low):
+                problems.append("energy_theft_suspect rows are meter-days: count COUNT(DISTINCT meter_no)")
+        if re.search(r"\bsum\s*\(\s*(?:\w+\.)?assessed_meters\b(?:(?!\bfrom\b).)*\bfrom\s+hes_gold\.overload_md_breach\b",
+                     low, re.S):
+            problems.append("assessed_meters repeats on every overload_md_breach row: never SUM it -- the denominator is "
+                            "SUM(assessed_meters) FROM hes_gold.load_assessed_consumers with the same filters")
+        if re.search(r"\bavg\s*\(\s*(?:\w+\.)?reduction_pct\b", low):
+            problems.append("reduction % = (SUM(prev_suspects) - SUM(curr_suspects)) * 100.0 / NULLIF(SUM(prev_suspects), 0)")
+        if re.search(r"\bavg\s*\(\s*(?:\w+\.)?pct_blocks_flagged\b", low):
+            problems.append("% slots flagged = SUM(total_block_count_flagged) * 100.0 / SUM(total_block_count), never "
+                            "AVG(pct_blocks_flagged)")
+        hes = [t for t in _TECHNICAL_TABLES if has(t)]
+        # Live 10 Nov: 'meter data in Varanasi zones last month' pinned DATE '2026-10-01' (no HES data after August).
+        if hes and re.search(r"\b(?:data_date|month_date)\s*=\s*date\s*'2026-(?:09|1[0-2])-01'", low) \
+                and not re.search(r"\b(?:predict|forecast|project(?:ed|ion)?|next month|if the trend|will be)\b", q):
+            problems.append("HES data runs June-August 2026: 'last month' / 'this month' / 'latest' = the dashboard "
+                            f"default month {TECHNICAL_DEFAULT_MONTH}, never the calendar month")
+        # Live 10 Nov (PF hard set): 'how many meters will have low PF in September 2026?' pinned September -> '0 meters'.
+        if hes and re.search(r"\b(?:data_date|month_date)\s*(?:=|>=?)\s*date\s*'2026-(?:09|1[0-2])-01'", low) \
+                and re.search(r"\b(?:predict\w*|forecast\w*|project(?:ed|ion)?|next month|if the trend|will be|"
+                              r"will have|likely)\b", q):
+            problems.append("HES data runs June-August 2026, so a later month has no rows: a forecast queries the "
+                            "month-wise series (data_date BETWEEN DATE '2026-06-01' AND DATE '2026-08-01' GROUP BY "
+                            "data_date) and projects from June and July -- never pin the future month")
+        # Live 10 Nov: category = 'CONSUMER' (WFM's value) on current_imbalance -> 0 meters (card 290 of 52,720).
+        # Live 10 Nov: 'Power factor deterioration in Agra' filtered LOWER(zone) = 'agra' (38,393; the project's
+        # five zones hold 291,868). 'Agra' / 'Kashi' / 'Triveni' without the word zone = the project.
+        for proj, zones in _PROJECT_ZONES.items():
+            if hes and re.search(rf"\b{proj}\b", q) and not re.search(r"\bzones?\b", q) \
+                    and re.search(rf"\bzone\s*\)?\s*(?:=|like)\s*'%?{proj}%?'", low) and "cluster" not in low:
+                problems.append(f"'{proj.title()}' is the project: its zones UPPER(zone) IN "
+                                f"({', '.join(repr(z.upper()) for z in zones)}) (or LOWER(cluster) = '{proj}' where the "
+                                "table has cluster) -- not the single zone")
+        # Live 10 Nov (PF hard set): 'consumers in Varanasi zones' read as the Kashi project and added AZAMGARH
+        # (185,581 vs 117,449). '<stem> zone(s)' = the zones named after that stem only.
+        # Read the user's own words: triage rewrote the question as 'Varanasi (Kashi) project'.
+        user = (asked or question).lower()
+        for stem, zones, others in (("varanasi", ("VARANASI I", "VARANASI II"), ("azamgarh",)),
+                                    ("prayagraj", ("PRAYAGRAJ I", "PRAYAGRAJ II"), ("mirzapur",))):
+            if hes and re.search(rf"\b{stem}\s+(?:i+\s+(?:and|&|,)\s+(?:{stem}\s+)?i+\s+)?zones?\b", user) \
+                    and not re.search(r"\b(?:kashi|triveni|project)\b", user) \
+                    and any(f"'{o}'" in low for o in others if not re.search(rf"\b{o}\b", user)):
+                problems.append(f"'{stem.title()} zones' = UPPER(zone) IN ({', '.join(repr(z) for z in zones)}) only -- "
+                                "not the whole project")
+        # Live 10 Nov: category = 'DT' on total_anomalies_detected -> 0 rows (stored 'dt_meter').
+        if hes and re.search(r"\bcategory\s*(?:=|in\s*\([^)]*?)\s*'(?:dt|dtr|dt meter|ht|1ph|3ph|lt|feeder meter)'", low):
+            problems.append("HES category values are 'dt_meter', 'feeder', 'consumer_1_phase', 'consumer_3_phase', "
+                            "'consumer_ht' -- never 'DT' / 'DTR' / 'HT'")
+        # Live 10 Nov: 'Power factor deterioration in Agra' added the bands (361,738; a meter sits in several bands)
+        # instead of the distinct total 291,868.
+        # Live 10 Nov (PF hard set): 'for each project ... PF deterioration meters' summed every band too (361,738).
+        if has("power_factor_deterioration") and not has("power_factor_deterioration_meters") \
+                and (not re.search(r"\bbands?\b|-?\bwise\b|\bby\b|\beach\b|\bsplit\b|\bbreak", q)
+                     or "pf_band" not in low):
+            problems.append("a meter can sit in several PF bands: the total = COUNT(DISTINCT meter_no) FROM "
+                            "hes_gold.power_factor_deterioration_meters (same month / place); give the band rows beside it, "
+                            "never their sum")
+        # Live 10 Nov: 'Did theft go down compared to June?' pinned June (the June row compares May -> June).
+        if has("theft_reduction_trend") and re.search(r"\b(?:compared? (?:to|with)|vs\.?|versus|than|since|from) june\b", q) \
+                and re.search(r"\bdata_date\s*=\s*date\s*'2026-06-01'", low):
+            problems.append("theft_reduction_trend is dated by the CURRENT month: June -> July is data_date = "
+                            "DATE '2026-07-01' (prev_period '2026-06')")
+        if "unified_discom_escalations" in low:
+            # Live 10 Nov: technician 'VI_ADITYA PATEL_8063894 PROBE' -> exact match on a shortened name, 0 rows.
+            if re.search(r"\btechnician_name\s*\)?\s*\)?\s*=", low):
+                problems.append("technician names carry suffixes (e.g. '... PROBE'): match UPPER(technician_name) "
+                                "LIKE '%<NAME>%', never =")
+            # The log holds consumer name / mobile / address -- never returned (G23 selected consumer_name).
+            if re.search(r"\b(?:consumer_name|mobile_no|mobile_number|address|technician_number|"
+                         r"escalation_supervisor_number|latitude|longitude)\b", low):
+                problems.append("never return consumer_name / mobile_no / address / phone numbers / coordinates from "
+                                "the escalation log -- ticket, meter, place, status and dates only")
+        # Live 10 Nov: 'Pending escalations raised by technician X' read the gold card (no technician column).
+        if re.search(r"\bescalat", q) and re.search(r"\btechnician\s+(?!remark|wise|-wise)[a-z_]+", q) \
+                and "gold_om_discom_escalation_snapshot" in low and "technician_name" not in low:
+            problems.append("one technician's escalations are in gmr_wfm_silver.unified_discom_escalations "
+                            "(technician_name LIKE '%NAME%', latest escalation per ticket) -- the gold card has no technician")
+        if hes and re.search(r"\bcategory\s*(?:=|in\s*\()\s*'consumer'", low):
+            problems.append("HES meter types: category 'consumer_1_phase' / 'consumer_3_phase' / 'consumer_ht' / "
+                            "'dt_meter' / 'feeder' (never 'CONSUMER'); consumers = category LIKE 'consumer%'")
+        # Live 10 Nov: 'Low power factor for DT and feeder meters' filtered category = 'feeder' only.
+        cat_filter = re.findall(r"\bcategory\s*(?:=\s*'([^']*)'|in\s*\(([^)]*)\))", low)
+        if hes and cat_filter:
+            vals = " ".join(a or b for a, b in cat_filter)
+            for words, val in ((r"\bdts?\b|\bdtrs?\b|\bdt meters?\b|\btransformers?\b", "dt_meter"),
+                               (r"\bfeeders?\b(?! loss)", "feeder")):
+                if re.search(rf"(?:{words})[^?]*\b(?:and|&|,)\b|\b(?:and|&|,)\s*(?:{words})", q) and val not in vals:
+                    problems.append(f"the question names both meter types: keep category '{val}' in the filter "
+                                    "(category IN ('dt_meter', 'feeder') ... GROUP BY category)")
+        # Live 10 Nov: 'feeders out of balance ... last month' took DATE_ADD('month', -1, <default month>) = June.
+        if hes and re.search(r"\b(?:last|previous|this|current|latest) month\b", q) \
+                and not re.search(r"\b(?:vs|versus|compare\w*|change\w*|rise|rose|fell|reduc\w*|improv\w*|than)\b", q) \
+                and re.search(r"date_add\s*\(\s*'month'\s*,\s*-\s*1\s*,\s*(?:\(?\s*select\s+)?max\s*\(\s*month_date", low):
+            problems.append("'last month' / 'this month' on an HES card = the dashboard default month itself "
+                            f"({TECHNICAL_DEFAULT_MONTH}), not the month before it")
+        if has("communication_failures") and re.search(r"\bnc_bucket\s*(?:=|in)\s*\(?\s*'\d", low):
+            problems.append("nc_bucket is stored 'Non_Communicating_3_30_Days' style values, not '3-30 Days'")
+    return problems
+
+
 def _technical_problems(question: str, sql_texts: list[str]) -> list[str]:
     """Technical-card tables (6 Nov 2026 test): answers summed June-August (no month pin) or read August
     (MAX(data_date), 2-3 days of readings) instead of the dashboard's default month."""
     problems: list[str] = []
     month_wise = re.search(r"\b(month[- ]?wise|monthly(?! peak)|trend|each month|every month|by month|over (?:the )?months|"
                            r"predict\w*|forecast\w*|project(?:ed|ion)|next month|will be|likely|"
-                           r"june to|from june|compare(?:d)? (?:june|july|august))\b", question, re.I)
+                           r"june to|from june|month[- ]on[- ]month|compare(?:d)? (?:june|july|august))\b", question, re.I)
     for s in sql_texts:
         low = (s or "").lower()
         used = [t for t in _TECHNICAL_TABLES if re.search(rf"\bhes_gold\.{t}\b", low)]
         if not used:
             continue
-        if not month_wise and not re.search(r"\b(?:data_date|month_date)\s*(?:=|between\b|in\s*\()", low):
+        # Live 10 Nov: 'Month-wise load diversion suspects' joined the 10-day months only -> July alone.
+        if month_wise and re.search(r"count\s*\(\s*distinct\s+data_date\s*\)\s*>=\s*10", low) \
+                and not re.search(r"select\s+max\s*\(\s*month_date\s*\)", low):
+            problems.append("month-wise = every month with data: data_date BETWEEN DATE '2026-06-01' AND DATE "
+                            "'2026-08-01' GROUP BY data_date (label August partial) -- the 10-day rule only picks the "
+                            "default month, it never drops months from a series")
+        # reliability_improvement_trends: July holds two comparisons (months on 07-01, halves on 07-16) -> a range.
+        if not month_wise and not re.search(r"\b(?:data_date|month_date)\s*(?:=|between\b|in\s*\()", low) \
+                and not re.search(r"\bmeter_no\s*=\s*'", low) \
+                and not (used == ["reliability_improvement_trends"] and re.search(r"\bdata_date\s*>=", low)):
             problems.append("these tables hold one row per meter per MONTH: pin one month -- data_date (month_date on "
                             f"dt_load_kva) = {TECHNICAL_DEFAULT_MONTH} when no month is asked (the dashboard's default "
                             "month), or DATE '2026-07-01' for a named month. Never add months together")
@@ -396,7 +629,9 @@ def _technical_problems(question: str, sql_texts: list[str]) -> list[str]:
                            r"category|role|feeder_code|dtr_code)\b", low)
         if broke and not re.search(r"-?\bwise\b|\bby\b|\beach\b|\bper\b|\bwhich\b|\btop\b|\bcompare|\bvs\b|\bversus\b|"
                                    r"\bsplit\b|\bbreak|\bdistribution\b|\brank|\bhighest\b|\blowest\b|\bmost\b|\bleast\b|"
-                                   r"\bworst\b|\bbest\b|\bacross\b|\blist\b|\bshow\b|\bwhere\b|\bbetween\b", question, re.I):
+                                   r"\bworst\b|\bbest\b|\bacross\b|\blist\b|\bshow\b|\bwhere\b|\bbetween\b"
+                                   r"|,[^?]*\band\b|\b\w+ and \w+ meters\b|\b(?:zones|circles|divisions|projects)\b"
+                                   r"|\bi and ii\b", question, re.I):   # a listed set ('Agra, Kashi and Triveni') = a split
             problems.append(f"the question asks for one figure, not a {broke[0].replace('_', ' ')}-wise breakdown: "
                             "remove that GROUP BY and give the whole scope (e.g. violators, assessed and the % overall)")
         # Athena has no Postgres casts. Live 6 Nov: ROUND(COUNT(DISTINCT meter_no)::numeric, 2) -> 'mismatched input'.
@@ -444,6 +679,9 @@ def _technical_problems(question: str, sql_texts: list[str]) -> list[str]:
         named = [m for m in ("june", "july", "august") if re.search(rf"\b{m}\b", question, re.I)]
         if re.search(r"\b(?:predict|forecast|project(?:ed|ion)?|next month|if the trend|will be)\b", question, re.I):
             named = []
+        # 'compared to June' names the baseline, not the month to pin (theft reduction / reliability comparisons).
+        named = [m for m in named if not re.search(rf"\b(?:compared? (?:to|with)|vs\.?|versus|than|since|from) {m}\b",
+                                                   question, re.I)]
         # The default-month subquery holds DATE '2026-06-01' itself -- it never pins June (live 6 Nov: 'load
         # violation percentage in June' ran on the default month and said June had no data).
         no_default = re.sub(r"\(\s*select\s+(?:max\s*\(\s*)?month_date\s*\)?(?:\s+as\s+\w+)?\s+from\s*\(?\s*(?:select\s+month_date\s+from\s+)?"
@@ -469,6 +707,10 @@ def _technical_problems(question: str, sql_texts: list[str]) -> list[str]:
         # (live 6 Nov again with peak_band: 'DTs by peak loading band' -- any grouped column, not only places)
         for m in re.finditer(r"\border\s+by\b[^;]*?\bgrouping\s*\(\s*(\w+)\s*\)", low):   # Athena fails only here
             col, head = m.group(1), low[:m.start()]
+            # Subqueries out first: the default-month subquery's own SELECT is the last 'select' before ORDER BY
+            # (live 10 Nov: B20 / D10 / D18 failed in Athena while this check looked only at that subquery).
+            while re.search(r"\([^()]*\)", head):            # every bracket (the label sits outside them)
+                head = re.sub(r"\([^()]*\)", "x", head)
             if re.search(rf"\bend\s+as\s+{col}\b", head[head.rfind("select"):]):     # ... in that same SELECT
                 problems.append(f"Athena: the ROLLUP label must not be named {col} (alias it {col}_name)")
         # The global 'Unmapped' CASE label does not work here (live 6 Nov: 'which division has the highest % time
@@ -742,7 +984,8 @@ def check(question: str, sql_texts: list[str], columns: set[str] | None = None, 
     # The Technical-card tables have their own place / category columns (zones for a project, role / category
     # instead of WFM's CONSUMER / DT / FEEDER and meter_type): the WFM category and meter-type checks don't apply
     # (live 6 Nov: 'top 10 consumers by excess load' was sent back for a CONSUMER filter load_violation lacks).
-    technical = any(re.search(rf"\bhes_gold\.{t}\b", low) for t in _TECHNICAL_TABLES)
+    technical = any(re.search(rf"\bhes_gold\.{t}\b", low) for t in _TECHNICAL_TABLES) \
+        or bool(re.search(r"\bhes_silver\.(?:block_usage|daily_usage)\b|\bhes_gold\.dim_meter(?:_replaced)?\b", low))
     mapping = mapping or technical
 
     for label, table, column in (("project", _PROJECTS, "project"), ("OEM", _OEMS, "oem")):
@@ -828,7 +1071,7 @@ def check(question: str, sql_texts: list[str], columns: set[str] | None = None, 
     # 'type wise' = Consumer / DTR / Feeder (category); 'consumer type wise' = the 4 consumer
     # types (1PH / 3PH / LTCT / HTCT) of CONSUMER meters only. Seen live: 'consumer stock ageing
     # type wise' came back as every meter type, DTR and Feeder included.
-    if _TYPE_WISE_RE.search(question) and has_category:
+    if _TYPE_WISE_RE.search(question) and has_category and not technical:   # HES: category / role, no meter_type
         if _CONSUMER_RE.search(question) or re.search(r"\bmeter[- ]?types?\b", question, re.I):
             if "meter_type" not in low:
                 problems.append("'consumer type wise' means one row per consumer meter type (1PH / 3PH / LTCT / HTCT) "
@@ -944,7 +1187,7 @@ def check(question: str, sql_texts: list[str], columns: set[str] | None = None, 
         if (re.search(rf"\b{word}s?[- ]?wise\b|\bby {word}s?\b|\b(each|every|per) {word}\b|\b{word}s? breakdown\b",
                       question, re.I)
                 and (cols is None or lvl in cols)
-                and not (mapping and lvl == "project" and re.search(r"\bgroup\s+by\b[^;]*\bproj", low))
+                and not (mapping and lvl == "project" and re.search(r"\bgroup\s+by\b[^;]*\b(?:proj|cluster)", low))
                 and not _grouped_by(low, lvl) and len(re.findall(rf"\b{lvl}\s*=", low)) < 2
                 # rows of a pre-aggregated table listed per value (no aggregate needed)
                 and not (re.search(rf"^\s*select\b[^;]*?\b{lvl}\b[^;]*?\bfrom\b", low)
@@ -1048,6 +1291,32 @@ def check(question: str, sql_texts: list[str], columns: set[str] | None = None, 
     problems += _revenue_journey_problems(question, low, sql_texts, asked)
     problems += _mapping_problems(question, sql_texts)
     problems += _technical_problems(question, sql_texts)
+    problems += _card_problems_nov10(question, sql_texts, asked)
+    problems += _meter_reading_problems(question, sql_texts)
+    # A ROLLUP / GROUPING SETS total row has NULL in the grouped column: an 'Unmapped' label that does not test
+    # GROUPING() first turns the total into an area and it is added again. Live 10 Nov: 'kal kitne meter lage the,
+    # category ke hisaab se?' said 1,208 (Unmapped 604 + CONSUMER 604) for 604; Agra escalations 33,222 for 16,611.
+    for s in sql_texts:
+        sl = (s or "").lower()
+        if re.search(r"\brollup\b|\bgrouping\s+sets\b|\bcube\b", sl):
+            for col in set(re.findall(r"case\s+when\s+(?:\w+\.)?(\w+)\s+is\s+null(?:(?!\bend\b).)*?'unmapped'", sl, re.S)):
+                if not re.search(rf"case\s+when\s+grouping\s*\(\s*(?:\w+\.)?{col}\s*\)\s*=\s*1\s+then\s+'total'", sl):
+                    problems.append(f"the ROLLUP total row has {col} = NULL: label it first -- CASE WHEN GROUPING({col}) = 1 "
+                                    f"THEN 'Total' WHEN {col} IS NULL OR {col} = '' THEN 'Unmapped' ELSE ... END, or the "
+                                    "total is shown as 'Unmapped' and counted twice")
+    # dt_loading holds one row per DT x loading band: counting rows (COUNT_IF / COUNT(*)) counts bands, not DTs.
+    # Live 10 Nov: 'DTs that peaked above rating per project' said Kashi 648 for 85.
+    for s in sql_texts:
+        sl = (s or "").lower()
+        if re.search(r"\bhes_gold\.dt_loading\b(?!_)", sl) and re.search(r"count_if\s*\(\s*peak_block_band|count\s*\(\s*\*\s*\)", sl) \
+                and "count(distinct meter_no)" not in re.sub(r"\s+", "", sl).replace("count(distinctmeter_no)", "count(distinct meter_no)"):
+            problems.append("dt_loading has one row per DT x loading band: count DTs with COUNT(DISTINCT meter_no) "
+                            "(FILTER (WHERE peak_block_band IN ('100-120%', '>120%'))), never COUNT_IF / COUNT(*) of rows")
+    # Every figure comes from the data. Live 6 Nov: 'Predict the average VDI for September 2026' ran
+    # SELECT DATE '2026-09-01', 0 AS eligible_meters, NULL AS avg_vdi_pct ... -- no table at all.
+    if sql_texts and not any(re.search(r"\b(?:from|join)\s+(?!\(|unnest\b)\"?[a-z_]", (s or ""), re.I) for s in sql_texts):
+        problems.append("the SQL reads no table -- every figure must come from the data (for a forecast, query the "
+                        "month-wise series and project from the complete months); never SELECT made-up values")
 
     # A meter-type exclusion nobody asked for. Live 26 Oct: 'invoice funnel zone wise in Triveni' added
     # meter_type <> 'OTHER-Consumer_meter' AND meter_type IS NOT NULL and lost 44 meters.
@@ -1068,7 +1337,8 @@ def check(question: str, sql_texts: list[str], columns: set[str] | None = None, 
     ql = question.lower()
     for unit, ask, bucket in _TIME_BREAKDOWNS:
         if (re.search(ask, ql) and not re.search(rf"\b(?:avg|average|mean)\s+{unit}|\b{unit}\s+{_NOT_BREAKDOWN}", ql)
-                and not _time_grouped(low, bucket)):
+                and not _time_grouped(low, bucket)
+                and not (technical and re.search(r"\bmeter_no\s*=", low))):   # one meter's rows on a per-day HES table
             problems.append(f"the question asks for a {unit} breakdown but the SQL does not GROUP BY {_PER[unit]} -- "
                             f"return one row per {_PER[unit]} (plus the Total row)")
 
@@ -1109,7 +1379,8 @@ def check(question: str, sql_texts: list[str], columns: set[str] | None = None, 
     # Technical-card tables: no period = the dashboard's default month (pinned by _technical_problems), never
     # all time. Live 6 Nov: this check called the default month's DATE '2026-06-01' bound a leak and the
     # repairs ended in SQL Athena could not run.
-    technical = any(re.search(rf"\bhes_gold\.{t}\b", low) for t in _TECHNICAL_TABLES)
+    technical = any(re.search(rf"\bhes_gold\.{t}\b", low) for t in _TECHNICAL_TABLES) \
+        or bool(re.search(r"\bhes_silver\.(?:block_usage|daily_usage)\b|\bhes_gold\.dim_meter(?:_replaced)?\b", low))
     if not technical and not any(asked.get(k) for k in ("years", "months", "dates", "relative_period", "as_of")):
         dated = re.findall(r"(?:period_start|date|_at|_date|day|_month)\w*\s*(?:=|>=|<=|>|<|between)\s*(?:date\s*)?'(\d{4}-\d{2}-\d{2})'", low)
         if dated:

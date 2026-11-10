@@ -23,8 +23,8 @@ global:
     - "Filters come ONLY from the question (and, for a follow-up, the previous turn). Places, periods and categories that appear in an Example are illustrations -- never copy them into a question that does not state them."
     - "Dates are IST, inclusive. 'last N days' = N full days ending YESTERDAY: CURRENT_DATE - N .. CURRENT_DATE - 1 (asked on 23 Oct, 'last 7 days' = 16 Oct .. 22 Oct); 'last week' = the same 7 days ending yesterday; 'this week' = month-anchored week (days 1-7, 8-14, 15-21, 22-28, 29-end) holding today, to today; 'this month' = 1st .. today; 'last month' = whole previous calendar month; 'last N months' = rolling window ending YESTERDAY, starting the same date N months earlier: period_start BETWEEN (CURRENT_DATE - 1 - INTERVAL 'N months')::date AND CURRENT_DATE - 1 (asked on 23 Oct, 'last 2 months' = 22 Aug .. 22 Oct) -- read it from the day table, never whole months from the month table; 'this year' = 1 Jan .. today; 'in 2026' (a year) = 1 Jan .. 31 Dec of it -- the current year runs to today, never to an earlier day; 'last year' = previous calendar year; month without year = most recent occurrence; 'since X' = X .. today. No date = all time, except O&M closed/productivity."
     - "An explicit daily/weekly/monthly ask wins. Weeks are month-anchored, never ISO: date_trunc('month', d)::date + ((EXTRACT(DAY FROM d)::int - 1) / 7) * 7. Breakdowns get a leading Total row: GROUP BY ROLLUP (bucket), CASE WHEN GROUPING(bucket) = 1 THEN 'Total' ... END, ORDER BY GROUPING(bucket) DESC."
-    - "Places: project > discom > zone > circle > division > sub_division. Projects: agra, kashi, triveni ('cluster' = project). A bare name = highest level holding it ('agra' = project, 'agra zone' = zone). Compare LOWER(col) = 'kashi' / LOWER(col) IN (...). 'varanasi' zone = ('varanasi i','varanasi ii') but 'varanasi project' / 'varanasi cluster' = project kashi; 'prayagraj' = ('prayagraj i','prayagraj ii'). Circle/division names carry prefixes ('edc agra', 'edd chunar'): bare name -> LOWER(col) LIKE '%chunar%'; a FULL stored name with its prefix ('EDC Varanasi', 'EUDD Cantt Mathura', 'EUDSD Vrindavan') -> LOWER(col) = 'edc varanasi' exactly (LIKE '%varanasi%' would also take EUDC I / EUDC II Varanasi)."
-    - "'<level>-wise' / 'by <level>' = GROUP BY that column, label CASE WHEN col IS NULL OR col = '' THEN 'Unmapped' ELSE UPPER(col) END (on the inventory / stock tables a blank zone/circle/division is 'Not installed yet (in stock)' - a meter has no place until it is installed). 'Which X has the most/highest' = rank DESC; 'lowest/lagging/behind' = ASC. make/vendor/brand/manufacturer = oem (AEW, CAP, HPL, SEIPL, Unknown)."
+    - "Places: project > discom > zone > circle > division > sub_division. Projects: agra, kashi, triveni ('cluster' = project). A bare name = highest level holding it ('agra' = project, 'agra zone' = zone). Compare LOWER(col) = 'kashi' / LOWER(col) IN (...). 'varanasi' zone = ('varanasi i','varanasi ii') but 'varanasi project' / 'varanasi cluster' = project kashi; 'prayagraj' = ('prayagraj i','prayagraj ii'). Circle/division names carry prefixes ('edc agra', 'edd chunar'): bare name -> LOWER(col) LIKE '%chunar%'; a FULL stored name with its prefix ('EDC Varanasi', 'EUDD Cantt Mathura', 'EUDSD Vrindavan') -> LOWER(col) = 'edc varanasi' exactly (LIKE '%varanasi%' would also take EUDC I / EUDC II Varanasi). 'Varanasi zone(s)' = zones VARANASI I + VARANASI II only (Azamgarh is a Kashi zone, never part of 'Varanasi'); 'Prayagraj zone(s)' = PRAYAGRAJ I + PRAYAGRAJ II only (not Mirzapur). Only the word Kashi / Triveni / project means the whole project."
+    - "'<level>-wise' / 'by <level>' = GROUP BY that column, label CASE WHEN GROUPING(col) = 1 THEN 'Total' WHEN col IS NULL OR col = '' THEN 'Unmapped' ELSE UPPER(col) END -- GROUPING first, or the ROLLUP total row becomes 'Unmapped' and is counted twice (on the inventory / stock tables a blank zone/circle/division is 'Not installed yet (in stock)' - a meter has no place until it is installed). 'Which X has the most/highest' = rank DESC; 'lowest/lagging/behind' = ASC. make/vendor/brand/manufacturer = oem (AEW, CAP, HPL, SEIPL, Unknown)."
     - "Categories: CONSUMER, DT, FEEDER. DTR/transformer = 'DT' in Postgres; Athena silver spells it 'DTR' (report_category, complaint_entity_type). Show DT as 'DTR' for installation/SAT/non-SAT/defect/utilization, 'DT' elsewhere. Consumer meter types: '1PH-Consumer_meter','3PH-Consumer_meter','LTCT-Consumer_meter','HTCT-Consumer_meter' (DT meters are meter_type '3PLTCTSM', feeder 'HTCTPTSM'). WORDING: 'type wise' / 'by type' alone = by CATEGORY (Consumer / DTR / Feeder, GROUP BY category); 'consumer type wise' / 'consumer meter type wise' / naming a consumer type = category = 'CONSUMER' GROUP BY meter_type (1PH / 3PH / LTCT / HTCT); 'meter type wise' = every meter_type (1PH, 3PH, LTCT, HTCT, DTR, Feeder). Keep 'consumer' in the resolved question whenever the user says it. There is no Other type: drop NULL/'OTHER-Consumer_meter' rows from type breakdowns, keep them in Total."
     - "Numbers: % = ROUND(x * 100.0 / NULLIF(y, 0), 2); ratios ROUND(.., 2). Gold tables hold pre-counted rows: SUM the count column (meter_count, ticket_count, ...), never COUNT(*). Money is crore rupees (Rs X cr)."
     - "One engine per query. Postgres = public.<table>: CURRENT_DATE, date_trunc('month', d)::date, CURRENT_DATE - 7, INTERVAL '1 month', SUM(x) FILTER (WHERE ...); date - date is already whole days (integer) - never EXTRACT(EPOCH/DAY FROM it). Athena/Trino = gmr_wfm_silver.<t> / hes_gold.<t>: current_date, date_add('day', -7, current_date), date_diff('day', a, b), COUNT_IF(...). Never SELECT *; alias every column; no JOIN between gold tables (scalar subqueries or UNION ALL); bound Athena silver scans by date or place; LIMIT lists to 500."
@@ -621,6 +621,8 @@ topics:
       - "Card tiles: escalated = SUM(ticket_count); older than 30 days = FILTER (age_key IN ('age_31_60','age_60_plus')); non-comm = FILTER (complaint_type IN ('NEVER COMM','METER NOT IN COMMUNICATION')); pending / approved / rejected = FILTER (escalation_status = ...); discom average days to attend = ROUND(SUM(attend_days_sum)::numeric / NULLIF(SUM(attended_count), 0), 2) (never AVG of avg_days_to_attend)."
       - "Remark / complaint / age / status wise: GROUP BY technician_remark / complaint_type / age_key / escalation_status, largest first (ages in band order). A remark filter: technician_remark = UPPER('<remark>') -- the WHOLE remark as one value, '/' included ('TEMPORARILY DISCONNECTED/ TD FROM POLE' is one remark, never split into two)."
       - "Not the open-ticket status 'ESCALATED TO DISCOM' (om_open_tickets) -- this table keeps approved / rejected tickets too."
+      - "escalation_status also has 'UNKNOWN' (blank status in SmartEMS): escalated total = PENDING + APPROVED + REJECTED + UNKNOWN; never present the three named statuses as adding up to the total."
+      - "Per ticket / meter / consumer / feeder / DTR / sub-station / technician / discom officer / exact date or date range / decided-on month / repeat escalations: not in this snapshot -> topic om_escalation_detail (gmr_wfm_silver.unified_discom_escalations)."
     example:
       question: "O&M tickets escalated to discom"
       sql: |
@@ -748,11 +750,12 @@ topics:
     title: "Single meter / consumer / ticket lookup"
     description: "Status of one meter serial, consumer number or O&M ticket / complaint number: installation details, SAT batch, stock/custody, replacement, ticket status, technician, work completion."
     keywords: [meter serial, serial number, meter no, this meter, status of meter, consumer number, is meter sat done, was meter replaced, meter details, who installed meter, meter history, ticket on meter, ticket, ticket number, ticket no, status of ticket, complaints of consumer, complaints of meter, tickets of consumer, complaint history, ticket status, complaint number, complaint no, helpdesk ticket, which technician handled]
-    tables: [unified_installations, sat_meter_mappings, unified_smart_meter_inventory, unified_complaints, unified_active_complaints, unified_non_qc_complaints]
+    tables: [unified_installations, sat_meter_mappings, unified_smart_meter_inventory, unified_complaints, unified_active_complaints, unified_non_qc_complaints, unified_discom_escalations]
     answer_notes:
       - "Ticket dates: 'work completed on' is not 'closed on' -- call a ticket closed only when a closed date is shown. Say where it was found in plain words (open tickets / completed O&M work); 'not found' only when every source is empty."
     rules:
       - "ONE identifier = look in EVERY table that holds that kind of identifier together (UNION ALL of per-table SELECTs with the same columns, a found_in label in plain words), never one table only: 'not found' is said only when none of them has it. Identifiers are stored as TEXT: compare TRIM(col) = '<value exactly as typed>' -- never add prefixes (no 'TKT-') or change the value. Digits-only values (consumer / ticket numbers) can carry leading zeros ('0061239000'): match regexp_replace(TRIM(col), '^0+', '') = regexp_replace('<value>', '^0+', '')."
+      - "Escalated to discom? (one meter / consumer / ticket): gmr_wfm_silver.unified_discom_escalations WHERE UPPER(TRIM(old_meter_serial_number)) = '<serial>' (or consumer_number / ticket_id) -- every escalation row with escalated_on AT TIME ZONE 'Asia/Kolkata', COALESCE(NULLIF(UPPER(TRIM(escalation_status)), ''), 'UNKNOWN') AS status, escalation_attended_on, escalation_supervisor_remarks; never consumer_name / mobile_no / address."
       - "Ticket / complaint number: gmr_wfm_silver.unified_active_complaints (ticket_id or complaint_no; complaint_status, complaint_type, complaint_created_date = raised on) UNION ALL gmr_wfm_silver.unified_non_qc_complaints (helpdesk_ticket_id or complaint_no; status from dates: closed_date -> 'Closed', work_completed_at -> 'Work completed'; sub_complaint_type). Both: project, zone, division, consumer_number, old_meter_serial_number, technician_name. created_at / ingested_at are load times, never the raised date. A ticket in both = current status from the active feed, completion from non-QC."
       - "Tickets / complaints of one meter / consumer / technician: the same two tables PLUS gmr_wfm_silver.unified_complaints (QC complaint work: sub_complaint_type, work_completed_at, no ticket number), by meter (TRIM(old_meter_serial_number) = 'X' OR TRIM(new_meter_serial_number) = 'X' where the table has both; non-QC has only old) / TRIM(consumer_number) = 'X' or LOWER(technician_name) LIKE '%<name lower-case>%' (Athena has no ILIKE), newest first, LIMIT 200. Return the ticket ROWS (status, type, technician, dates), never only a count -- the answer gives the count and the latest status from them."
       - "Athena gmr_wfm_silver tables, exact match first: new_meter_serial_number (letters + digits, e.g. 'CA6028422') vs consumer_number (digits only) - match the column to the value's format; latest row by updated_at DESC. Normalised fallback: regexp_replace(upper(trim(col)), '[^A-Z0-9]+', '') = 'X'."
@@ -826,7 +829,7 @@ topics:
     domain: mdm
     title: "Power quality (voltage deviation, fluctuation, unbalance, drop, low-voltage pockets, current unbalance, % time out of band)"
     description: "The Technical > Power Quality cards: Voltage Deviation Index (VDI), Voltage Fluctuation Index (VFI), Voltage Unbalance Index (VUI), Voltage Drop (V), Low-voltage pockets, Meter Current Unbalance (%), % time beyond the voltage tolerance band, % time with unacceptable current imbalance (>10%): averages, meters by status, by circle / zone / meter type, dips and surges, per meter."
-    keywords: [power quality, voltage, vdi, voltage deviation, deviation index, vfi, voltage fluctuation, fluctuation, voltage stability, dips, surges, swings, vui, voltage unbalance, voltage imbalance, phase imbalance, unbalance, voltage drop, drop depth, under voltage, undervoltage, low voltage, low-voltage pockets, over voltage, overvoltage, tolerance band, out of band, voltage band, compliance, current unbalance, current imbalance, unacceptable current imbalance, phase current, 10%, poor, moderate, good, severe, mild, stable, unstable, chronic violation, non compliant, borderline]
+    keywords: [power quality, voltage, vdi, voltage deviation, deviation index, vfi, voltage fluctuation, fluctuation, voltage stability, dips, surges, swings, vui, voltage unbalance, unbalance, voltage drop, drop depth, under voltage, undervoltage, low voltage, low-voltage pockets, over voltage, overvoltage, tolerance band, out of band, voltage band, compliance, current unbalance, unacceptable current imbalance, phase current, 10%, poor, moderate, good, severe, mild, stable, unstable, chronic violation, non compliant, borderline]
     tables: [voltage_deviation_index, voltage_fluctuation_index, voltage_unbalance_index, voltage_drop, current_unbalance, pct_time_out_of_band, pct_time_current_imbalance, low_voltage_pockets, low_voltage_pockets_meters]
     answer_notes:
       - "Forecasts: say plainly it is an estimate from June and July (the complete months), give the projected figure and the method (e.g. same change as June to July), and that August is partial (2-3 days) so it was not used."
@@ -847,6 +850,7 @@ topics:
       - "% time beyond voltage band (hes_gold.pct_time_out_of_band): SUM(oob_blocks) * 100.0 / SUM(live_blocks); over-voltage = SUM(ov_blocks), under-voltage = SUM(uv_blocks), same denominator. Never AVG(pct_time_oob)."
       - "Meters by status = COUNT(*) GROUP BY status WHERE status <> 'Offline' (and <> 'unknown'); one row per meter per month. By area / meter type = GROUP BY circle (default level) / zone / division / role with the same weighted formula and HAVING SUM(<weight>) > 0; rankings skip the NULL area and sort DESC (worst first)."
       - "Low-voltage pockets: meters flagged = COUNT(DISTINCT meter_no) FROM hes_gold.low_voltage_pockets_meters (band 'Critical' / 'Poor' / 'Average', ageing_bucket '3-30 Days' / '31-60 Days' / '61-90 Days' / 'More than 90 Days', category = meter type: 'consumer_1_phase' (1-phase consumers) / 'consumer_3_phase' / 'consumer_ht' / 'dt_meter' / 'feeder' -- phases_affected only says which phases R/Y/B were low, never the meter type; cluster 'Agra' / 'Kashi' / 'Triveni'); band x ageing chart = SUM(unique_meter_count) FROM hes_gold.low_voltage_pockets GROUP BY band, ageing_bucket. Its tables are low_voltage_pockets*, never voltage_drop."
+      - "The hidden 'Voltage Deviation (%)' card is the same data as VDI (mean_abs_dev_pct = vdi_mean on every row): when that card or its statuses are named, use hes_gold.voltage_deviation_index -- Critical = status <> 'Offline' AND vdi_mean > 10, Warning = vdi_mean > 5 AND <= 10, OK = vdi_mean <= 5 (Offline separate); average and by-area exactly as VDI. Never hes_gold.voltage_deviation. Its statuses: OK <= 5%, Warning 5-10%, Critical > 10% (VDI's own card says Good / Moderate / Poor at 2 / 5%)."
       - "ROUND every figure to 2 decimals. One table per KPI; never JOIN two of them."
     example:
       question: "Average voltage deviation index circle-wise in Kashi"
@@ -883,6 +887,7 @@ topics:
       - "% DT loading (hes_gold.dt_loading, one row per DT x loading_band -- count DTs with COUNT(DISTINCT meter_no)): DTs assessed = COUNT(DISTINCT meter_no); peaked above rating = COUNT(DISTINCT meter_no) FILTER (WHERE peak_block_band IN ('100-120%','>120%')); never above 20% = ... peak_block_band = '<20%'; time above rating % = SUM(block_count) FILTER (WHERE loading_band IN ('100-120%','>120%')) * 100.0 / SUM(block_count); DTs by monthly peak = COUNT(DISTINCT meter_no) GROUP BY peak_block_band (bands '<20%','20-35%','35-55%','55-70%','70-85%','85-100%','100-120%','>120%'). Areas with most DTs above rating: per area over * 100.0 / dts, HAVING COUNT(DISTINCT meter_no) >= 20, ORDER BY pct DESC, over DESC LIMIT 10."
       - "% DT peak loading (hes_gold.dt_peak_loading, one row per DT): COUNT(DISTINCT meter_no) total and FILTER (WHERE load_status = 'Overloaded >100%' / 'Overloaded 90-100%' / 'Underloaded <20%' / 'Normal'); 'overloaded' alone = both overloaded statuses, each named. By band = GROUP BY peak_band. Top overloaded DTs: meter_no, dtr_code, feeder_code, ROUND(peak_load_kva,1), pct_peak_loading, dtr_rating_kva WHERE pct_peak_loading < 200 AND <plausible CT> ORDER BY pct_peak_loading DESC LIMIT 10. Feeders with most overloaded DTs: hes_gold.dt_peak_loading_feeder WHERE overloaded_90_dts > 0 ORDER BY overloaded_90_dts DESC LIMIT 10 (overloaded_90_dts = above 90% incl. above 100%, overloaded_100_dts, assessed_dts, max_loaded_dt, max_pct_peak_loading)."
       - "Loading bands include their lower edge ('>120%' = 120 and above, '100-120%' = 100 up to 120): 'above 120%' / 'over 100%' on dt_load_kva / dt_loading = the band column (peak_band / peak_block_band / loading_band IN (...)), never a strict pct > N. On dt_peak_loading 'overloaded' = load_status (strictly > 100 / > 90)."
+      - "A change between two months ('from June to July', 'why did loading fall/rise') = the LATER month's dt_load_rise row: pct_loading (that month) vs prev_pct_loading (the month before), DTs present in both (prev_pct_loading IS NOT NULL). Never compare the earlier month's own row (its prev is the month before it, often NULL). For 'why', also give the drivers: DTs that fell / rose over 10 points and new DTs."
       - "'Monthly peak' is the % DT Loading card's name (each DT's highest half-hour in the month), not a month-wise ask: one month unless months are asked. Which card: 'DTs by monthly peak' / '% DT loading' / 'above rating' / 'never above 20%' = dt_loading (peak_block_band); 'peak loading' / 'overloaded' / 'underloaded' / 'DTs by peak loading band' = dt_peak_loading (load_status, peak_band); 'DT-days' / 'kVA' / 'hours above rating' / 'load profile' = dt_load_kva; 'rise' / 'change since last month' = dt_load_rise."
       - "Plausible CT (dashboard 'believable DT'): (ct_ratio IS NULL OR dtr_rating_kva IS NULL OR TRY_CAST(split_part(ct_ratio, '/', 1) AS double) <= 2 * dtr_rating_kva * 1000 / (sqrt(3) * 433))."
       - "DT load kVA (hes_gold.dt_load_kva): one DT = WHERE meter_no = 'X' (or dtr_code = 'X') AND month_date = ...: rating = MAX(dtr_rating_kva), CT = MAX(ct_ratio), peak load = MAX(peak_load_kva), peak % = MAX(peak_pct_loading), hours above rating = SUM(cardinality(filter(load_profile, x -> x > dtr_rating_kva))) / 2.0, days with data = COUNT(*), readings = SUM(slots_reported), average load = AVG(avg_load_kva). Most stressed DTs: GROUP BY meter_no, dtr_code, hours = SUM(overload_slots) / 2.0, HAVING SUM(overload_slots) > 0 AND MAX(peak_pct_loading) < 200, WHERE <plausible CT>, ORDER BY hours DESC LIMIT 10. By peak band: COUNT(DISTINCT meter_no) and COUNT(*) DT-days GROUP BY peak_band."
@@ -926,6 +931,441 @@ topics:
         SELECT (SELECT mon FROM m) AS data_month, violators, assessed,
                ROUND(violators * 100.0 / NULLIF(assessed, 0), 2) AS pct_consumers_with_load_violation
         FROM v, a
+
+  # Operation Analytics imbalance cards (HES, Athena hes_gold; gmr-etl kpi_13_phase_imbalance_sigma.py +
+  # kpi_17_imbalance_reduction.py; dashboard KpiBoard Layout E / Layout D). Recomputed live 10 Nov 2026.
+  # NOT the Power Quality VUI / current-unbalance / % time CI cards (mdm_power_quality) -- see routing.md.
+  mdm_phase_imbalance:
+    domain: mdm
+    title: "Phase imbalance (Operation Analytics): Voltage / Current Imbalance, Imbalance Alerts, Phase imbalance reduced by minimum 30%"
+    description: "The Operation Analytics cards built on the 3-sigma phase test: Voltage Imbalance and Current Imbalance (meters imbalanced on 3+ days, ageing, imbalanced half-hours / days), Voltage / Current Imbalance Alerts (Critical / Poor / Average grades), and Phase imbalance reduced by minimum 30% (meters whose imbalance fell 30+ points from last month, voltage and current)."
+    keywords: [voltage imbalance, current imbalance, phase imbalance, voltage/current imbalance, imbalance alerts, imbalance alert, alerts when threshold exceeded, threshold exceeded, imbalance reduction, imbalance reduced, reduced by 30, minimum 30%, 30 points, improved, improvement, reduce imbalance, imbalanced half-hours, imbalanced days, imbalance days, imbalance %, 3-sigma, 3 sigma, sigma, ageing, age band, 3-30 days, not flagged, critical, severity, dominant severity, meters assessed, out of balance, phases out of balance]
+    tables: [voltage_imbalance, current_imbalance, voltage_imbalance_alerts, current_imbalance_alerts, voltage_imbalance_reduction, current_imbalance_reduction]
+    answer_notes:
+      - "Always name the month (data_month). No month asked = the dashboard default, the latest month with >= 10 days of readings (July 2026; August holds 2 days). On the reduction card data_month is the CURRENT month of the pair: July 2026 = June -> July."
+      - "Imbalance here is the 3-sigma phase test, not the % unbalance of the Power Quality cards: a half-hour is imbalanced when one phase (or all three) sits further from the others than 3 x the normal spread of that meter type at that time of day; a day counts when more than 50% of its half-hours are imbalanced; a meter is flagged (aged '3-30 Days', ...) at 3+ such days. Lead with flagged meters, then meters assessed."
+      - "Alerts grade each day by its share of imbalanced half-hours: Critical >= 85%, Poor >= 70%, Average >= 50%; each alert meter carries its dominant grade (the one with the most imbalanced half-hours) and needs 3+ days at it. Quote Critical / Poor / Average counts and the total."
+      - "Reduction: a meter qualifies when last month's imbalance % minus this month's is 30 percentage POINTS or more (client spec), not a 30% relative fall. Give voltage and current side by side -- never add them (a meter can improve on both). If asked how reliable it is: qualifies_live counts only half-hours with a usable 3-phase reading (voltage 1,110 of 1,522 in July still qualify); a big fall in live_share_curr means the meter simply reported fewer usable readings."
+      - "August 2026 holds only 2 days: no meter can reach 3 imbalanced days, so August shows 0 flagged meters on the imbalance card -- say it is partial, never 'no imbalance'."
+    rules:
+      - "Month: data_date = month 1st, one row per meter per month. No month / 'current' / 'latest' = (SELECT MAX(month_date) FROM (SELECT month_date FROM hes_gold.dt_load_profile WHERE month_date >= DATE '2026-06-01' GROUP BY month_date HAVING COUNT(DISTINCT data_date) >= 10) c). Named month = DATE 'YYYY-MM-01' (imbalance / alerts: June-August; reduction: 2026-07-01 = June->July, 2026-08-01 = July->August, no June row). Month-wise = GROUP BY data_date. Never sum months."
+      - "Places: cluster = project 'Agra' / 'Kashi' / 'Triveni' (LOWER(cluster) = 'kashi'); zone / circle / division / sub_division upper-case (UPPER(col) LIKE '%NAME%'); discom_code 'DVVNL' / 'PUVVNL'; feeder_code, dtr_code, meter_no. Meter type = category: 'dt_meter', 'feeder', 'consumer_3_phase', 'consumer_ht' (no 1-phase meters, no role column). No sub_station."
+      - "Voltage / Current Imbalance (hes_gold.voltage_imbalance / current_imbalance -- every meter assessed): meters assessed = COUNT(*); flagged = COUNT_IF(ageing_bucket IS NOT NULL) (NULL = 'Not flagged (under 3 days)'); imbalanced half-hours = SUM(imbalanced_blocks); imbalance % = ROUND(AVG(imbalance_pct), 2) (plain mean per meter, the card tile); imbalanced days = SUM(imbalance_days). By age band = GROUP BY ageing_bucket. 'Meters with voltage imbalance' = flagged. Worst meters: ORDER BY imbalance_days DESC, imbalance_pct DESC LIMIT 10."
+      - "Imbalance Alerts (hes_gold.voltage_imbalance_alerts / current_imbalance_alerts -- alert meters ONLY, one row each): alert meters = COUNT(*); by grade = COUNT_IF(severity = 'Critical' / 'Poor' / 'Average'); imbalanced half-hours = SUM(severity_blocks); imbalanced days = SUM(severity_days). ageing_bucket uses severity_days; ageing_bucket_run / severity_run_days (consecutive-day reading) only when 'consecutive' is asked."
+      - "Phase imbalance reduced by minimum 30% (hes_gold.voltage_imbalance_reduction + current_imbalance_reduction, every meter compared): improved = COUNT(*) WHERE qualifies -- ALWAYS filter qualifies (unfiltered = ~168,000 meters compared). Card = voltage count and current count, one scalar subquery per table (or two CTEs joined on the area for a breakdown: FULL OUTER JOIN, COALESCE 0, ORDER BY GREATEST(...) DESC LIMIT 12). Tiles over qualifying meters: AVG(reduction_pp) points, AVG(prev_pct) last month %, AVG(curr_pct) this month %. 'Relative 30%' = qualifies_relative; 'live readings' = qualifies_live. Lists: meter_no, prev_pct, curr_pct, reduction_pp ORDER BY reduction_pp DESC LIMIT 10."
+      - "Which card: 'alert(s)' / 'threshold exceeded' / Critical-Poor-Average grades = *_alerts; 'reduc*' / 'improv*' / '30%' / '30 points' = *_reduction; else voltage_imbalance / current_imbalance. Voltage vs current: pick the table the question names; 'phase imbalance' without voltage/current = both (two queries or two subqueries). 'unbalance', VUI, '% time ... >10%', 'unacceptable' are the Power Quality cards (mdm_power_quality), never these tables."
+      - "Athena: COUNT_IF / FILTER, no '::' casts; ROUND percentages to 2 decimals. Never JOIN these tables row-by-row on meter_no (different populations); combine aggregates only."
+    example:
+      question: "Phase imbalance reduced by minimum 30% in Kashi"
+      sql: |
+        SELECT (SELECT MAX(month_date) FROM (SELECT month_date FROM hes_gold.dt_load_profile WHERE month_date >= DATE '2026-06-01' GROUP BY month_date HAVING COUNT(DISTINCT data_date) >= 10) c) AS data_month,
+               (SELECT COUNT(*) FROM hes_gold.voltage_imbalance_reduction
+                WHERE data_date = (SELECT MAX(month_date) FROM (SELECT month_date FROM hes_gold.dt_load_profile WHERE month_date >= DATE '2026-06-01' GROUP BY month_date HAVING COUNT(DISTINCT data_date) >= 10) c)
+                  AND qualifies AND LOWER(cluster) = 'kashi') AS voltage_meters_improved,
+               (SELECT COUNT(*) FROM hes_gold.current_imbalance_reduction
+                WHERE data_date = (SELECT MAX(month_date) FROM (SELECT month_date FROM hes_gold.dt_load_profile WHERE month_date >= DATE '2026-06-01' GROUP BY month_date HAVING COUNT(DISTINCT data_date) >= 10) c)
+                  AND qualifies AND LOWER(cluster) = 'kashi') AS current_meters_improved
+
+  # Operation Analytics anomaly / data cards (HES meter data on Athena hes_gold). Formulas follow the dashboard's
+  # generic KpiBoard tiles (HES-FRONTEND-GMR src/kpi/cards.js + rollup.js over HES-BACKEND-GMR /breakdown) on the
+  # tables gmr-etl kpi_40/30/31/41/47 write; references recomputed live 10 Nov 2026. Default month = the board default
+  # (latest month with >= 10 days of readings = July 2026), the same expression as the power-quality cards.
+  mdm_reverse_flow:
+    domain: mdm
+    title: "Reverse flow (net meters not exporting, non-net meters exporting)"
+    description: "The Operation Analytics card Reverse Flow: consumer meters whose export is wrong for their type -- net (solar) meters that exported nothing all month, and meters that are not net meters but exported energy; flagged meters, by type / area / month, export kWh, one meter."
+    keywords: [reverse flow, reverse energy, export, exporting, exported, kwh export, net meter, net metering, net-metered, nsm, solar, rooftop, non net meter, net meter not exporting, never exported, unauthorised generation, backfeed, anomaly type]
+    tables: [reverse_flow]
+    answer_notes:
+      - "Always name the month (data_month, e.g. 2026-07-01 = July 2026). With no month asked it is the dashboard's default month: the latest month with at least 10 days of readings (July 2026; August 2026 holds only 2-3 days)."
+      - "Lead with Total Flagged Meters, then its two kinds: net meters that exported nothing all month (likely miswired, dead inverter or export register) and non-net meters that exported (unauthorised generation or wrong meter type on record). Export by a net meter is normal and never counted."
+      - "The card's Export (kWh) tile is the AVERAGE export per flagged meter (non-exporting net meters count as 0) -- say 'average per flagged meter'; total kWh only when asked."
+    rules:
+      - "hes_gold.reverse_flow: one row per consumer meter (consumer_1_phase / consumer_3_phase only) per month, EVERY consumer checked -- findings are is_anomaly = true. Month: data_date = month 1st; no month = (SELECT MAX(month_date) FROM (SELECT month_date FROM hes_gold.dt_load_profile WHERE month_date >= DATE '2026-06-01' GROUP BY month_date HAVING COUNT(DISTINCT data_date) >= 10) c). Month-wise = GROUP BY data_date. Never sum months."
+      - "Card tiles: total flagged meters = COUNT_IF(is_anomaly); net meters not exporting = COUNT_IF(anomaly_type = 'net_meter_non_exporting'); non-net meters exporting = COUNT_IF(anomaly_type = 'non_net_meter_exporting'); Export (kWh) tile = ROUND(AVG(CASE WHEN is_anomaly THEN total_kwh_export END), 2). Consumers checked = COUNT(*); net meters = COUNT_IF(is_net_meter) (smart_meter_type 'NSM1-PH' / 'NSM3-PH'). A share = flagged * 100.0 / COUNT(*)."
+      - "By area (chart: meters per circle split by type): WHERE is_anomaly AND <area> IS NOT NULL GROUP BY circle (default) / zone / division / feeder_code ORDER BY flagged DESC. Lists: anomaly_type = '...' ORDER BY total_kwh_export DESC (kWh, 2 decimals) LIMIT 10. One meter: meter_no = 'X' -- anomaly_type NULL = no anomaly."
+      - "Places: cluster 'Agra' / 'Kashi' / 'Triveni' (LOWER(cluster) = 'kashi'); discom_code 'DVVNL' / 'PUVVNL'; zone / circle / division / sub_division upper-case (UPPER(col) LIKE '%NAME%'); category consumer_1_phase / consumer_3_phase."
+    example:
+      question: "Reverse flow anomalies in Kashi"
+      sql: |
+        SELECT MAX(data_date) AS data_month,
+               COUNT_IF(is_anomaly) AS total_flagged_meters,
+               COUNT_IF(anomaly_type = 'net_meter_non_exporting') AS net_meters_not_exporting,
+               COUNT_IF(anomaly_type = 'non_net_meter_exporting') AS non_net_meters_exporting,
+               ROUND(AVG(CASE WHEN is_anomaly THEN total_kwh_export END), 2) AS avg_export_kwh_per_flagged_meter
+        FROM hes_gold.reverse_flow
+        WHERE data_date = (SELECT MAX(month_date) FROM (SELECT month_date FROM hes_gold.dt_load_profile WHERE month_date >= DATE '2026-06-01' GROUP BY month_date HAVING COUNT(DISTINCT data_date) >= 10) c)
+          AND LOWER(cluster) = 'kashi'
+
+  mdm_meter_data:
+    domain: mdm
+    title: "Meter data health (Data Quality Issues: partial days; Meters Stopped Communicating: silent / never reported)"
+    description: "The Operation Analytics cards Data Quality Issues (meters reporting only part of a day's 48 half-hour readings: partial days, partial-day %, completeness %, weekly / daily view) and Meters Stopped Communicating (meters silent 3+ days or never reported: days since last seen, silence period buckets, by meter type / area, one meter's last contact)."
+    keywords: [data quality, data quality issues, partial day, partial days, incomplete data, missing readings, missing blocks, completeness, data completeness, blocks reported, stopped communicating, not communicating, non-communicating meters, silent meters, gone silent, last seen, last communicated, last reading, days since last seen, never reported, no data received, silence period, communication failure]
+    tables: [data_quality_issues, data_quality_issues_daily, communication_failures]
+    answer_notes:
+      - "Always name the month (data_month). No month asked = the dashboard default month (July 2026, the latest with at least 10 days of readings)."
+      - "Data quality: a partial day = a day the meter sent 2-46 of its 48 half-hour readings (0-1 is a silent day, 47-48 complete). Quote partial days, meters with partial days and the average completeness %. Partial-day % and completeness % are averages per meter."
+      - "Meters stopped communicating: a meter is listed once it has been silent 3+ days at the end of the month's data (July data runs to 24 Jul). Always give silent meters split into never reported (no reading ever -- a commissioning problem) and stopped after reporting. These are HES meter readings, not O&M complaint tickets."
+    rules:
+      - "Month: data_quality_issues / communication_failures: data_date = month 1st; data_quality_issues_daily: month_date = month 1st (data_date is the DAY). No month = (SELECT MAX(month_date) FROM (SELECT month_date FROM hes_gold.dt_load_profile WHERE month_date >= DATE '2026-06-01' GROUP BY month_date HAVING COUNT(DISTINCT data_date) >= 10) c). Never sum months."
+      - "Data Quality Issues card (hes_gold.data_quality_issues, one row per meter per month, EVERY meter with readings): meters = COUNT(*); partial days = SUM(partial_days); meters with partial days = COUNT_IF(partial_days > 0); partial days % = ROUND(AVG(partial_day_pct), 2); completeness % = ROUND(AVG(avg_completeness_pct), 2). By area: GROUP BY circle (default) ORDER BY SUM(partial_days) DESC."
+      - "Weekly / daily view (hes_gold.data_quality_issues_daily, one row per PARTIAL meter-day only): flagged meter-days = COUNT(*), meters affected = COUNT(DISTINCT meter_no), GROUP BY week_label ('Week 1 July' = days 1-7 ... 'Week 5 July' = 29-31; ORDER BY MIN(data_date)) or data_date; missing_blocks, completeness_pct per row. Days / weeks with issues = COUNT(DISTINCT data_date / week_label)."
+      - "Meters Stopped Communicating (hes_gold.communication_failures, one row per SILENT meter -- days_since_last_seen >= 3 -- per month): silent meters = COUNT(*); never reported = COUNT_IF(never_reported); stopped after reporting = COUNT_IF(NOT never_reported); average days silent = ROUND(AVG(days_since_last_seen), 2); data up to = MAX(window_end). Silence period = nc_bucket, stored 'Non_Communicating_3_30_Days' / 'Non_Communicating_31_60_Days' / 'Non_Communicating_61_90_Days' / 'Non_Communicating_More_than_90_Days' (order by MIN(days_since_last_seen)). Meter type = category ('consumer_1_phase', 'consumer_3_phase', 'consumer_ht', 'dt_meter', 'feeder'). One meter: meter_no = 'X' -> last_seen_date, days_since_last_seen; no row = it reported within 3 days of the data's end."
+      - "Places: cluster 'Agra' / 'Kashi' / 'Triveni' (LOWER(cluster) = 'agra'); zone / circle / division / sub_division upper-case (UPPER(col) LIKE '%NAME%'). communication_failures has ~107,500 meters with NULL area every month: totals keep them, rankings skip them (zone IS NOT NULL)."
+    example:
+      question: "How many meters have stopped communicating?"
+      sql: |
+        SELECT MAX(data_date) AS data_month, MAX(window_end) AS data_up_to,
+               COUNT(*) AS silent_meters,
+               COUNT_IF(never_reported) AS never_reported,
+               COUNT_IF(NOT never_reported) AS stopped_after_reporting,
+               ROUND(AVG(days_since_last_seen), 2) AS avg_days_silent
+        FROM hes_gold.communication_failures
+        WHERE data_date = (SELECT MAX(month_date) FROM (SELECT month_date FROM hes_gold.dt_load_profile WHERE month_date >= DATE '2026-06-01' GROUP BY month_date HAVING COUNT(DISTINCT data_date) >= 10) c)
+
+  mdm_hidden_outage:
+    domain: mdm
+    title: "Hidden outage pockets (hidden power event, outage not recorded, unreported block-load gap, abnormal current flow)"
+    description: "The Operation Analytics card Hidden Outage Pockets and its four detector rows: meters whose readings contradict the outage record -- current flowing during a reported outage (Hidden Power Event), voltage and current at zero with no outage logged (Outage Not Recorded), no reading at all inside a reported outage (Unreported Block-Load Gap), current on a phase with no voltage (Abnormal Current Flow); flagged meters, % half-hours flagged, flagged events, by detector / area / meter type, one meter."
+    keywords: [hidden outage, hidden outages, hidden outage pockets, hidden power event, power during outage, current during outage, outage not recorded, unrecorded outage, unlogged outage, outage nobody logged, unreported outage, unreported block-load gap, unreported blockload gap, block load gap, missing readings during outage, abnormal current flow, current without voltage, zero voltage current, detector, flagged events, slots flagged]
+    tables: [hidden_outage_summary, hidden_outage_events]
+    answer_notes:
+      - "Always name the month (data_month). No month = the dashboard default month (July 2026). July is the only month with all four detectors: June has no Hidden Power Event, August (2-3 days) only Outage Not Recorded and Abnormal Current Flow."
+      - "Total Flagged Meters counts a meter once even if several detectors flagged it; per-detector meter counts add up to more. % slots flagged = flagged half-hours as a share of the half-hours each detector checks (Abnormal Current Flow has no such base). Flagged events = outages (or, for Outage Not Recorded, unlogged dark spells) containing a flagged half-hour."
+      - "These are not outage counts or SAIDI/SAIFI (reliability cards) and not the feeder-mapping outage match."
+    rules:
+      - "hes_gold.hidden_outage_summary: one row per meter x detector per month, data_date = month 1st; no month = (SELECT MAX(month_date) FROM (SELECT month_date FROM hes_gold.dt_load_profile WHERE month_date >= DATE '2026-06-01' GROUP BY month_date HAVING COUNT(DISTINCT data_date) >= 10) c). detector = 'hidden_power_event' / 'outage_not_recorded' / 'unreported_blockload_gap' / 'abnormal_current_flow'; a detector card = WHERE detector = '...'; the consolidated card = all four."
+      - "Card tiles: total flagged meters = COUNT(DISTINCT meter_no); % slots flagged = ROUND(SUM(total_block_count_flagged) * 100.0 / SUM(total_block_count), 2) (never AVG(pct_blocks_flagged)); flagged events = SUM(total_flagged_occurrences); events checked = SUM(total_occurrences); half-hours flagged = SUM(total_block_count_flagged). Per detector: GROUP BY detector, COUNT(DISTINCT meter_no), NULLIF the denominator (abnormal_current_flow has NULL total_block_count / occurrences)."
+      - "By area / type: GROUP BY circle (default) / zone / division / feeder_code / category ('feeder', 'dt_meter', 'consumer_3_phase', 'consumer_1_phase') with <area> IS NOT NULL, ORDER BY meters DESC. Places: cluster 'Agra' / 'Kashi' / 'Triveni' (LOWER(cluster)); zone..sub_division upper-case. No sub_station, dtr_code or role column."
+      - "One meter: summary WHERE meter_no = 'X' (detector, days_affected, total_block_count_flagged, pct_blocks_flagged, total_flagged_occurrences, first_slot / last_slot are UTC -- show AT TIME ZONE 'Asia/Kolkata'). Slot-by-slot list only from hes_gold.hidden_outage_events WHERE meter_no = 'X' AND month_date = ... (it holds 300M+ rows a month -- never scan it without meter_no)."
+    example:
+      question: "Hidden outage pockets detector-wise"
+      sql: |
+        SELECT MAX(data_date) AS data_month, detector,
+               COUNT(DISTINCT meter_no) AS meters,
+               ROUND(SUM(total_block_count_flagged) * 100.0 / NULLIF(SUM(total_block_count), 0), 2) AS pct_slots_flagged,
+               SUM(total_flagged_occurrences) AS flagged_events
+        FROM hes_gold.hidden_outage_summary
+        WHERE data_date = (SELECT MAX(month_date) FROM (SELECT month_date FROM hes_gold.dt_load_profile WHERE month_date >= DATE '2026-06-01' GROUP BY month_date HAVING COUNT(DISTINCT data_date) >= 10) c)
+        GROUP BY detector
+        ORDER BY meters DESC
+
+  mdm_spike_drop:
+    domain: mdm
+    title: "Consumption spikes / drops (abnormal half-hour consumption readings)"
+    description: "The Operation Analytics card Consumption Spikes / Drops: meters with 10+ half-hour kWh readings outside their own monthly baseline +/- 3 sigma; flagged meters, spike vs drop meters, spike / drop readings, by area / meter type / month, one meter's flagged readings."
+    keywords: [consumption spike, consumption drop, spikes, drops, spikes and drops, spike drop, abnormal consumption, unusual consumption, sudden jump, sudden fall, outlier readings, outliers, abnormal readings, baseline, 3 sigma, kwh import spike]
+    tables: [consumption_spike_drop, consumption_spike_drop_detail]
+    answer_notes:
+      - "Always name the month (data_month). No month = the dashboard default month (July 2026). August has only 2-3 days (2,320 meters) -- never use it for a trend."
+      - "A reading is a spike (drop) when it is more than 3 x the spread of the meter's own 48 half-hour baselines above (below) that half-hour's monthly average; a meter is flagged with 10 or more such readings in the month, and called a Spike meter when spikes >= drops, else a Drop meter. Outlier readings is an average per flagged meter."
+    rules:
+      - "hes_gold.consumption_spike_drop: one row per meter per month, the WHOLE fleet -- findings are is_spike_or_drop_suspect = true. Month column is month_date (no data_date): month_date = (SELECT MAX(month_date) FROM (SELECT month_date FROM hes_gold.dt_load_profile WHERE month_date >= DATE '2026-06-01' GROUP BY month_date HAVING COUNT(DISTINCT data_date) >= 10) c) when no month is asked."
+      - "Card tiles (always AND is_spike_or_drop_suspect): flagged meters = COUNT(*); spike meters = COUNT_IF(meter_flag = 'Spike'); drop meters = COUNT_IF(meter_flag = 'Drop'); outlier readings = ROUND(AVG(total_outliers), 2) (average per meter); spike readings = SUM(spike_count); drop readings = SUM(drop_count). By area / type: GROUP BY circle (default) / zone / division / category with <area> IS NOT NULL ORDER BY flagged DESC."
+      - "One meter's flagged readings: hes_gold.consumption_spike_drop_detail WHERE meter_no = 'X' AND month_date = ... -- data_date, block_time (UTC 'HH:MM'), actual_kwh_import, baseline_mean, upper, lower, flag 'Spike' / 'Drop', deviation; ORDER BY data_date, block_time LIMIT 500. It holds only suspect meters' outlier readings (90M+ rows a month): never scan it without meter_no."
+      - "Places: cluster 'Agra' / 'Kashi' / 'Triveni' (LOWER(cluster)); zone..sub_division upper-case; category 'consumer_1_phase' / 'consumer_3_phase' / 'consumer_ht' / 'dt_meter' / 'feeder'. Never JOIN the two tables for a count."
+    example:
+      question: "Consumption spikes and drops in Agra"
+      sql: |
+        SELECT MAX(month_date) AS data_month,
+               COUNT(*) AS flagged_meters,
+               COUNT_IF(meter_flag = 'Spike') AS spike_meters,
+               COUNT_IF(meter_flag = 'Drop') AS drop_meters,
+               ROUND(AVG(total_outliers), 2) AS avg_outlier_readings_per_meter,
+               SUM(spike_count) AS spike_readings,
+               SUM(drop_count) AS drop_readings
+        FROM hes_gold.consumption_spike_drop
+        WHERE month_date = (SELECT MAX(month_date) FROM (SELECT month_date FROM hes_gold.dt_load_profile WHERE month_date >= DATE '2026-06-01' GROUP BY month_date HAVING COUNT(DISTINCT data_date) >= 10) c)
+          AND is_spike_or_drop_suspect AND LOWER(cluster) = 'agra'
+
+  mdm_power_factor:
+    domain: mdm
+    title: "Power factor (Low Power Factor (%) by DT/Feeder, Power factor deterioration)"
+    description: "The Technical cards on power factor: Low Power Factor (%) by DT/Feeder (meters whose share of readings below PF 0.9 is 20%+ for 3+ observed days -- severity Critical / Poor / Average / Borderline, avg low PF %, ageing days, streak coverage; by circle / zone / category, DT and feeder meters, one meter's PF) and Power factor deterioration (meters with > 3 consecutive days of mostly-poor PF, by PF band Critical / Poor / Moderate, category, circle, days in band)."
+    keywords: [power factor, pf, low power factor, low pf, below 0.9, pf below 0.9, poor power factor, bad power factor, kvah, reactive, lagging, leading pf, pf deterioration, power factor deterioration, deteriorating, pf band, pf issue, meters with pf issue, critical pf, poor pf, moderate pf, borderline, avg low pf, ageing days, streak, streak coverage, low pf by dt, low pf by feeder]
+    tables: [lpf2_low_power_factor, lpf2_low_power_factor_meters, lpf2_low_power_factor_daily, power_factor_deterioration, power_factor_deterioration_meters]
+    answer_notes:
+      - "Always name the month. No month asked = the dashboard default, July 2026 (latest month with 10+ days of readings; August has 2-3). Low Power Factor months are rolling 90-day snapshots (July = readings up to 24 July, June included) -- say 'as of <month>', never add months."
+      - "Low Power Factor card: a meter is flagged when it is Borderline or worse (share of its PF-valid half-hours below 0.9: Critical > 50%, Poor > 35%, Average > 25%, Borderline >= 20%) and has 3+ observed flagged days in its current run. Quote meters flagged, avg low PF % and max ageing days; give streak coverage beside ageing (low coverage = sparse feed, not a chronic meter). All flagged meters are in the 3-30 Days band today."
+      - "How a meter's low PF % is worked out (explain in these words, never as a formula with column names): each half-hour's power factor = kWh / kVAh (half-hours with no kVAh are skipped); low PF % = the share of the meter's valid half-hours with PF below 0.9, over a trailing 90-day window ending on the month's last day of readings (July = June + July). Severity comes from that share; a day is flagged when 20%+ of its readings (at least 12 that day) are below 0.9, and ageing = flagged days in the current run. The card's avg low PF % is the average of those meter shares across the area's groups."
+      - "Power factor deterioration: Meters with PF issue = meters with more than 3 consecutive days where at least half the readings had PF < 0.95; band by the day's dominant PF: Critical < 0.30, Poor 0.30-0.85, Moderate 0.85-0.95, Leading PF > 1.0. Quote Poor + Critical and Critical with their % of meters with PF issue."
+      - "The two cards are different measures: 'low power factor' = the Low PF card; 'deteriorat*' / 'PF band' / 'PF issue' = Power factor deterioration. Quote meters as whole numbers, % with 2 decimals."
+    rules:
+      - "Month: data_date = month 1st. No month / 'latest' = data_date = (SELECT MAX(month_date) FROM (SELECT month_date FROM hes_gold.dt_load_profile WHERE month_date >= DATE '2026-06-01' GROUP BY month_date HAVING COUNT(DISTINCT data_date) >= 10) c); named month = DATE 'YYYY-MM-01'; month-wise = GROUP BY data_date. lpf2_low_power_factor_daily is one row per meter per DAY: filter data_date BETWEEN the month's 1st and last day. SELECT the month as data_month."
+      - "Places: lpf2_low_power_factor, power_factor_deterioration(_meters) have NO cluster -- project = zones: Agra UPPER(zone) IN ('AGRA','ALIGARH','ETAH','FIROZABAD','MATHURA'), Kashi ('AZAMGARH','VARANASI I','VARANASI II'), Triveni ('MIRZAPUR','PRAYAGRAJ I','PRAYAGRAJ II'); lpf2_low_power_factor_meters also has cluster 'Agra'/'Kashi'/'Triveni'. Meter type = category: 'consumer_1_phase', 'consumer_3_phase', 'consumer_ht', 'dt_meter' (DT), 'feeder'. 'By DT / feeder' = category IN ('dt_meter','feeder')."
+      - "Low PF card (hes_gold.lpf2_low_power_factor, rollup of aged meters): ALWAYS WHERE severity NOT IN ('Normal','NoData'). Meters = SUM(unique_meter_count); avg low PF % = ROUND(AVG(avg_low_pf_pct), 2); max ageing days = MAX(max_ageing_days) (never SUM); avg streak coverage % = ROUND(AVG(avg_streak_coverage_pct), 2). By severity / ageing_bucket / circle / zone / category = GROUP BY that column, same measures, ORDER BY meters DESC. No feeder_code / dtr_code / meter_no on this table."
+      - "One meter / feeder / DT, or lists (hes_gold.lpf2_low_power_factor_meters, one row per meter): low_pf_pct, low_blocks, total_blocks (PF-valid half-hours), severity, ageing_days, ageing_bucket, streak_coverage_pct, avg_pf, min_pf, as_of_date. One meter = meter_no = 'X'; a feeder's own PF = category = 'feeder' AND feeder_code = 'X'; a DT = category = 'dt_meter' AND (dtr_code = 'X' OR meter_no = 'X'). Worst lists: WHERE severity NOT IN ('Normal','NoData') AND ageing_days >= 3 ORDER BY low_pf_pct DESC, total_blocks DESC LIMIT 10. Share of meters flagged = that count * 100.0 / COUNT_IF(severity <> 'NoData'); share of readings below 0.9 = SUM(low_blocks) * 100.0 / SUM(total_blocks). Day-wise for one meter = lpf2_low_power_factor_daily (pct_time_low_pf, avg_power_factor, status, is_flagged_day)."
+      - "PF deterioration: band counts = SUM(unique_meter_count) FROM hes_gold.power_factor_deterioration GROUP BY pf_band ('Critical','Poor','Moderate','Leading PF'). Meters with PF issue (total) = COUNT(DISTINCT meter_no) FROM hes_gold.power_factor_deterioration_meters (a meter can sit in two bands -- never sum bands for the total). Poor + Critical = band sum for pf_band IN ('Poor','Critical'); % = * 100.0 / total. Days in band = qualifying_days on _meters (MIN, APPROX_PERCENTILE 0.5 / 0.9, MAX, AVG by pf_band). Per area: band shares = band SUM / area SUM * 100."
+      - "Counting flagged meters on hes_gold.lpf2_low_power_factor_meters (lists, both-months, joins with power_factor_deterioration_meters, medians) ALWAYS WHERE severity NOT IN ('Normal','NoData') AND ageing_days >= 3 -- the card's own rule (the rollup holds only these meters). Without ageing_days >= 3, July = 868,698 meters instead of the card's 711,642. Only a one-meter lookup (meter_no = 'X') skips it."
+      - "Median / percentile of low PF % = APPROX_PERCENTILE(low_pf_pct, p) FROM hes_gold.lpf2_low_power_factor_meters with the flagged filter above -- never a percentile of avg_low_pf_pct on the rollup (that is a mean per group, not a meter)."
+      - "PF deterioration meters per project / zone / circle (no band asked) = COUNT(DISTINCT meter_no) FROM hes_gold.power_factor_deterioration_meters GROUP BY the place -- never SUM(unique_meter_count) across bands (Agra 291,868 distinct vs 361,738 summed)."
+      - "Forecasts / months with no data: HES data runs June-August 2026 (August holds only 2-3 days). A question about September 2026 or later, 'next month', 'predict' or 'if the trend continues' = query the month-wise series (data_date BETWEEN DATE '2026-06-01' AND DATE '2026-08-01' GROUP BY data_date) and project from the COMPLETE months (June, July) -- never pin the empty month (it returns 0 rows), never let partial August drive the trend. Low PF months are trailing 90-day windows: say the projection is indicative."
+      - "Legacy hes_gold.low_power_factor* and voltage_deviation are not used. ROUND to 2 decimals; never JOIN two of these tables."
+    example:
+      question: "How many meters have low power factor in Kashi?"
+      sql: |
+        SELECT MAX(data_date) AS data_month,
+               SUM(unique_meter_count) AS low_pf_meters,
+               ROUND(AVG(avg_low_pf_pct), 2) AS avg_low_pf_pct,
+               MAX(max_ageing_days) AS max_ageing_days,
+               ROUND(AVG(avg_streak_coverage_pct), 2) AS avg_streak_coverage_pct
+        FROM hes_gold.lpf2_low_power_factor
+        WHERE data_date = (SELECT MAX(month_date) FROM (SELECT month_date FROM hes_gold.dt_load_profile WHERE month_date >= DATE '2026-06-01' GROUP BY month_date HAVING COUNT(DISTINCT data_date) >= 10) c)
+          AND severity NOT IN ('Normal', 'NoData')
+          AND UPPER(zone) IN ('AZAMGARH', 'VARANASI I', 'VARANASI II')
+
+  # Operation Parameters reliability cards (HES dashboard: Reliability Trends, Number / Duration of Outages,
+  # Feeders with Maximum Outages, Reliability Improvement Trend, SAIDI..MAIFI). gmr-etl kpi_20 / kpi_25 / kpi_26;
+  # references recomputed live 10 Nov 2026 (grpD/refs.json).
+  mdm_reliability:
+    domain: mdm
+    title: "Supply reliability (SAIDI, SAIFI, CAIDI, CAIFI, MAIFI, outage frequency and duration, reliability improvement)"
+    description: "The Operation Parameters reliability cards: SAIDI / SAIFI / CAIDI / CAIFI / MAIFI (fleet, by project / zone / circle / division / feeder category, worst and best feeders, one feeder), the Reliability Trends monthly chart, Number of Outages (Frequency), Duration of Outages (Minutes), Feeders with Maximum Outages (top feeders / DTs / consumers by outage count or minutes, comparison by area), Reliability Improvement Trend (period-over-period change in the indices)."
+    keywords: [saidi, saifi, caidi, caifi, maifi, reliability, reliability index, reliability indices, reliability trend, reliability improvement, interruption, interruptions, momentary interruption, sustained, outage, outages, number of outages, outage frequency, outage duration, duration of outages, outage minutes, feeders with maximum outages, most outages, tripped, trips, went off, without power, power cut, worst feeders, best feeders, feeder category, improvement, improved, worsened, first half, second half]
+    tables: [reliability_indices, outage_ranking, reliability_improvement_trends]
+    answer_notes:
+      - "Always name the month (data_month). With no month asked it is the dashboard's default month: July 2026 (the latest month with at least 10 days of readings). Outage data is thin outside July: June holds only Agra's (DVVNL) outages over 6 days, August has none (every index 0, no outage_ranking rows) -- say so whenever June or August appears, and never call a June-to-July rise a real deterioration."
+      - "Meanings: SAIDI = outage minutes per consumer served in the month; SAIFI = interruptions per consumer served; CAIDI = minutes per interruption (SAIDI / SAIFI); CAIFI = interruptions per consumer actually affected; MAIFI = momentary (< 5 min) interruptions per consumer served. SAIDI/SAIFI here count momentary outages too (source behaviour, not IEEE 1366). Units: SAIDI and CAIDI in minutes, the rest are counts per consumer -- 2 decimals (MAIFI 4)."
+      - "Reliability indices are consumer outages rolled up to each consumer's feeder; Number / Duration of Outages count the outages a meter itself recorded (feeder meter, DT meter or consumer meter). Say which one you quote."
+      - "Rankings: the first row of RESULT is the answer; feeder lists show feeder_code (+ feeder_name). Worst/best feeder lists only rate feeders with >= 100 consumers and outage lists leave out meters with fewer than 5 outages -- say so in one clause."
+      - "Reliability Improvement Trend: positive % = improved (fewer / shorter interruptions). July holds two comparisons -- June vs July (months) and July 1-15 vs 16-31 (halves); quote each by its label. The card's % is a plain average of each feeder's own %, swamped by feeders with tiny baselines; give the fleet before/after figures too when asked if reliability improved."
+    rules:
+      - "Month: data_date = month 1st (reliability_indices, outage_ranking: 2026-06-01, 2026-07-01, + 2026-08-01 on reliability_indices). No month / 'current' / 'latest' = (SELECT MAX(month_date) FROM (SELECT month_date FROM hes_gold.dt_load_profile WHERE month_date >= DATE '2026-06-01' GROUP BY month_date HAVING COUNT(DISTINCT data_date) >= 10) c). Month-wise = GROUP BY data_date. Never sum months."
+      - "reliability_indices: one row per feeder per month (4,976 feeders, every feeder incl. zero-outage ones). Fleet / area index = re-derive from summed raw totals, NEVER AVG(saidi): SAIDI = SUM(dur) / SUM(total_consumers); SAIFI = SUM(events) * 1.0 / SUM(total_consumers); CAIDI = SUM(dur) / SUM(events); CAIFI = SUM(events) * 1.0 / SUM(affected); MAIFI = SUM(momentary) * 1.0 / SUM(total_consumers). Card tiles and area charts use ALL feeders; by area = GROUP BY circle (default) / zone / division / sub_division / feeder_category, worst first."
+      - "Worst / best N feeders: the feeder's own column (saidi / saifi / caidi / caifi / maifi) WHERE NOT below_min_consumers (>= 100 consumers) ORDER BY <index> DESC (worst) or ASC (best), feeder_code LIMIT N. Feeder type = LOWER(feeder_category) = 'rural' / 'urban' / 'urban hq' / 'urban tehsil' / 'agriculture' / 'industrial' / 'substation' / 'mixed' / 'independent' / 'ttz (taj trapezium zone)' / 'domestic'; NULL = unknown. One feeder: feeder_code = 'X' or UPPER(feeder_name) LIKE '%X%'."
+      - "outage_ranking: one row per meter per month with its own outages: outage_count, total_duration_min, avg_duration_min, max_duration_min, days_with_outage. ALWAYS pin category: 'feeder' (default; 'feeders with outages'), 'dt_meter' (DTs, label dtr_code), 'consumer_1_phase', 'consumer_3_phase', 'consumer_ht' -- never add categories together (one outage appears on the feeder, its DTs and its consumers). Top N (Number of Outages / Feeders with Maximum Outages / Duration of Outages) = WHERE NOT below_min_outages ORDER BY outage_count (or total_duration_min) DESC LIMIT N; feeder label = COALESCE(feeder_code, meter_no). Comparison by area = SUM(outage_count) or SUM(total_duration_min) GROUP BY circle (default) WHERE <area> IS NOT NULL, top 10, all meters (no < 5 filter). Average minutes per outage = SUM(total_duration_min) / SUM(outage_count)."
+      - "reliability_improvement_trends: one row per feeder per comparison: comparison_mode 'months' (comparison_label '2026-06 vs 2026-07', data_date = the later month) or 'halves' ('2026-07 days 1-15 vs 16-EOM', data_date 2026-07-16). A month = data_date >= month 1st AND < next month 1st (July returns both comparisons) -- always GROUP BY comparison_mode, comparison_label. Card % = ROUND(AVG(<index>_improvement_pct), 2) per comparison (NULL when the baseline was 0). Fleet before/after = SUM(prev_<i> * prev_total_consumers) / SUM(prev_total_consumers) vs the curr_ equivalent (SAIDI / SAIFI / MAIFI); improved = COUNT_IF(<i>_delta > 0) (delta = prev - curr), worsened = COUNT_IF(<i>_delta < 0)."
+      - "Places: cluster = project, stored 'Agra' / 'Kashi' / 'Triveni' (LOWER(cluster) = 'kashi'); discom_code 'DVVNL' / 'PUVVNL'; zone / circle / division / sub_division upper-case (UPPER(col) LIKE '%NAME%'); reliability_indices also has sub_station, feeder_name. Never JOIN two of these tables, and never use them for hidden-outage or mapping-audit questions."
+      - "ROUND minutes and indices to 2 decimals (MAIFI 4)."
+    example:
+      question: "SAIDI and SAIFI by zone in Kashi"
+      sql: |
+        SELECT MAX(data_date) AS data_month, zone, COUNT(*) AS feeders, SUM(total_consumers) AS consumers,
+               ROUND(SUM(dur) / NULLIF(SUM(total_consumers), 0), 2) AS saidi_min,
+               ROUND(SUM(events) * 1.0 / NULLIF(SUM(total_consumers), 0), 2) AS saifi,
+               ROUND(SUM(dur) / NULLIF(SUM(events), 0), 2) AS caidi_min
+        FROM hes_gold.reliability_indices
+        WHERE data_date = (SELECT MAX(month_date) FROM (SELECT month_date FROM hes_gold.dt_load_profile WHERE month_date >= DATE '2026-06-01' GROUP BY month_date HAVING COUNT(DISTINCT data_date) >= 10) c)
+          AND LOWER(cluster) = 'kashi'
+        GROUP BY zone
+        ORDER BY saidi_min DESC
+
+# Group F -- Finance energy-audit cards. Merge under business_rules.yaml `topics:` next to mdm_load_violation.
+  mdm_energy_loss:
+    domain: mdm
+    title: "Energy audit: Feeder Loss (%), LT Loss (%), Top X Best/Worst Feeders/DTs, Energy Gap (kWh)"
+    description: "The Finance energy-audit cards: Feeder Loss (%) (feeder meter input vs the energy its mapped consumers recorded), LT Loss (%) (same one level down, DT vs its consumers), Top X Best/Worst Feeders/DTs (also 'Top High Loss DTs / Feeders') ranked by loss %, Consumption Comparison - Energy Gap (kWh), and the AI-mapping basis of Feeder Loss (consumers attached by the outage-based mapping audit instead of the declared feeder). Tiles: total feeders/DTs, input MU, output MU, average loss %, credible %, units added; status split; feeder/DT lists; consumers behind one feeder/DT."
+    keywords: [feeder loss, lt loss, dt loss, line loss, technical loss, distribution loss, energy loss, energy audit, energy accounting, energy gap, consumption comparison, at&c, atc loss, input energy, net input, output unit, energy fed, energy recorded at consumers, unbilled energy, loss percentage, loss kwh, loss in mu, negative loss, credible feeders, loss category, top x, best feeders, worst feeders, high loss feeders, high loss dts, ai mapping basis, index mapping, units added]
+    tables: [feeder_loss, dt_loss, feeder_loss_ai, feeder_loss_consumers, dt_loss_consumers, feeder_loss_ai_consumers]
+    answer_notes:
+      - "Always name the month (data_month). With no month asked it is the dashboard default month (July 2026). These tables hold June and July 2026 only -- August was never computed: say so instead of showing an empty answer."
+      - "Loss % = (energy fed in - energy recorded at the mapped consumers) / energy fed in. An area's loss is fleet-weighted (its feeders' kWh summed, then divided) -- never an average of feeder percentages. Quote energy totals in MU (million kWh, 2 decimals) and single feeders/DTs in kWh."
+      - "Caveat every loss figure in one sentence: the feeder input carries the feeder meter's multiplying factor (2,000-8,000) while consumers use 1, and HES delivery is partial-month, so the absolute % (about 61% fleet-wide) is not a commercial loss; rankings between feeders are usable. Only 1.29% of feeders (92 of 7,154 in July) pass the dashboard's 'credible' gate. LT (DT) loss uses a placeholder MF of 1.0 and comes out NEGATIVE fleet-wide (-482%): say it is not a usable figure yet, give the counts."
+      - "Best-by-loss lists are led by feeders/DTs with impossible negative loss (consumers recorded more than the feeder meter -- a meter or mapping error); worst lists are led by feeders at 100% (input recorded, consumers reported nothing). Say which it is, and offer the credible-only ranking."
+      - "AT&C loss proper needs billing and collection efficiency, which are not in the data: answer with the feeder energy gap % (the dashboard's Energy Gap card calls it AT&C loss) and say it is the energy-side proxy."
+      - "AI basis (feeder_loss_ai) attaches only consumers the mapping audit CONFIRMED or REASSIGNED (about 61% of the fleet, no HT consumers), so its output reads lower and its loss higher than index basis -- that gap is coverage, not more theft."
+    rules:
+      - "Month: data_date = month 1st (stored 2026-06-01, 2026-07-01). No month / 'current' / 'latest' = (SELECT MAX(month_date) FROM (SELECT month_date FROM hes_gold.dt_load_profile WHERE month_date >= DATE '2026-06-01' GROUP BY month_date HAVING COUNT(DISTINCT data_date) >= 10) c). Named month = DATE 'YYYY-MM-01'. Month-wise = GROUP BY data_date. SELECT the month as data_month."
+      - "Which table: feeder / 'feeder loss' / 'energy gap' / 'consumption comparison' / 'AT&C' / 'energy audit' = hes_gold.feeder_loss; 'LT loss' / 'DT loss' / DTs / transformers = hes_gold.dt_loss; 'AI mapping / AI basis / outage-based mapping' = hes_gold.feeder_loss_ai (index vs AI = both, each aggregated in its own CTE, JOIN on cluster or feeder_code). One row per feeder (dt_loss: per DT) per month. Never JOIN feeder_loss to dt_loss."
+      - "Tiles (any scope, all rows -- no loss_category filter): feeders (DTs) = COUNT(*); input MU = SUM(net_input) / 1e6; output MU = SUM(asset_billed) / 1e6; energy gap MU = SUM(loss_kwh) / 1e6; average loss % = SUM(loss_kwh) * 100.0 / NULLIF(SUM(net_input), 0) (loss_kwh is NULL on no-consumer rows; keep the denominator over all rows, as the dashboard does); credible % = COUNT_IF(loss_credible) * 100.0 / COUNT(*); units added MU = SUM(added_kwh) / 1e6. Never AVG(loss_pct)."
+      - "Status split = COUNT(*) GROUP BY loss_category: POSITIVE_LOSS(_PARTIAL_MONTH) (input >= consumers), NEGATIVE_LOSS(_PARTIAL_MONTH) (consumers > input), NO_CHILDREN_MAPPED (no consumers attached, no loss %), PARENT_ERROR (feeder meter read 0 but consumers recorded energy), PARENT_NO_DATA (nothing reported). 'Negative loss' = loss_pct < 0. Only the two POSITIVE/NEGATIVE categories have a loss_pct."
+      - "Filters: 'credible only' = loss_credible AND NOT COALESCE(negative_loss, false); 'qualified' (full-month window) = is_qualified (FALSE for every July row). Places: cluster 'Agra' / 'Kashi' / 'Triveni' (LOWER(cluster) = 'kashi'); zone / circle / division / sub_division upper-case (UPPER(col) LIKE '%NAME%'); feeder_code; dtr_code on dt_loss (codes like 'SAR/SDH/DT049'); feeder_code on dt_loss = the DT's parent feeder. No category / meter_no on feeder_loss / dt_loss. dt_loss has 1 row with NULL dtr_code and cluster: keep it in fleet totals, label it '(no project)' in project splits."
+      - "Area breakdowns: GROUP BY cluster / zone / circle ... with the tile formulas, ORDER BY the asked measure. Project-wise with a Total: GROUP BY ROLLUP (cluster), label CASE WHEN GROUPING(cluster) = 1 THEN 'Total' ELSE cluster END AS project, ORDER BY GROUPING(cluster), <expression> (not the alias)."
+      - "Top X best / worst (default 10, the card allows 1-50): worst = ORDER BY loss_pct DESC NULLS LAST, net_input DESC; best = ORDER BY loss_pct ASC NULLS LAST, net_input DESC; LIMIT X. 'Highest energy gap / loss in kWh' = ORDER BY loss_kwh DESC NULLS LAST. Feeder list columns: feeder_code (dtr_code), cluster, zone, ROUND(loss_pct, 2), ROUND(net_input, 3) AS input_kwh, ROUND(asset_billed, 3) AS output_kwh, ROUND(loss_kwh, 3), children_mapped, children_reporting, loss_category. Feeders/DTs 'in the ranking' = loss_pct IS NOT NULL."
+      - "One feeder / DT: WHERE feeder_code = 'X' (dt_loss: dtr_code = 'X'). The window columns are named current_date / previous_date: ALWAYS write \"current_date\" in double quotes (bare current_date is today's date in Athena) and alias it (AS window_end). mapping_coverage is a 0-1 fraction (x 100 for %)."
+      - "Consumers behind one feeder / DT: hes_gold.feeder_loss_consumers WHERE feeder_code = 'X' (dt_loss_consumers: dtr_code = 'X'; AI basis: feeder_loss_ai_consumers), same data_date; one row per REPORTING consumer: meter_no, category, mapping_confidence, child_days, parent_days, raw_kwh, billed_kwh (pro-rated to the feeder's days; SUM = the feeder's asset_billed), added_kwh; ORDER BY billed_kwh DESC LIMIT 200."
+      - "Forecasts / months with no data: data runs June-July 2026 only. 'Next month' / September / 'if the trend continues' = the month-wise series (June, July) and a projection from them -- never pin an empty month."
+      - "ROUND % to 2 decimals, MU to 2, kWh to 3. Athena: no '::' casts; COUNT_IF for counts."
+    example:
+      question: "What is the feeder loss in Kashi?"
+      sql: |
+        SELECT MAX(data_date) AS data_month, COUNT(*) AS feeders,
+               ROUND(SUM(net_input) / 1e6, 2) AS input_mu,
+               ROUND(SUM(asset_billed) / 1e6, 2) AS output_mu,
+               ROUND(SUM(loss_kwh) / 1e6, 2) AS energy_gap_mu,
+               ROUND(SUM(loss_kwh) * 100.0 / NULLIF(SUM(net_input), 0), 2) AS average_loss_pct,
+               ROUND(COUNT_IF(loss_credible) * 100.0 / COUNT(*), 2) AS credible_pct
+        FROM hes_gold.feeder_loss
+        WHERE data_date = (SELECT MAX(month_date) FROM (SELECT month_date FROM hes_gold.dt_load_profile WHERE month_date >= DATE '2026-06-01' GROUP BY month_date HAVING COUNT(DISTINCT data_date) >= 10) c)
+          AND LOWER(cluster) = 'kashi'
+
+  # WFM: discom escalation detail (Athena gmr_wfm_silver.unified_discom_escalations; 10 Nov 2026)
+  om_escalation_detail:
+    domain: wfm
+    title: "Discom escalations in detail (ticket, feeder, technician, dates)"
+    description: "Ticket-level DISESC escalations: one ticket/meter/consumer's escalation history and discom decision, escalations by feeder / DTR / sub-station / technician / discom officer, daily or date-range counts, decisions in a month, tickets escalated more than once, discom remarks."
+    keywords: [escalation history, escalated ticket, ticket escalated, escalated again, more than once, repeat escalation, re-escalated, escalated by technician, technician escalated, feeder wise escalation, dtr wise escalation, sub station escalation, discom officer, discom supervisor, discom remark, discom said, decided on, approved on, rejected on, escalated on, escalated yesterday, escalated today, daily escalations, escalations between]
+    tables: [unified_discom_escalations]
+    answer_notes:
+      - "Card totals (escalated / pending / approved / rejected / older than 30 days / non-comm / average days) come from the Escalated to Discom card (om_escalations, public.gold_om_discom_escalation_snapshot); this table reconciles with it ticket for ticket (42,026 on 6 Nov). Use it only for what the card cannot split."
+      - "SmartEMS lists a ticket once per escalation; counts are TICKETS at their latest escalation unless the question asks for escalation events (daily escalations, escalations between dates) -- then say 'escalations' and also give distinct tickets."
+      - "Never show consumer_name, mobile_no, address, technician_number, escalation_supervisor_number, latitude/longitude."
+    rules:
+      - "gmr_wfm_silver.unified_discom_escalations (Athena, ~43k rows, all CONSUMER): one row per escalation (discom, ticket_id, escalated_on). Columns project (lower-case), discom ('DVVNL','PuVVNL'), zone..sub_division (upper-case), sub_station, feeder, dtr, consumer_number, old_meter_serial_number, ticket_id, complaint_reason, technician_remarks, technician_name, escalated_on, escalation_status ('Pending','Approved','Rejected', NULL), escalation_attended_on, escalation_supervisor (discom officer, set only once decided), escalation_supervisor_remarks."
+      - "Ticket counts: dedup to the latest escalation per ticket -- ROW_NUMBER() OVER (PARTITION BY UPPER(TRIM(discom)), UPPER(TRIM(ticket_id)) ORDER BY escalated_on DESC, escalation_attended_on DESC NULLS LAST, updated_at DESC, business_key_hash DESC) = 1, WHERE NULLIF(TRIM(ticket_id), '') IS NOT NULL AND escalated_on IS NOT NULL; times escalated = COUNT(*) OVER the same partition. Status = COALESCE(NULLIF(UPPER(TRIM(escalation_status)), ''), 'UNKNOWN')."
+      - "Timestamps are UTC: dates = CAST(col AT TIME ZONE 'Asia/Kolkata' AS date) (the card's months/ages use IST). 'Last N days' ends yesterday. Days to decide = date_diff('second', escalated_on, escalation_attended_on) / 86400.0 where escalation_attended_on >= escalated_on."
+      - "One ticket's history (ticket_id given) = all its rows ordered by escalated_on, no dedup. Lookup by meter: UPPER(TRIM(old_meter_serial_number)); by consumer: TRIM(consumer_number) (text, keep leading zeros); by ticket: UPPER(TRIM(ticket_id)). A meter/consumer can have several tickets."
+      - "Place filters: LOWER(TRIM(project)) = 'kashi'; UPPER(TRIM(zone)) = 'VARANASI II'. feeder / dtr / sub_station are free text with codes: GROUP BY them as stored, never guess a feeder name -- match with UPPER(feeder) LIKE UPPER('%<name>%')."
+      - "Discom officer-wise = escalation_supervisor (NULL while pending: filter IS NOT NULL). Technician-wise = technician_name as stored. Discom remarks are free text: UPPER(TRIM(escalation_supervisor_remarks)), blank -> 'NO REMARK'."
+    example:
+      question: "Top 10 feeders by tickets escalated to discom in Kashi"
+      sql: |
+        WITH latest AS (
+            SELECT d.*,
+                   COALESCE(NULLIF(UPPER(TRIM(d.escalation_status)), ''), 'UNKNOWN') AS status,
+                   ROW_NUMBER() OVER (PARTITION BY UPPER(TRIM(d.discom)), UPPER(TRIM(d.ticket_id))
+                                      ORDER BY d.escalated_on DESC, d.escalation_attended_on DESC NULLS LAST,
+                                               d.updated_at DESC, d.business_key_hash DESC) AS rk
+            FROM gmr_wfm_silver.unified_discom_escalations d
+            WHERE NULLIF(TRIM(d.ticket_id), '') IS NOT NULL AND d.escalated_on IS NOT NULL
+        )
+        SELECT feeder, COUNT(*) AS escalated_tickets, COUNT_IF(status = 'PENDING') AS discom_pending
+        FROM latest
+        WHERE rk = 1 AND LOWER(TRIM(project)) = 'kashi'
+        GROUP BY feeder
+        ORDER BY escalated_tickets DESC, feeder
+        LIMIT 10
+
+  # Technical > Load Management (remainder) + Theft Analysis cards. Formulas follow the dashboard KpiBoard over the
+  # tables gmr-etl kpi_60 / kpi_70 / kpi_72 / kpi_45 write; references recomputed live 10 Nov 2026 (default month July).
+  mdm_overload_diversion:
+    domain: mdm
+    title: "Overload / MD breach risk and theft / load diversion (consumer maximum demand vs sanctioned load, utilisation factor)"
+    description: "The Technical > Load Management cards Overload / MD breach risk (consumers whose maximum demand is 90%+ of sanctioned load, by risk bucket 90-105% / 106-120% / >120%, under 90% healthy) and Theft / Load diversion (consumers flagged for a low utilisation factor: energy recorded far below what their maximum demand implies): counts, % of consumers, by project / circle / zone / category, month-wise, one consumer."
+    keywords: [overload, md breach, breach risk, md risk, maximum demand risk, overload risk, at risk, risk bucket, 90-105%, 106-120%, above 120%, ">120%", under 90%, healthy, load diversion, diversion, diverting, diversion suspects, utilisation factor, utilization factor, uf, low utilisation, hollow consumption, bypass, theft / load diversion, credible sanctioned load]
+    tables: [overload_md_breach, load_diversion, load_assessed_consumers]
+    answer_notes:
+      - "Always name the month (data_month in RESULT). With no month asked it is the dashboard's default month: the latest month with at least 10 days of readings (July 2026 now; August 2026 holds only 2-3 days)."
+      - "MD breach risk: overload % = maximum demand / sanctioned load. Buckets: 90-105% (90 to under 106), 106-120%, >120% (above 120); below 90% = healthy. Quote meters at risk, the bucket counts and the % of consumers assessed (2 decimals). This card is 'at risk' -- different from % Consumers with Load Violation (more than 60% above sanctioned load)."
+      - "Caveat in one clause when quoting MD breach or diversion: about 63% of sanctioned loads are a 1 kW system default, so many flags rest on a doubtful sanctioned load (credible = sanctioned load above 1 kW, 37% of July's at-risk consumers)."
+      - "Load diversion: a consumer is flagged when its utilisation factor (energy recorded / (maximum demand x active hours)) is below 0.3. Roughly half of consumers are flagged (52% in July), so say 'flagged as diversion suspects by the dashboard rule', never 'stealing'."
+      - "Per-area answers: the first row of RESULT is the area with the most; check every row of the column you quote before naming the highest or lowest."
+    rules:
+      - "Forecasts / months with no data: HES data runs June-August 2026 (August holds only 2-3 days). 'next month' / 'predict' = query the month-wise series (GROUP BY data_date) and project from June and July; never pin an empty month."
+      - "Month: data_date = month 1st; no month / 'latest' = (SELECT MAX(month_date) FROM (SELECT month_date FROM hes_gold.dt_load_profile WHERE month_date >= DATE '2026-06-01' GROUP BY month_date HAVING COUNT(DISTINCT data_date) >= 10) c). Named month = DATE 'YYYY-MM-01'. SELECT the month as data_month. Never sum months."
+      - "Places: cluster 'Agra' / 'Kashi' / 'Triveni' (LOWER(cluster) = 'kashi'); zone / circle / division / sub_division upper-case (UPPER(col) LIKE '%NAME%'); category 'consumer_1_phase' / 'consumer_3_phase' only. One consumer = meter_no = 'X'."
+      - "hes_gold.overload_md_breach holds AT-RISK consumers only (one row per consumer, overload_pct >= 90): at risk = COUNT(DISTINCT meter_no); buckets = COUNT(DISTINCT meter_no) FILTER (WHERE risk_bucket = '>120%' / '106-120%' / '90-105%'); 'above 120%' = risk_bucket = '>120%' (never overload_pct > 120 on a filtered subset of another bucket). Consumers assessed = SUM(assessed_meters) FROM hes_gold.load_assessed_consumers with the SAME month and cluster / zone..sub_division / category filters (two CTEs; JOIN on the area column for per-area %). Under 90% = assessed - at risk; % at risk = at risk * 100.0 / assessed. Credible = sanctioned_load_kw > 1 (there is NO assessment_credible column). Lists: meter_no, sanctioned_load_kw, md_kw, overload_pct, risk_bucket ORDER BY overload_pct DESC LIMIT 200."
+      - "hes_gold.load_diversion holds EVERY scored consumer (one row per consumer per month) with is_diversion_suspect (= uf_value < 0.3): scored = COUNT(DISTINCT meter_no); suspects = COUNT(DISTINCT meter_no) FILTER (WHERE is_diversion_suspect); % = suspects * 100.0 / scored (same table, no other denominator); average UF = AVG(uf_value). Flagged consumers by area (the card's chart) = WHERE is_diversion_suspect GROUP BY circle (default level) ORDER BY 2 DESC. Columns: sanctioned_load_kw, md_kw, monthly_kwh, active_hours, uf_value, overload_pct."
+      - "Which table: 'MD breach' / 'overload risk' / 'risk bucket' / '90-105' / '106-120' / '120%' on consumers = overload_md_breach; 'diversion' / 'utilisation factor' / 'theft / load diversion' = load_diversion; 'load violation' / '60% above sanctioned' = load_violation (topic mdm_load_violation). Never JOIN overload_md_breach to load_diversion."
+      - "ROUND percentages to 2 decimals, UF to 4."
+    example:
+      question: "How many consumers are at MD breach risk in Kashi?"
+      sql: |
+        WITH m AS (SELECT MAX(month_date) AS mon FROM (SELECT month_date FROM hes_gold.dt_load_profile WHERE month_date >= DATE '2026-06-01' GROUP BY month_date HAVING COUNT(DISTINCT data_date) >= 10) c),
+             b AS (SELECT COUNT(DISTINCT meter_no) AS at_risk,
+                          COUNT(DISTINCT meter_no) FILTER (WHERE risk_bucket = '>120%') AS above_120,
+                          COUNT(DISTINCT meter_no) FILTER (WHERE risk_bucket = '106-120%') AS b_106_120,
+                          COUNT(DISTINCT meter_no) FILTER (WHERE risk_bucket = '90-105%') AS b_90_105
+                   FROM hes_gold.overload_md_breach WHERE data_date = (SELECT mon FROM m) AND LOWER(cluster) = 'kashi'),
+             a AS (SELECT SUM(assessed_meters) AS assessed FROM hes_gold.load_assessed_consumers
+                   WHERE data_date = (SELECT mon FROM m) AND LOWER(cluster) = 'kashi')
+        SELECT (SELECT mon FROM m) AS data_month, assessed, at_risk, above_120, b_106_120, b_90_105,
+               assessed - at_risk AS under_90, ROUND(at_risk * 100.0 / NULLIF(assessed, 0), 2) AS pct_at_risk
+        FROM b, a
+
+  mdm_theft_anomaly:
+    domain: mdm
+    title: "Theft analysis and anomalies (theft suspect flags, areas with highest theft risk, % reduction in theft events, total anomalies detected, repeat anomaly tracking)"
+    description: "The Technical > Theft Analysis cards: Theft Suspect Flags (meters with an evening-heavy or night-zero consumption pattern for 10+ days), Areas with Highest Theft Risk (theft-suspect and diversion-flagged meters per area), % Reduction in Theft Events (suspects this month vs last), Total Anomalies Detected (meters flagged per anomaly type), Repeat Anomaly Tracking (meters flagged by exactly 3 / 5 / 7 / 9 detector KPIs)."
+    keywords: [theft, theft suspect, theft suspects, suspect flags, energy theft, pilferage, chori, evening high, evening consumption, day night pattern, night zero, streak, theft risk, highest theft risk, risk areas, theft events, reduction in theft, theft reduction, theft trend, anomalies, anomaly, total anomalies, anomaly type, anomalies detected, repeat anomaly, repeat anomalies, flagged by kpis, multiple detectors, field visit candidates, flagged kpis]
+    tables: [energy_theft_suspect, theft_risk_by_area, theft_reduction_trend, total_anomalies_detected, repeat_anomaly_tracking]
+    answer_notes:
+      - "Always name the month (data_month in RESULT). With no month asked it is the dashboard's default month: July 2026 (the latest month with at least 10 days of readings). Theft suspects need a 10-day streak, so June (5 days of data) and August (2 days) show none -- say so instead of calling them theft-free."
+      - "Theft suspect = 10+ consecutive days with either more than 40% of the day's energy between 6 and 10 pm (evening_high) or near-zero night use with normal daytime use (day_night_pattern). A meter can show both patterns on different days, so the two pattern counts can add to slightly more than the total."
+      - "% Reduction in theft events: July compares with June, which had no suspects (too few days of data), so there is no baseline and the % cannot be computed -- give last month's and this month's suspects instead. August's 100% is from only 2 days of data; say it is not a real reduction."
+      - "Areas with highest theft risk and the anomaly roll-ups are built from the detector tables as they stood when the roll-up ran: July's areas card counts theft suspects only (no load-diversion flags), and July's anomaly totals have no Load Diversion, MD Breach Risk or Load Violation type. Mention this in one clause when quoting them."
+      - "Total anomalies: a meter flagged by two types counts once in each, so the grand total is anomaly flags, not distinct meters. Repeat anomaly: counted only when EXACTLY 3, 5, 7 or 9 detectors flagged the meter (4, 6, 8 are in no band)."
+      - "Per-area answers: the first row of RESULT is the area with the most; check every row before naming the highest or lowest."
+    rules:
+      - "Month: no month / 'latest' / 'this month' = (SELECT MAX(month_date) FROM (SELECT month_date FROM hes_gold.dt_load_profile WHERE month_date >= DATE '2026-06-01' GROUP BY month_date HAVING COUNT(DISTINCT data_date) >= 10) c). energy_theft_suspect: filter month_date (its data_date is the DAY -- never data_date = month 1st); every other table here: data_date = month 1st. SELECT the month as data_month. Never sum months."
+      - "Places: cluster 'Agra' / 'Kashi' / 'Triveni' (LOWER(cluster) = 'kashi') on energy_theft_suspect, theft_risk_by_area, total_anomalies_detected, repeat_anomaly_tracking. theft_reduction_trend has NO cluster: project = zones -- Agra = UPPER(zone) IN ('AGRA','ALIGARH','ETAH','FIROZABAD','MATHURA'), Kashi = ('AZAMGARH','VARANASI I','VARANASI II'), Triveni = ('MIRZAPUR','PRAYAGRAJ I','PRAYAGRAJ II'). zone / circle / division / sub_division upper-case. category 'consumer_1_phase' / 'consumer_3_phase' / 'consumer_ht' / 'dt_meter' / 'feeder' (theft_risk_by_area and repeat_anomaly_tracking have none)."
+      - "Theft Suspect Flags (hes_gold.energy_theft_suspect, one row per meter per DAY, whole fleet): ALWAYS AND is_theft_suspect; suspects = COUNT(DISTINCT meter_no); by pattern = COUNT(DISTINCT meter_no) FILTER (WHERE suspect_pattern = 'evening_high' / 'day_night_pattern'); by area = GROUP BY circle (default) ORDER BY 2 DESC; per meter lists GROUP BY meter_no with MAX(streak_length) AS longest_streak_days (never list day rows). Never COUNT(*) (counts meter-days)."
+      - "Areas with highest theft risk (hes_gold.theft_risk_by_area, one row per at-risk meter): at-risk meters = COUNT(DISTINCT meter_no) GROUP BY circle (default level) / zone / division / cluster ORDER BY 2 DESC; COUNT_IF(theft_flag) theft suspects, COUNT_IF(diversion_flag) diversion suspects, COUNT_IF(theft_flag AND diversion_flag) both."
+      - "% Reduction in theft events (hes_gold.theft_reduction_trend, one row per sub-division): prev = SUM(prev_suspects) (month in prev_period), curr = SUM(curr_suspects), reduction % = (SUM(prev_suspects) - SUM(curr_suspects)) * 100.0 / NULLIF(SUM(prev_suspects), 0). Never AVG(reduction_pct). By area = GROUP BY zone / circle with the same formula."
+      - "Total anomalies (hes_gold.total_anomalies_detected): meters flagged per type = SUM(distinct_meters) GROUP BY anomaly_type ORDER BY 2 DESC (types: Hidden_Outage_Pockets, Consumption_Spike_Drop, Low_Voltage_Pockets, Meters_Stopped_Communicating, Power_Factor_Deterioration, Reverse_Flow_Anomaly, Data_Quality_Issue, Theft_Suspect_Flags, Load_Diversion, MD_Breach_Risk, Consumers_With_Load_Violation, Voltage_Current_Imbalance, Voltage_Imbalance_Alert, Current_Imbalance_Alert); total anomaly flags = SUM(distinct_meters). Never COUNT(*) (rows are area x category x type)."
+      - "Repeat anomaly (hes_gold.repeat_anomaly_tracking, one row per meter): meters = COUNT(DISTINCT meter_no) GROUP BY repeat_band ('3','5','7','9'; ORDER BY CAST(repeat_band AS INTEGER) DESC) or FILTER (WHERE repeat_count = N); flagged_kpis lists the detectors ('Hidden Outage, Spike/Drop, PF Deterioration'); one meter = meter_no = 'X'. Lists ORDER BY repeat_count DESC LIMIT 200."
+      - "Which table: 'theft suspect' / 'evening' / 'day night' / 'streak' = energy_theft_suspect; 'theft risk' / 'risk areas' = theft_risk_by_area; 'reduction' / 'theft trend' / 'went down' = theft_reduction_trend; 'anomalies detected' / 'anomaly type' = total_anomalies_detected; 'repeat' / 'flagged by N KPIs' / 'multiple detectors' = repeat_anomaly_tracking. One table per query; never JOIN them."
+      - "ROUND percentages to 2 decimals."
+    example:
+      question: "How many theft suspects are there circle-wise in Kashi?"
+      sql: |
+        SELECT MAX(month_date) AS data_month,
+               CASE WHEN GROUPING(circle) = 1 THEN 'Total' ELSE circle END AS circle_name,
+               COUNT(DISTINCT meter_no) AS theft_suspects,
+               COUNT(DISTINCT meter_no) FILTER (WHERE suspect_pattern = 'evening_high') AS evening_high,
+               COUNT(DISTINCT meter_no) FILTER (WHERE suspect_pattern = 'day_night_pattern') AS day_night_pattern
+        FROM hes_gold.energy_theft_suspect
+        WHERE month_date = (SELECT MAX(month_date) FROM (SELECT month_date FROM hes_gold.dt_load_profile WHERE month_date >= DATE '2026-06-01' GROUP BY month_date HAVING COUNT(DISTINCT data_date) >= 10) c)
+          AND is_theft_suspect AND LOWER(cluster) = 'kashi'
+        GROUP BY ROLLUP (circle)
+        ORDER BY GROUPING(circle) DESC, 3 DESC
+
+  # Per-meter SOURCE readings (HES, Athena hes_silver) -- what the dashboard's KPI drill drawer 'Fetch from source data'
+  # (stages 2-3: HES-BACKEND-GMR hes_kpi_repo.meter_source_daily / meter_source_readings) and the Energy Audit drawer
+  # evidence (_meter_daily_usage_month) read. Not a KPI card. Researched live 10 Nov 2026 (group H).
+  mdm_meter_readings:
+    domain: mdm
+    title: "One meter's readings: half-hour (block) readings and daily register readings"
+    description: "Raw readings of ONE meter (or one consumer number): its half-hourly voltage, current, kWh / kVAh import and export and power factor on a day (hes_silver.block_usage), and its daily cumulative register readings, day-wise consumption, consumption between two dates and maximum demand (hes_silver.daily_usage)."
+    keywords: [half hour readings, half-hourly, 30 minute, block readings, block load, interval data, load profile of meter, readings of meter, meter readings, raw readings, source data, fetch from source data, kwh, kvah, units consumed, consumption of meter, usage of meter, daily readings, daily consumption, day-wise consumption, register reading, cumulative reading, kwh import, kwh export, net kwh, voltage of meter, current of meter, phase-wise voltage, phase voltage, max demand of meter, peak load time]
+    tables: [block_usage, daily_usage, dim_meter, dim_meter_replaced]
+    answer_notes:
+      - "These are the meter's own reported readings (source data), not a dashboard KPI verdict. Always name the meter and the date(s). Times are IST (rtc); a day holds 48 half-hours -- say how many it reported if fewer."
+      - "HES data exists only for: June 1-2 (Kashi/Triveni only), June 27-30, July 5-9, 13-17, 20-24 and August 1-2 2026 (the 1st / 9th / 17th / 24th of July and 3 August are partial tails). daily_usage has no August. A date outside these = 'no readings received for that day', never 'meter was off'."
+      - "Daily register readings are CUMULATIVE totals at 00:00 IST of data_date: consumption = later reading minus earlier reading; a gap of several days (e.g. 8 -> 13 July) is several days of use -- say so, never call it one day."
+      - "Feeder meters (and HT / CT meters) report secondary-side values: voltage ~63 V per phase and a few amps; true energy = reading x MF (dim_meter.mf, e.g. 4000). DT meter readings are also CT-secondary amps. Say this when quoting a feeder / DT meter."
+      - "A meter missing from dim_meter but found in dim_meter_replaced was swapped out (replaced_by, replaced_on): its readings until then are real -- name the replacement meter."
+    rules:
+      - "COST (Athena bills per byte; block_usage is ~3.1 billion rows, ~175M/day, partitioned ONLY by discom_code + data_date -- never by meter): EVERY query on hes_silver.block_usage MUST have meter_no = 'X' (or meter_no IN (SELECT meter_no FROM hes_gold.dim_meter WHERE <consumer_id match>)) AND data_date = DATE 'YYYY-MM-DD' (or BETWEEN two dates at most 3 days apart). One day for one meter scans ~0.4-0.8 GB; never a month, never without meter_no, never a place filter instead of meter_no, select only the columns needed (no SELECT *). daily_usage: meter_no AND a data_date range of at most one month (~0.2 GB)."
+      - "Which table: half-hour / 30-min / interval / voltage / current / phase / power factor / 'at what time' / peak load on a DAY = block_usage (one day). Daily readings, day-wise / monthly / between-dates consumption, register, cumulative, maximum demand = daily_usage. A per-day summary over more than 3 days or a month = daily_usage for energy; for voltage / completeness over a month use the Power Quality / meter data cards (mdm_power_quality, mdm_meter_data), never a month of block_usage."
+      - "No date asked: block_usage = DATE '2026-08-02' (latest full day), daily_usage = July 2026 (data_date >= DATE '2026-07-01' AND data_date < DATE '2026-08-01'; the HES default month). 'Last month' / 'this month' = July 2026 (no HES data after August 2026). 'On 14 July' = data_date = DATE '2026-07-14'."
+      - "block_usage columns (one row per meter per half-hour, data_date = IST day, rtc = IST block start text, reading_ts_utc = timestamp, ORDER BY reading_ts_utc): energy in Wh / VAh per half-hour -- kWh = wh_import / 1000.0, kwh export = wh_export / 1000.0, kVAh = vah_import / 1000.0 (DOUBLE). 1-phase: average_voltage, average_current (DOUBLE). 3-phase / DT / feeder: voltage_rn, voltage_yn, voltage_bn, current_r, current_y, current_b are VARCHAR -> TRY_CAST(x AS DOUBLE); average_voltage is NULL for them. power_factor_total is always NULL: PF = wh_import / NULLIF(vah_import, 0) (day: SUM(wh_import) / NULLIF(SUM(vah_import), 0)). Demand kW of a half-hour = wh_import * 2 / 1000.0. meter_type here is 'consumer' / 'dtr' / 'feeder'."
+      - "Day summary (the drawer's stage 2 row): COUNT(*) half-hours reported, 48 expected, ROUND(COUNT(*) * 100.0 / 48, 1) completeness %, SUM(wh_import) / 1000.0 kWh, AVG(NULLIF(voltage, 0)) (a 0 = not reporting), MIN(NULLIF(voltage, 0)), MAX(voltage); voltage = COALESCE(average_voltage, TRY_CAST(voltage_rn AS DOUBLE)) when the meter type is unknown. Below / above band: COUNT_IF(average_voltage < 216) / COUNT_IF(average_voltage > 253) (230 V +-6%)."
+      - "daily_usage (one row per meter per IST day; rare duplicate rows -> GROUP BY data_date with MAX()): wh_import / wh_export / vah_import / vah_export are CUMULATIVE register Wh -> / 1000.0 = kWh reading; net = (MAX(wh_import) - MAX(wh_export)) / 1000.0 (the drawer's Net kWh). Consumption between two dates = (MAX_BY(wh_import, data_date) - MIN_BY(wh_import, data_date)) / 1000.0 with the first and last reading dates; day-wise = LEAD(wh) OVER (ORDER BY data_date) - wh with the next reading date and days covered (filter up to the day after the month to close its last day). Maximum demand: md_w_import (VARCHAR W, billing-period-to-date) -> MAX_BY(TRY_CAST(md_w_import AS DOUBLE), data_date) / 1000.0 kW at md_w_date_time."
+      - "Consumer number: meter_no IN (SELECT meter_no FROM hes_gold.dim_meter WHERE regexp_replace(TRIM(consumer_id), '^0+', '') = regexp_replace('<number>', '^0+', '')) -- never a JOIN without the meter filter. Meter serials: meter_no = '<serial as typed, upper-case>'. Never filter block_usage / daily_usage on cluster / zone (lower-case copies, not partitions)."
+      - "Feeder / DT meter energy: multiply by (SELECT MAX(mf) FROM hes_gold.dim_meter WHERE meter_no = 'X') and say so. Feeder / DT LOSS, DT LOADING, PQ indices, spikes, outages are their cards' topics, not raw readings."
+    example:
+      question: "Show the half-hourly readings of meter AL1159584 on 14 July 2026"
+      sql: |
+        SELECT rtc AS reading_time_ist,
+               average_voltage AS voltage_v, average_current AS current_a,
+               ROUND(wh_import / 1000.0, 3) AS kwh_import, ROUND(wh_export / 1000.0, 3) AS kwh_export,
+               ROUND(vah_import / 1000.0, 3) AS kvah_import,
+               ROUND(wh_import / NULLIF(vah_import, 0), 3) AS power_factor
+        FROM hes_silver.block_usage
+        WHERE meter_no = 'AL1159584' AND data_date = DATE '2026-07-14'
+        ORDER BY reading_ts_utc
+
+  # HES meter master (hes_gold.dim_meter) -- the dimension every HES board joins for hierarchy, category and the
+  # filter dropdowns (HES-BACKEND-GMR hes_kpi.py filter-options / filter-tree, hes_kpi_repo._geo_join_sql).
+  mdm_meter_master:
+    domain: mdm
+    title: "HES meter master: where a meter is (zone .. feeder / DT), meter counts by project / zone / category / feeder / DT"
+    description: "The HES meter master: which project, discom, zone, circle, division, sub-division, sub-station, feeder and DT a meter or consumer number is on, its category, meter type, MF, sanctioned load and consumer number; replaced (swapped-out) meters; counts of HES meters by project, zone, category; meters / DTs on a feeder; meters on a DT; a feeder's own meter."
+    keywords: [meter master, hes meters, mdm meters, dim_meter, which zone is meter, which circle, which division, which dt, which transformer, hierarchy of meter, where is meter, meter details, consumer number, consumer id, meters on feeder, meters on dt, consumers on dt, dt meters, feeder meters, feeder meter number, mf, multiplying factor, meter category, smart meter type, 1 phase, 3 phase, ht, how many hes meters, replaced meter, replaced by]
+    tables: [dim_meter, dim_meter_replaced]
+    answer_notes:
+      - "dim_meter is the CURRENT meter population (built from the asset master / installation master; current-state snapshot, not history). A swapped-out meter is only in dim_meter_replaced (located where its replacement is, with replaced_by and replaced_on). Say which one the answer came from."
+      - "107,509 meters (inventory only) have no hierarchy at all (project / zone .. feeder NULL): call them 'not placed', never drop them silently from a total."
+      - "This is the HES master, not WFM installation progress: 'how many meters installed' is the WFM installation card. Quote counts as whole numbers."
+    rules:
+      - "Table: hes_gold.dim_meter (4,381,272 rows, one per meter_no; small, ~0.5-65 MB a query). Never dim_meter_energy (retired 16 Sep 2026, stale copy) or dim_meter_asof_* (frozen 8 Sep 2026 pin). One meter lookup = UNION ALL of dim_meter (found_in 'current meter') and hes_gold.dim_meter_replaced (found_in 'replaced meter', + replaced_by, replaced_on) WHERE meter_no = '<serial>'."
+      - "Columns: category 'consumer_1_phase' / 'consumer_3_phase' / 'consumer_ht' / 'dt_meter' / 'feeder'; meter_type 'CONSUMER' / 'DT' / 'FEEDER'; smart_meter_type = inventory code (1PH-STSM, 3PH-STSM, 3PLTCTSM, HTCTPTSM, ...); discom_code 'DVVNL' / 'PUVVNL'; cluster = project 'Agra' / 'Kashi' / 'Triveni' (LOWER(cluster) = 'kashi'); zone / circle / division / sub_division / sub_station upper-case (division has 2 casing duplicates: compare UPPER(col)); feeder_code, feeder_name, dtr_code, dtr_name, feeder_meter_no (the feeder's own meter), consumer_id (TEXT, may have leading zeros), mf, sanctioned_load_kw, installation_date, mapping_confidence."
+      - "Consumer number: regexp_replace(TRIM(consumer_id), '^0+', '') = regexp_replace('<number>', '^0+', '') (a consumer can have more than one meter row). Feeder by code: feeder_code = 'X'; by name: UPPER(feeder_name) LIKE '%NAME%'. DT: dtr_code = 'X' (codes like 'JYO/TO1/DT011')."
+      - "Counts: meters = COUNT(*); by category COUNT_IF(category = ...); consumer meters = meter_type = 'CONSUMER'. By project: GROUP BY COALESCE(cluster, 'Not placed'). Meters on a feeder: WHERE feeder_code = 'X' -- total, by category, COUNT(DISTINCT dtr_code) DTs, MAX(feeder_meter_no). Meters on a DT: WHERE dtr_code = 'X' (list meter_no, category, consumer_id; LIMIT 200). A feeder's own meter: category = 'feeder' AND feeder_code = 'X' (meter_no, mf). DT meter of a DT: category = 'dt_meter' AND dtr_code = 'X'."
+      - "A plain 'which feeder / substation is meter X on' is the mapping audit's lookup (mdm_autoindexing: index-based vs AI-based feeder); use dim_meter when DT / zone / circle / division / project / MF / consumer number / category is asked, or the meter is not in the audit."
+    example:
+      question: "Which zone, circle, division, substation, feeder and DT is meter AL1159584 on?"
+      sql: |
+        SELECT meter_no, category, consumer_id, cluster AS project, zone, circle, division, sub_division, sub_station,
+               feeder_code, feeder_name, dtr_code, dtr_name, 'current meter' AS found_in,
+               CAST(NULL AS varchar) AS replaced_by, CAST(NULL AS date) AS replaced_on
+        FROM hes_gold.dim_meter WHERE meter_no = 'AL1159584'
+        UNION ALL
+        SELECT meter_no, category, NULL, cluster, zone, circle, division, sub_division, sub_station,
+               feeder_code, feeder_name, dtr_code, dtr_name, 'replaced meter', replaced_by, replaced_on
+        FROM hes_gold.dim_meter_replaced WHERE meter_no = 'AL1159584'
 
 # Domain words people use -> the programme's own terms. Retrieval only: the
 # query is expanded with these before BM25 + embedding search (never changes
@@ -973,9 +1413,13 @@ retrieval_synonyms:
   overdrawing: load violation sanctioned load
   bijli kam: low voltage voltage drop
   kam voltage: low voltage voltage drop
-  phase imbalance: voltage unbalance current unbalance
+  phase imbalance: voltage imbalance current imbalance 3-sigma
+  threshold exceeded: imbalance alerts critical poor average
 
 explain_only:
+  phase_imbalance_3sigma: "Voltage / Current Imbalance (Operation Analytics): per half-hour, the three phase voltages (or currents) are compared against 3 x the normal spread of that meter type (feeder, DT, 3-phase consumer, HT consumer) at that time of day; imbalanced when all three pairs differ by more, or one phase stands apart. A day counts when more than 50% of its half-hours are imbalanced; a meter is flagged at 3+ such days, aged 3-30 / 31-60 / 61-90 / 90+ days. Different from the Power Quality VUI / current unbalance cards, which give the % deviation from the 3-phase mean."
+  imbalance_alerts: "Voltage / Current Imbalance Alerts: each day graded by its share of imbalanced half-hours -- Critical >= 85%, Poor >= 70%, Average >= 50% (else Normal); a meter's alert grade is the one holding most of its imbalanced half-hours, and it needs 3+ days at that grade."
+  imbalance_reduction: "Phase imbalance reduced by minimum 30%: per meter, imbalance % = imbalanced half-hours / all half-hours that month, using one 3-sigma baseline across both months; improved when last month's % minus this month's % >= 30 percentage points. Shown for voltage and current separately (a meter can improve on both)."
   mi_progress: "Meters installed (KPI 1): rows with a meter serial, category resolved and not a replacement; SUM(meter_count) of gold_mi_installation_*."
   total_mi: "Every installed meter incl. replacements, whatever its date (SAT card denominator)."
   eligible_mi: "Installed meters with installation date on/before the project's SAT eligibility cutoff (sat_eligibility_config) - due for SAT now."

@@ -223,6 +223,16 @@ def _build_chart(plan: dict, df: pd.DataFrame) -> dict | None:
         leveled, lx, lgroup = _one_rollup_level(data, x, group)
         if not leveled.empty:
             data, x, group = leveled, lx, lgroup
+    # A projection repeated on every month row is one figure, not a series (it already shows as a key
+    # metric). Seen live 10 Nov: 'low PF meters in September' drew 963,430 as a flat line across June-August.
+    # Only projection-named columns: a constant target line is a real series.
+    if len(data) > 1 and x in data.columns:
+        flat = {y for y in ys + y2 if re.search(r"project|forecast|predict|estimat", str(y), re.I)
+                and data[y].nunique(dropna=True) <= 1}
+        if flat and len(flat) < len(ys + y2):
+            ys, y2 = [y for y in ys if y not in flat], [y for y in y2 if y not in flat]
+            if not ys:
+                ys, y2 = y2[:1], y2[1:]
 
     # A gauge is named by its measure: when x is missing, numeric or one of the plotted
     # columns (planner wrote x = the % column), its categories are the column labels.
@@ -295,11 +305,22 @@ def _blocks(plan: dict, result: dict) -> dict:
         return {"kpis": [], "charts": [], "tables": []}
     display = plan["display"]
     kpis = []
+    # A forecast lists the actual months and then the projected one: the tile is the projection, not the
+    # first actual month (seen live 10 Nov: 'low PF meters in September' showed June's 585,748).
+    head, head_label = df.iloc[0], ""
+    if len(df) > 1:
+        texts = [c for c in df.columns if not pd.api.types.is_numeric_dtype(df[c])]
+        proj = df[df[texts].apply(lambda col: col.astype(str).str.contains(r"\b(?:projected|forecast)", case=False,
+                                                                            regex=True)).any(axis=1)] if texts else df.iloc[0:0]
+        if len(proj) == 1:
+            head, head_label = proj.iloc[0], "Projected "
     for alias in [m["alias"] for m in plan["metrics"]]:
         if alias in df.columns:
-            value = _number(df.iloc[0][alias])
-            kpis.append({"label": _label(plan, alias), "value": value if value is not None else 0.0,
-                         "formatted_value": format_number(value) if value is not None else _cell(df.iloc[0][alias]),
+            value = _number(head[alias])
+            label = _label(plan, alias)
+            label = label if not head_label or re.search(r"project|forecast", label, re.I) else head_label + label
+            kpis.append({"label": label, "value": value if value is not None else 0.0,
+                         "formatted_value": format_number(value) if value is not None else _cell(head[alias]),
                          "unit": None})
     # A one-row answer of a few figures (a home-page module headline) reads as cards, like the
     # dashboard's tiles, even when the planner named none.

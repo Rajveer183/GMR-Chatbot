@@ -18,6 +18,12 @@ def _followup_options(triage: dict) -> list[str]:
     only follow-ups ever offered, so every suggestion has a checked answer. The
     example this answer came from (and anything worded like the question) is left out."""
     offered = business_rules.suggestions()
+    # Same data source only: an MDM (hes_gold) answer was offered WFM installation questions -- seen live
+    # 10 Nov on 'low power factor meters in September'. No same-source suggestion = no follow-ups.
+    if triage.get("domain") in {"wfm", "mdm"}:
+        sqls = {str(i): str(ex.get("sql") or "") for i, ex in enumerate(business_rules.examples())}
+        mdm = lambda sql: "hes_gold." in sql or "hes_silver." in sql  # noqa: E731
+        offered = {i: q for i, q in offered.items() if mdm(sqls.get(i, "")) == (triage["domain"] == "mdm")}
     if not offered:
         return []
     asked = " ".join(str(triage.get("question") or "").lower().split()).rstrip(" ?.")

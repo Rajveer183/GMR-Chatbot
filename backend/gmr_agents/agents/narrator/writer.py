@@ -6,6 +6,7 @@ Moved from gmr_agents/llm_pipeline.py unchanged.
 
 from __future__ import annotations
 import json
+import re
 import time
 from shared import config, llm_gateway
 from gmr_agents.catalog import business_rules
@@ -124,6 +125,21 @@ def _write_answer(state: dict, triage: dict, plan: dict, result: dict, extras: l
     # Native-script digits (४२) as 0-9, so the number check below reads every figure.
     summary = language.ascii_digits(str(d["summary"])).strip()
     insights = [language.ascii_digits(str(i)) for i in d.get("insights") or [] if str(i).strip()][:3]
+    # A bare label is not an answer. Live 10 Nov: 'Which project is the laggard on pending SAT?' came back as
+    # 'AGRA' -- right project, no figure, while RESULT held 96,372 of 263,243. One rewrite asks for the figures.
+    df0 = result.get("result")
+    has_numbers = df0 is not None and hasattr(df0, "select_dtypes") and not df0.empty and not df0.select_dtypes("number").empty
+    if has_numbers and len(summary.split()) < 6 and not re.search(r"\d", summary):
+        log.warning("answer: bare summary %r -- asking for the figures", summary)
+        redo = llm_gateway.chat_json(
+            "answer", prompt + "\n\nYOUR PREVIOUS ANSWER:\n" + json.dumps({"summary": summary}, ensure_ascii=False)
+            + "\nThat is not a full answer. Answer in one or two sentences that quote the figures from RESULT that "
+              "answer the question (e.g. the top item with its value and the total). Same JSON format.",
+            system=_ANSWER_SYSTEM, max_tokens=config.LLM_MAX_TOKENS_ANSWER)
+        if redo is not None and str(redo.data.get("summary") or "").strip():
+            d = redo.data
+            summary = language.ascii_digits(str(d["summary"])).strip()
+            insights = [language.ascii_digits(str(i)) for i in d.get("insights") or [] if str(i).strip()][:3] or insights
 
     # Number check: every figure written must come from the results (or a simple
     # sum / difference / share within a row or column). A slip goes back to the LLM
