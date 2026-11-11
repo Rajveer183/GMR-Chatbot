@@ -50,7 +50,9 @@ def run_sql(sql: str, database: str | None, engine: str) -> pd.DataFrame:
             except Exception as exc:
                 log.warning("hierarchy: rewritten query failed (%s) -- running the original", exc)
         return hierarchy.natural_order(hierarchy.relabel(sql, _run_postgres(sql)))
-    return hierarchy.natural_order(athena_query(sql, database=database))
+    # Agent queries only: a time limit (AGENT_ATHENA_TIMEOUT_S), so a runaway join is cancelled instead of holding
+    # the request for minutes. Catalog refreshes and the data skeleton keep no limit.
+    return hierarchy.natural_order(athena_query(sql, database=database, max_seconds=config.AGENT_ATHENA_TIMEOUT_S))
 
 
 def _run_postgres(sql: str) -> pd.DataFrame:
@@ -109,7 +111,7 @@ _CONNECTIVITY_ERROR_HINTS = (
 
 def _is_connectivity_error(exc: Exception) -> bool:
     text = str(exc).lower()
-    if "statement timeout" in text or "canceling statement" in text:
+    if "statement timeout" in text or "canceling statement" in text or "athena query timed out" in text:
         return False  # the QUERY was too slow (repairable by a simpler query), the database is fine
     return any(hint in text for hint in _CONNECTIVITY_ERROR_HINTS)
 

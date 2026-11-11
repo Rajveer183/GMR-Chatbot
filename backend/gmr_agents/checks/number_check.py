@@ -76,9 +76,20 @@ def _allowed(frames: list[pd.DataFrame], extra_text: str, keep_pct: bool) -> set
             if y and keep_pct:  # a ratio / share is never a money amount
                 allowed.update((x / y * 100, x / y, (x - y) / y * 100, abs(x - y) / abs(y) * 100))
 
+    # One-row results of the same answer (main query + extra query) are one set of facts: their
+    # difference / share is computed, not invented. 10 Nov retest: installed-not-SAT 524,818 (main) and
+    # eligible pending 263,243 (extra) -> 'not yet due 261,575' was cut, leaving "Of these."
+    one_row = [df if keep_pct else df[[c for c in df.columns if not _PCT_COL.search(str(c))]]
+               for df in frames if isinstance(df, pd.DataFrame) and len(df) == 1]
+    if len(one_row) > 1:
+        pairs([v for df in one_row if len(df.columns) for v in _grid(df)[0] if v is not None])
     for df in frames:
         if not isinstance(df, pd.DataFrame) or df.empty:
             continue
+        # Numbers in column names ('non_sat_120_plus', 'pct_time_gt_10') are stated by the result too:
+        # '120+ days' was flagged and every sentence carrying it cut (10 Nov retest: 'Across these ten divisions.').
+        for c in df.columns:
+            allowed.update(abs(n) for n, _u in _numbers(re.sub(r"[_]+", " ", str(c))))
         # Numbers inside label cells ('91-120 days', '120+ days', 'SAT-10') are stated by the
         # result too: '120' was once flagged and the repair cut the answer to "shows 10,".
         for c in df.columns:
@@ -207,9 +218,14 @@ def _fmt_like(raw: str, value: int) -> str:
     return f"{value:,}"
 
 
+_CLAUSE_SEP = r"(?:[,;](?=\s)|\s[–—-](?=\s)|[–—])"
+
+
 def repair(text: str, allowed: set[float], frames: list[pd.DataFrame]) -> tuple[str, list[str]]:
     """Fix what is still unsupported: replace near-miss figures with the result's
     value; drop sentences whose figure has no match. Returns (text, problems left)."""
+    original = text
+    original_sentences = set(re.split(r"(?<=[.!?])\s+", text.strip()))
     values = _values(frames)
     for bad in unsupported(text, allowed):
         raw = re.match(r"-?\d[\d,]*(?:\.\d+)?", bad)
@@ -224,8 +240,15 @@ def repair(text: str, allowed: set[float], frames: list[pd.DataFrame]) -> tuple[
     # ("= 505,761.36 (Rs 505.76 lakh)") -- then whole sentences, if others remain.
     for bad in unsupported(text, allowed):
         aside = re.search(r"\s*[(\[][^()\[\]]*" + re.escape(bad) + r"[^()\[\]]*[)\]]", text)
+        if aside is None:   # a dash-pair aside: ' – roughly 3,333 fewer – '
+            aside = re.search(r"\s[–—]\s[^–—.]*" + re.escape(bad) + r"[^–—.]*\s[–—](?=\s)", text)
         if aside is None:
-            aside = re.search(r"\s*[,;–—-][^,;.–—]*" + re.escape(bad) + r"[^,;.–—]*(?=[,;.]|$)", text)
+            # Clause edges are real separators only: ', ' '; ' and spaced / long dashes -- never the comma inside
+            # '10,279', the hyphen in 'non-SAT' or the point in '5.13' (10 Nov retest: 'with 10,279 ...' was cut
+            # to 'with 10' and 'have non-SAT ...' to 'have non.').
+            body = r"(?:(?!" + _CLAUSE_SEP + r"|\.(?:\s|$)).)*"
+            aside = re.search(r"\s*" + _CLAUSE_SEP + body + r"?" + re.escape(bad) + body
+                              + r"(?=" + _CLAUSE_SEP + r"|\.(?:\s|$)|$)", text)
         if aside is not None:
             text = (text[:aside.start()] + text[aside.end():]).strip()
     left = unsupported(text, allowed)
@@ -234,4 +257,15 @@ def repair(text: str, allowed: set[float], frames: list[pd.DataFrame]) -> tuple[
         kept = [s for s in sentences if not unsupported(s, allowed)]
         if kept:
             text = " ".join(kept)
+    # A cut can leave a lead-in with nothing after it ('Of these.', 'Across these ten divisions.'): drop
+    # such stubs -- short, no figure, ending where the removed clause was.
+    if text != original:
+        sentences = re.split(r"(?<=[.!?])\s+", text.strip())
+        kept = [s for s in sentences if not _STUB.match(s) or s in original_sentences]
+        if kept and len(kept) < len(sentences):
+            text = " ".join(kept)
     return text, unsupported(text, allowed)
+
+
+_STUB = re.compile(r"^(?:(?:of|across|among|in|for|from|with|between|out of)\s+(?:these|them|which|those|this|the)"
+                   r"\b[^.!?\d]{0,30}|[^.!?\d\s]+(?:\s+[^.!?\d\s]+){0,2})[.!?]?$", re.I)

@@ -5,7 +5,8 @@ is spelled. Only SELECT queries run; nothing in any table is changed.
 Per table (all ~40 catalog tables):
     purpose      table_metadata.yaml description
     engine/rows  postgres | athena, row count (catalog)
-    dates        each date column's real MIN..MAX (Postgres; small Athena tables)
+    dates        each date column's real MIN..MAX (Postgres; small Athena tables; data_date /
+                 month_date on every Athena table)
     dimensions   every real value of each low-cardinality column (catalog samples)
     keys         the grain (columns that make a row unique) and declared join keys
     combos       the dimension-value combinations that actually occur (Postgres,
@@ -33,6 +34,7 @@ log = logging.getLogger(__name__)
 
 PATH = os.path.join(config.OUTPUT_DIR, "data_skeleton.json")
 _GEO = ["project", "discom", "zone", "circle", "division", "sub_division"]
+_PERIOD_COLS = {"data_date", "month_date"}
 _NUMERIC = ("int", "numeric", "double", "real", "decimal", "float", "bigint", "smallint")
 _STATE = {"data": None, "mtime": None, "building": False}
 
@@ -73,7 +75,10 @@ def _table_card(t) -> dict:
             "dimensions": dims, "measures": measures[:20], "dates": {}, "combos": [], "sample": []}
     small_athena = not is_pg and int(t.row_count or 0) <= config.DATA_SKELETON_ATHENA_MAX_ROWS
     for col in dates[:3]:
-        if is_pg or small_athena:
+        # Big Athena tables: only the period column (data_date / month_date). They are Iceberg, so
+        # MIN/MAX comes from file statistics -- 0 MB scanned on most, ~230 MB on the largest
+        # (measured 11 Nov) -- and it feeds the 'data up to' / stale-data note (checks/freshness.py).
+        if is_pg or small_athena or col in _PERIOD_COLS:
             try:
                 r = run(f"SELECT MIN({col}) AS lo, MAX({col}) AS hi FROM {ref}")[0]
                 card["dates"][col] = [r.get("lo"), r.get("hi")]

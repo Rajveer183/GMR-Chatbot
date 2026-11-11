@@ -151,7 +151,9 @@ def _result_facts(df: pd.DataFrame | None, max_cols: int = 4) -> str:
     # A ROLLUP Total in any label column (e.g. Month='', Category='Total') is not an item.
     is_total = pd.Series(False, index=df.index)
     for c in labels:
-        is_total |= df[c].astype(str).str.strip().str.lower().isin({"total", "grand total"})
+        # 'Total Journey' / 'Total meters' rows are totals too, never a stage to rank (11 Nov: the journey
+        # bottleneck was named as Total Journey, 186.76 days, instead of Installation to SAT, 86.2).
+        is_total |= df[c].astype(str).str.strip().str.lower().str.match(r"(?:grand )?total\b")
     rows = df[~is_total]
     period_col, partial, _ = _partial_periods(df)
     week_col, short = _short_weeks(df)
@@ -171,6 +173,19 @@ def _result_facts(df: pd.DataFrame | None, max_cols: int = 4) -> str:
                      + ", ".join(f"{c} {fmt(float(tot[c]))}" for c in nums))
         lines.append(f"- BREAKDOWN ITEMS ({len(rows)}; each is one part, never the overall): "
                      + ", ".join(str(v) for v in rows[labels[0]].head(15)))
+    if not is_total.any() and not period_col and len(rows) >= 2 and len(rows) <= 60:
+        # No Total row: the overall figure is the sum of the items (counts / money only, never rates). 11 Nov: a
+        # per-project revenue-at-risk table had no Total row and the answer quoted Agra's row (Rs 111.9 cr) as the
+        # programme figure.
+        additive = [c for c in df.columns if pd.api.types.is_numeric_dtype(df[c])
+                    and (not _RATE_COL_RE.search(str(c))      # 'meters_older_than_90_days' is a count, not days
+                         or re.match(r"(?:meters|meter_count|tickets|consumers|complaints|installations)(?:_|$)", str(c), re.I))
+                    and not re.search(r"pct|percent|rate|ratio|share|avg|average|mean|per_|_per", str(c), re.I)]
+        for col in additive[:max_cols]:
+            vals = pd.to_numeric(rows[col], errors="coerce")
+            if vals.notna().sum() >= 2:
+                lines.append(f"- {col}: sum across the {int(vals.notna().sum())} items = {fmt(vals.sum())} "
+                             "(no Total row -- this is the overall figure)")
     if period_col and groups and is_total.any():
         # Month x Category with a Total row per month: the overall figure is the grand-total row
         # (every label blank / Total), else the sum of the per-month Totals.

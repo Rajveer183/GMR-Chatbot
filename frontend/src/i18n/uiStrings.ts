@@ -11,6 +11,7 @@ const en = {
   followups: "Suggested Follow-ups",
   resultPreview: "Result Preview",
   warnings: "Warnings",
+  sources: "Sources",
   interpretedAs: "Interpreted as:",
   translating: "Translating…",
   translationFailed: "Translation unavailable — showing the original answer.",
@@ -159,7 +160,7 @@ const hinglish: Strings = {
 
 const hi: Strings = {
   summary: "सारांश", keyMetrics: "मुख्य मीट्रिक्स", insights: "इनसाइट्स", followups: "सुझाए गए अगले प्रश्न",
-  resultPreview: "परिणाम पूर्वावलोकन", warnings: "चेतावनियाँ", interpretedAs: "इस रूप में समझा गया:",
+  resultPreview: "परिणाम पूर्वावलोकन", warnings: "चेतावनियाँ", sources: "स्रोत", interpretedAs: "इस रूप में समझा गया:",
   dashboardView: "डैशबोर्ड जैसा: {card}",
   translating: "अनुवाद हो रहा है…", translationFailed: "अनुवाद उपलब्ध नहीं है — मूल उत्तर दिखाया जा रहा है।",
   drillDown: "{x} के बारे में बताइए", copy: "कॉपी", copyAll: "सब कॉपी करें", copied: "कॉपी हो गया",

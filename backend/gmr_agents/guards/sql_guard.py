@@ -693,7 +693,11 @@ def check_sql_safety(sql: str, catalog: AthenaCatalog) -> dict:
             return _fail(f"Disallowed statement type: {type(node).__name__}.")
 
     cte_names = {cte.alias_or_name.lower() for cte in root.find_all(exp.CTE)}
-    referenced = {t.name.lower() for t in root.find_all(exp.Table)} - cte_names
+    # generate_series(...) in FROM parses as a Table with no name: a harmless row generator (day calendars, gap
+    # filling). 11 Nov: 'which KPIs deviate most from their usual levels' was refused as 'Unknown table(s): .'.
+    # Every other unnamed table function (pg_read_file(...), dblink(...)) still fails as unknown.
+    referenced = {t.name.lower() for t in root.find_all(exp.Table)
+                  if t.name or not isinstance(t.this, (exp.GenerateSeries, getattr(exp, "ExplodingGenerateSeries", exp.GenerateSeries)))} - cte_names
     unknown = referenced - set(tables_meta)
     if unknown:
         return _fail(f"Unknown table(s): {', '.join(sorted(unknown))}. Use only tables listed in SCHEMA.")

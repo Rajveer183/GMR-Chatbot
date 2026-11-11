@@ -72,6 +72,7 @@ class AgentState(TypedDict, total=False):
     validated: dict | None                # validator verdict for tool_call (normalized SQL, engine)
     entities_checked: bool                # the entity verifier ran once already
     zero_rows_retried: bool               # an empty result was sent back once already
+    implausible_retried: bool             # a share above 100% was sent back once already
     executed: Annotated[dict[str, dict], merge_dicts]          # idempotency: request key -> {ok, rows, error}
     last_error: ToolError | None          # structured error for the controller's next attempt
     errors: Annotated[list[ToolError], append_list]           # every error (audit)

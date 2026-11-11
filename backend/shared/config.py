@@ -161,6 +161,7 @@ SLO_MAX_REPAIR_RATE = _float("SLO_MAX_REPAIR_RATE")
 SLO_MAX_TOKENS_PER_QUESTION = _float("SLO_MAX_TOKENS_PER_QUESTION")
 QUESTION_MAX_DB_QUERIES = _int("QUESTION_MAX_DB_QUERIES")       # per-question cap on database queries (0 = off)
 AGENT_SQL_TIMEOUT_MS = _int("AGENT_SQL_TIMEOUT_MS")            # per agent SQL statement (Postgres)
+AGENT_ATHENA_TIMEOUT_S = float(os.environ.get("AGENT_ATHENA_TIMEOUT_S") or 120)  # agent Athena query: cancel after this (no logged query ever needed more: max 106 s of 11,428, 11 Nov)
 QUESTION_MAX_LLM_CALLS = _int("QUESTION_MAX_LLM_CALLS")        # per-question cap on LLM requests sent (0 = off)
 QUESTION_MAX_TOKENS = _int("QUESTION_MAX_TOKENS")              # per-question cap on prompt + completion tokens (0 = off)
 MAX_CONTEXT_TOKENS = _int("MAX_CONTEXT_TOKENS")                # hard cap per LLM call (system + prompt + output)
@@ -243,6 +244,7 @@ DATA_SKELETON_SAMPLE_ROWS = _int("DATA_SKELETON_SAMPLE_ROWS")     # sample rows 
 DATA_SKELETON_MAX_COMBOS = _int("DATA_SKELETON_MAX_COMBOS")       # distinct dimension combinations kept per table
 DATA_SKELETON_ATHENA_MAX_ROWS = _int("DATA_SKELETON_ATHENA_MAX_ROWS")  # Athena tables up to this size get a date range
 DATA_SKELETON_MAX_AGE = _float("DATA_SKELETON_MAX_AGE")           # seconds before the skeleton is rebuilt (background)
+DATA_STALE_DAYS = _int("DATA_STALE_DAYS")                         # daily table this many days behind = stale warning (0 = off)
 VALUE_HINTS = _int("VALUE_HINTS")                                 # matched stored values added to the SQL prompt
 TABLE_HINTS = _int("TABLE_HINTS")                                 # table data cards shown to the understanding step
 # --- Conversation memory (deep-dive follow-ups) ---

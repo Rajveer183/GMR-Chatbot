@@ -27,7 +27,7 @@ _athena = boto3.client("athena", region_name=AWS_REGION, config=_CLIENT_CONFIG)
 _s3 = boto3.client("s3", region_name=AWS_REGION, config=_CLIENT_CONFIG)
 
 
-def _execute(query: str, database: str | None, poll_seconds: float) -> str:
+def _execute(query: str, database: str | None, poll_seconds: float, max_seconds: float | None = None) -> str:
     """Start a query, poll to completion, return its query execution id.
 
     Fast poll to start (Athena queries on small results often finish in under
@@ -43,10 +43,20 @@ def _execute(query: str, database: str | None, poll_seconds: float) -> str:
     qid = _athena.start_query_execution(**kwargs)["QueryExecutionId"]
 
     delay = 0.3
+    started = time.monotonic()
     while True:
         status = _athena.get_query_execution(QueryExecutionId=qid)["QueryExecution"]["Status"]["State"]
         if status in ("SUCCEEDED", "FAILED", "CANCELLED"):
             break
+        if max_seconds and time.monotonic() - started > max_seconds:
+            # A runaway query (11 Nov: a feeder -> DT -> consumer voltage join ran 6+ minutes and the request
+            # never answered) is cancelled, so it stops scanning and the caller can say so / repair it.
+            try:
+                _athena.stop_query_execution(QueryExecutionId=qid)
+            except Exception:  # noqa: BLE001 -- best effort: the timeout below is what matters
+                pass
+            raise RuntimeError(f"Athena query timed out after {int(max_seconds)}s and was cancelled: the query is too "
+                               "heavy -- aggregate each table first and filter one month / one area")
         time.sleep(delay)
         delay = min(delay * 1.5, poll_seconds)
 
@@ -56,7 +66,8 @@ def _execute(query: str, database: str | None, poll_seconds: float) -> str:
     return qid
 
 
-def run_query(query: str, database: str | None = None, poll_seconds: float = 1.0) -> pd.DataFrame:
+def run_query(query: str, database: str | None = None, poll_seconds: float = 1.0,
+              max_seconds: float | None = None) -> pd.DataFrame:
     """Run a SQL query against Athena and return the result as a DataFrame.
 
     `database` sets the query's default database context (so unqualified table
@@ -64,8 +75,8 @@ def run_query(query: str, database: str | None = None, poll_seconds: float = 1.0
     Result is fetched straight from S3 via boto3 -- not pandas' s3fs backend,
     which conflicts with the pinned botocore version here.
     """
-    qid = _execute(query, database, poll_seconds)
-    obj = _s3.get_object(Bucket=PROJECT_BUCKET, Key=f"{PREFIX_ATHENA}/{qid}.csv")
+    qid = _execute(query, database, poll_seconds, max_seconds)
+    obj =_s3.get_object(Bucket=PROJECT_BUCKET, Key=f"{PREFIX_ATHENA}/{qid}.csv")
     return pd.read_csv(io.BytesIO(obj["Body"].read()), dtype=_text_columns(qid) or None)
 
 

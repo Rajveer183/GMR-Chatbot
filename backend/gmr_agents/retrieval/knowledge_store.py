@@ -18,11 +18,14 @@ from __future__ import annotations
 
 import hashlib
 import json
+import logging
 import os
 import threading
 import time
 
 from shared import config
+
+log = logging.getLogger(__name__)
 
 PATH = os.path.join(config.OUTPUT_DIR, config.KNOWLEDGE_FILE)
 RESULTS_PATH = os.path.join(config.OUTPUT_DIR, config.SQL_RESULT_FILE)
@@ -42,7 +45,17 @@ def _load(path: str, empty: dict) -> dict:
             try:
                 with open(path, encoding="utf-8") as f:
                     data = json.load(f)
-            except (OSError, ValueError):
+            except OSError:
+                data = {}
+            except ValueError:
+                # Unreadable file: keep a copy before the next save replaces it with what this
+                # process rebuilds -- the indexes re-embed and the artifacts rebuild, but silently.
+                bad = f"{path}.corrupt-{int(time.time())}"
+                try:
+                    os.replace(path, bad)
+                except OSError:
+                    bad = "(could not move it aside)"
+                log.warning("knowledge store: %s is not valid JSON -- starting empty, old file kept as %s", path, bad)
                 data = {}
             _CACHE[path] = {**empty, **data}
         return _CACHE[path]
@@ -51,7 +64,11 @@ def _load(path: str, empty: dict) -> dict:
 def _save(path: str) -> None:
     with _lock(path):
         os.makedirs(os.path.dirname(path), exist_ok=True)
-        tmp = f"{path}.tmp"
+        # Temp name per process + thread: two server processes (a restart overlapping the old one,
+        # or WORKERS > 1) writing ONE shared '.tmp' interleaved their bytes and os.replace published
+        # the mix -- knowledge.json was left unreadable on 11 Nov. Last writer still wins, but every
+        # file it publishes is whole.
+        tmp = f"{path}.{os.getpid()}.{threading.get_ident()}.tmp"
         with open(tmp, "w", encoding="utf-8") as f:
             json.dump(_CACHE[path], f, ensure_ascii=False, separators=(",", ":"), default=str)
         os.replace(tmp, path)

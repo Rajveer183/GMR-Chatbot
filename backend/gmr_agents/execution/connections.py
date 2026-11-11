@@ -10,10 +10,10 @@ from __future__ import annotations
 import pandas as pd
 
 
-def athena_query(sql: str, database: str | None = None) -> pd.DataFrame:
+def athena_query(sql: str, database: str | None = None, max_seconds: float | None = None) -> pd.DataFrame:
     from db_connection.athena import run_query
 
-    return run_query(sql, database=database)
+    return run_query(sql, database=database, max_seconds=max_seconds)
 
 
 def postgres_connection():

@@ -24,6 +24,7 @@ from shared import config as settings
 from shared import llm_gateway
 from gmr_agents.agents import common as C
 from gmr_agents.agents.sql_writer import planner as PL
+from gmr_agents.agents.sql_writer import cross_domain as XD
 from gmr_agents.supervisor.steps import _tick
 
 
@@ -134,7 +135,14 @@ def controller_node(state: AgentState, config: RunnableConfig) -> dict[str, Any]
                 "model": "verified example"}
         return {"tool_call": call, "tool_calls": [call], "attempt": attempt, "validated": None,
                 "last_error": None, "step_count": _tick(state)}
-    catalog = get_catalog(triage["domain"])
+    if not ctx.base_prompt and "cross_domain" not in triage:
+        # A question naming both systems (WFM + MDM): plan on both catalogs (see cross_domain.py). Decided once per
+        # question; the triage dict is updated in place so validate / execute / answer see the same topics.
+        other = XD.cross_domain(f"{state['question']} {triage['question']}", triage)
+        triage.update(XD.widen(f"{state['question']} {triage['question']}", triage, other) if other else {"cross_domain": None})
+        if triage.get("cross_domain"):
+            C._step(ps, "cross_domain", time.perf_counter(), outcome=f"added {triage['cross_domain']}", topics=triage["topics"])
+    catalog = get_catalog("all" if triage.get("cross_domain") else triage["domain"])
     if not ctx.base_prompt:
         t_ctx = time.perf_counter()
         ctx.base_prompt, used = PL._plan_prompt(triage, catalog, (state.get("prior_turns") or [None])[-1])
@@ -185,6 +193,28 @@ def controller_node(state: AgentState, config: RunnableConfig) -> dict[str, Any]
         return {"tool_call": call, "tool_calls": [call], "attempt": attempt + 1, "validated": None,
                 "last_error": None, "step_count": _tick(state)}
     sql = PL._clean_sql(raw.get("sql"))
+    if (raw.get("answer_kind") == "unanswerable" or not sql) and not ctx.widened and not example \
+            and triage.get("source") != "router" and (wider := PL._widened_tables(triage)):
+        # 'Unanswerable' from a starved schema (lean scope = only the tables triage named): one re-plan with the
+        # topic's tables. 11 Nov: 'When will Triveni reach 90% SAT at the current pace?' got the snapshot +
+        # install tables but not sat_milestones (the SAT dates the pace needs) and was refused.
+        C._step(ps, "plan", t0, attempt=attempt, model=model, outcome="unanswerable -- retry with topic tables")
+        ctx.widened = True
+        t_ctx = time.perf_counter()
+        ctx.base_prompt, used = PL._plan_prompt({**triage, "tables": [*triage["tables"], *wider], "source": "widened"},
+                                               catalog, (state.get("prior_turns") or [None])[-1])
+        C._LAST_CONTEXT.pop(triage["question"], None)
+        ctx.repair_prompt = PL.repair_base(triage["question"], ctx.base_prompt)
+        C._step(ps, "context", t_ctx, outcome="unanswerable -- schema widened", added=wider)
+        ps["schema_tables"] = used
+        t0 = time.perf_counter()
+        res = llm_gateway.chat_json("sql", ctx.base_prompt, system=PL._PLAN_SYSTEM,
+                                    models=settings.LLM_MODELS_SQL, max_tokens=settings.LLM_MAX_TOKENS_SQL)
+        if res is None:
+            C._step(ps, "plan", t0, attempt=attempt, outcome="no model available")
+            return {"tool_call": None, "status": "busy", "attempt": attempt + 1, "step_count": _tick(state)}
+        raw, model = res.data, res.model
+        sql = PL._clean_sql(raw.get("sql"))
     if raw.get("answer_kind") == "unanswerable" or not sql:
         C._step(ps, "plan", t0, attempt=attempt, model=model, outcome="unanswerable")
         C._finish(ps, str(raw.get("reason") or "This can't be answered from the available data."), refused=True,
@@ -239,7 +269,7 @@ def validate_node(state: AgentState, config: RunnableConfig) -> dict[str, Any]:
 
     # Plumbing (tools/calling.py): parse -> allowlist lookup -> Pydantic args -> the tool's
     # own validator (run_sql: the SQL guard). Any failure comes back as a structured result.
-    catalog = get_catalog(triage["domain"])
+    catalog = get_catalog("all" if triage.get("cross_domain") else triage["domain"])
     ctx.tool_ctx = registry.SqlToolContext(catalog=catalog)
     prepared = calling.prepare({"tool": call.get("tool"), "args": call.get("args")}, registry.TOOLS, ctx.tool_ctx)
     if isinstance(prepared, calling.ToolOutcome):
@@ -351,7 +381,18 @@ def execute_node(state: AgentState, config: RunnableConfig) -> dict[str, Any]:
         # A repeat of this SQL after "zero is correct" must be accepted, so it is not a failed key.
         return {**base, **record, "zero_rows_retried": True, "has_fallback": True, "last_error": err, "errors": [err]}
 
-    extras, extra_problem = PL._run_extras(ps, ctx.raw_plan, get_catalog(triage["domain"]), ctx.plan.get("planner") or "")
+    impossible = [] if state.get("implausible_retried") else PL._impossible_shares(result.get("result"))
+    if impossible and not limits.retries_exhausted(state["attempt"]):
+        ctx.fallback = {"plan": ctx.plan, "result": result, "extras": []}
+        C._step(ps, "implausible", time.perf_counter(), outcome="share above 100% -- sent back", values=impossible[:3])
+        err = {"kind": "implausible", "sql": ctx.plan["sql"],
+               "message": f"The query ran, but {'; '.join(impossible[:3])}: a share / rate of a whole cannot exceed "
+                          "100%, so its numerator and denominator cover different scopes (e.g. all-time SAT over one "
+                          "month's installs, or a JOIN that multiplied rows). Compute both from the same rows, period "
+                          "and place, as the rules and verified examples define the KPI."}
+        return {**base, **record, "implausible_retried": True, "has_fallback": True, "last_error": err, "errors": [err]}
+
+    extras, extra_problem = PL._run_extras(ps, ctx.raw_plan, get_catalog("all" if triage.get("cross_domain") else triage["domain"]), ctx.plan.get("planner") or "")
     if extra_problem and not limits.retries_exhausted(state["attempt"]):
         ctx.fallback = {"plan": ctx.plan, "result": result, "extras": extras}
         err = {"kind": "extra_query", "sql": ctx.plan["sql"], "message": f"The main query worked, but {extra_problem}"}

@@ -144,7 +144,7 @@ class SessionStore:
 
     def _write_file(self, text: str) -> None:
         with self._io_lock:
-            tmp = f"{self.path}.tmp"
+            tmp = f"{self.path}.{os.getpid()}.{threading.get_ident()}.tmp"  # per writer: see knowledge_store._save
             with open(tmp, "w", encoding="utf-8") as fh:
                 fh.write(text)
             os.replace(tmp, self.path)

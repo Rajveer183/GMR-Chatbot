@@ -87,6 +87,13 @@ def _grouped_by(low: str, column: str) -> bool:
     return bool(re.search(rf"\b(?:group|partition)\s+by\b[^;]*?\b{column}\b", low, re.DOTALL))
 
 
+_RANKING_RE = re.compile(r"\b(?:top|bottom|highest|lowest|most|least|rank\w*|worst|best|which|leading|lagging)\b", re.I)
+
+
+def _grouped_by_place(low: str) -> bool:
+    return any(_grouped_by(low, c) for c in ("zone", "circle", "division", "sub_division", "discom", "project"))
+
+
 _SHARE_RE = re.compile(r"\b(?:share|percent|percentage)\b|%", re.I)
 _COMPARE_RE = re.compile(r"\b(compare|compared|comparison|versus|vs|other|others|rank|ranking|"
                          r"highest|lowest|best|worst)\b")
@@ -121,7 +128,8 @@ def _stock_filtered_by_place(sql: str) -> bool:
 # dashboard's one-zone tiles; zone-wise breakdowns get warehouse stock placed by sql/hierarchy.py); circle /
 # division have no stock.
 _WITHOUT_SAT_RE = re.compile(r"\b(without|pending|awaiting|no|not)\s+(a\s+)?sat\b|\bsat\s+(pending|not done|baaki)\b|"
-                             r"\bnot\s+(yet\s+)?(cleared|passed)\s+sat\b", re.I)
+                             r"(?:\bnot|n't|\bnever|\byet\s+to)\s+(yet\s+)?(?:been\s+)?(clear(?:ed)?|pass(?:ed)?|through|done)\s+(?:the\s+)?sat\b",
+                             re.I)
 _AGEING_RE = re.compile(r"\b(age|ageing|aging|aged|old|older|band|bands|days?|since|how long|stuck|why)\b", re.I)
 _CONSUMER_RE = re.compile(r"\bconsumers?\b(?!\s*(number|no\b|id\b|name|account|code))", re.I)
 _TYPE_WISE_RE = re.compile(r"\btype[- ]?wise\b|\bby (meter )?types?\b|\btypes? wise\b|\beach type\b", re.I)
@@ -219,6 +227,53 @@ def _union_place_gaps(low: str) -> list[str]:
     have = {(c, v) for l in installed for c, v in _PLACE_FILTER_RE.findall(l)}
     return [f"the installed-meters leg also needs {c} = '{v}' (the defect leg filters it; the OEM subquery alone does "
             "not narrow the installed base)" for c, v in sorted(wanted - have)]
+
+
+_PLACE_COLS = ("project", "discom", "zone", "circle", "division", "sub_division", "cluster")
+
+
+def _union_filter_gaps(sql: str) -> list[str]:
+    """A UNION ALL whose legs read tables must filter the same places in every leg. 11 Nov retest: 'their pending SAT
+    counts' (Kashi, Triveni) filtered the Non-SAT leg to both projects but not the MI-vs-SAT leg -> an Agra row and a
+    Total over all three projects."""
+    try:
+        import sqlglot
+        from sqlglot import exp
+        tree = sqlglot.parse_one(sql, read="postgres")
+    except Exception:
+        return []
+    out = []
+    for union in tree.find_all(exp.Union):
+        if isinstance(union.parent, exp.Union):
+            continue  # handled from the top of the chain
+        legs, stack = [], [union]
+        while stack:
+            u = stack.pop()
+            for side in (u.left, u.right):
+                (stack if isinstance(side, exp.Union) else legs).append(side)
+        legs = [l for l in legs if isinstance(l, exp.Select)
+                and isinstance((l.args.get("from") or l.args.get("from_") or exp.Null()).this, exp.Table)]
+        if len(legs) < 2:
+            continue
+
+        def filtered(leg):
+            where = leg.args.get("where")
+            cols = set()
+            if where is not None:
+                for c in where.find_all(exp.Column):
+                    if c.name.lower() in _PLACE_COLS:
+                        cols.add(c.name.lower())
+            return cols
+
+        per_leg = [filtered(l) for l in legs]
+        wanted = set().union(*per_leg)
+        for leg, have in zip(legs, per_leg):
+            missing = wanted - have
+            if missing:
+                table = (leg.args.get("from") or leg.args.get("from_")).this.name
+                out.append(f"every UNION ALL leg needs the same place filter: the {table} leg has no "
+                           f"{' / '.join(sorted(missing))} filter while another leg filters it")
+    return out[:2]
 
 
 def _stock_stage(words: str) -> str:
@@ -610,6 +665,18 @@ def _technical_problems(question: str, sql_texts: list[str]) -> list[str]:
         if pq_tables & set(used) and re.search(r"\bmeter_type\s*(?:=|in\b|like\b)", low):
             problems.append("meter type on these tables is role: '1ph', '3ph', 'ht', 'dtr' (DT meters), 'feeder' -- "
                             "filter role = 'dtr', never meter_type")
+        # 10 Nov retest: 'How many DT meters have poor voltage unbalance?' copied the all-meters example (30,034;
+        # DT meters = 17,381) -- the named meter type was dropped.
+        elif pq_tables & set(used) and not re.search(r"\brole\b", low):
+            role = next((val for rx, val in (
+                (r"\b(?:dts?|dtrs?|transformers?)(?: meters?)?\b", "dtr"), (r"\bfeeder meters?\b", "feeder"),
+                (r"\b(?:1|single|one)[- ]?(?:ph|phase)\b", "1ph"), (r"\b(?:3|three)[- ]?(?:ph|phase) consumers?\b", "3ph"),
+                (r"\bht consumers?\b", "ht")) if re.search(rx, question, re.I)), None)
+            if role and not re.search(r"\b(?:3|three)[- ]?(?:ph|phase) meters?\b|\beligible\b|\bdt[- ]?wise\b"
+                                      r"|\b(?:by|per|each|under|behind|on|of|for)\s+(?:the\s+|a\s+|this\s+)?(?:dts?|dtrs?|transformers?)\b(?! meters?)"
+                                      r"|\b(?:dt|dtr)\s+[A-Z0-9]*\d", question, re.I):
+                problems.append(f"the question names a meter type: filter role = '{role}' (role values '1ph', '3ph', "
+                                "'ht', 'dtr' = DT meters, 'feeder'; consumers = role IN ('1ph','3ph','ht'))")
         # A meter can sit in several low-voltage bands: a Total over band rows counts it twice. Live 6 Nov:
         # ROLLUP (band, ageing_bucket) over SUM(unique_meter_count) said 891,805 meters (card: 621,312 distinct).
         if "low_voltage_pockets" in used and re.search(r"sum\s*\(\s*unique_meter_count\s*\)", low) \
@@ -623,6 +690,15 @@ def _technical_problems(question: str, sql_texts: list[str]) -> list[str]:
                 r"\b(?:peak_pct_loading|max_pct_loading|pct_loading)\s*>\s*(?:20|35|55|70|85|100|120)(?:\.0+)?\b(?!\s*=)", low):
             problems.append("DT loading bands include their lower edge: 'above 120%' = peak_band = '>120%' "
                             "(peak_block_band on dt_loading), i.e. >= 120 -- use the band column, not a strict >")
+        # Ranked lists of individual DTs leave out implausible DTs, as the dashboard does. 10 Nov retest: 'transformers
+        # running above their rating for the most hours' led with a 25 kVA DT at 275% (card: AL2930421, 148 hours).
+        if {"dt_load_kva", "dt_peak_loading", "dt_load_rise"} & set(used) and re.search(r"\border\s+by\b", low) \
+                and re.search(r"\blimit\s+\d", low) and re.search(r"\bselect\b[^;]*\bmeter_no\b", low) \
+                and not re.search(r"\bmeter_no\s*=\s*'|\bdtr_code\s*=\s*'", low) \
+                and not re.search(r"pct_(?:peak_)?loading\s*\)?\s*<\s*200", low):
+            problems.append("lists of individual DTs leave out implausible ones, as the dashboard does: add "
+                            "peak_pct_loading < 200 (dt_load_kva: HAVING MAX(peak_pct_loading) < 200; dt_peak_loading: "
+                            "pct_peak_loading < 200) AND the plausible-CT condition")
         # A breakdown nobody asked for. Live 6 Nov: 'Load violation for 3-phase consumers in August' was split by
         # project and the headline % (violators / assessed of the whole) was never given.
         broke = re.findall(r"\bgroup\s+by\s+(?:rollup\s*\()?\s*(?:\w+\.)?(cluster|zone|circle|division|sub_division|"
@@ -964,6 +1040,17 @@ def _revenue_journey_problems(question: str, low: str, sql_texts: list[str], ask
                 problems.append(f"every query needs the same project filter as the question "
                                 f"({', '.join(sorted(named))}) -- an extra query has none")
                 break
+    # Each project files its own receivables rows: the table-wide MAX(created_at) is ONE project's latest filing.
+    # Live 11 Nov: 'revenue impact of non-SAT meters over 90 days' joined the bands to that row -> Agra only
+    # (96,372 of 263,243 meters; Kashi and Triveni vanished).
+    for s in sql_texts:
+        ls = (s or "").lower()
+        if re.search(r"max\(\s*(?:\w+\.)?created_at\s*\)\s+from\s+public\.revenue_receivables\b(?![^)]*\bproject\b)", ls):
+            problems.append("revenue_receivables holds rows per project: 'latest' = each project's latest row "
+                            "(ROW_NUMBER() OVER (PARTITION BY project ORDER BY created_at DESC, id DESC) = 1), never "
+                            "the table-wide MAX(created_at) (that is one project's filing); LEFT JOIN it so no "
+                            "project drops out")
+            break
     return problems
 
 
@@ -977,6 +1064,7 @@ def check(question: str, sql_texts: list[str], columns: set[str] | None = None, 
     low = sql.lower()
     cols = {c.lower() for c in columns} if columns is not None else None
     problems: list[str] = []
+    asked_words = asked   # the user's own message (`asked` is reused for the encoder output below)
     comparing = bool(_COMPARE_RE.search(question.lower()))
     # The mapping audit's summary / feeder tables have no project column: a project is its zone list
     # (UPPER(zone) IN ('AGRA', ...)), and every meter in them is a consumer meter.
@@ -1067,6 +1155,7 @@ def check(question: str, sql_texts: list[str], columns: set[str] | None = None, 
     # its OEM subquery). Live 27 Oct: SEIPL in Varanasi II divided 1,430 faulty by all 754,142 SEIPL installs (0.19%
     # instead of the card's 1.54%).
     problems += _union_place_gaps(low)
+    problems += _union_filter_gaps(sql)
 
     # 'type wise' = Consumer / DTR / Feeder (category); 'consumer type wise' = the 4 consumer
     # types (1PH / 3PH / LTCT / HTCT) of CONSUMER meters only. Seen live: 'consumer stock ageing
@@ -1088,6 +1177,10 @@ def check(question: str, sql_texts: list[str], columns: set[str] | None = None, 
     if (_WITHOUT_SAT_RE.search(question) and not _AGEING_RE.search(question)
             and not re.search(r"\b(tickets?|complaints?|escalat\w*|o&m|non[- ]?comm)\b", question, re.I)
             and not _SERIAL_RE.search(question)
+            # A ranking over places ('top 10 divisions by pending SAT') reads one per-row figure -- the total + split
+            # tiles don't apply (11 Nov retest: refused twice; 'which division has the highest pending SAT' passed).
+            and not (_RANKING_RE.search(question) and _grouped_by_place(low)
+                     and ("gold_non_sat_ageing_snapshot" in low or "sat_stage is null" in low))
             and not ("sat_stage is null" in low and (
                 "gold_non_sat_ageing_snapshot" in low
                 # a ranking / breakdown / what-if splits the snapshot's own flags per row
@@ -1096,6 +1189,15 @@ def check(question: str, sql_texts: list[str], columns: set[str] | None = None, 
                         "SUM(meter_count) FILTER (WHERE sat_stage IS NULL) from public.gold_mi_sat_invoice_snapshot, "
                         "eligible_pending_sat = the Non-SAT card's (SELECT SUM(meter_count) FROM "
                         "public.gold_non_sat_ageing_snapshot ...same place filter), not_yet_due = the difference")
+
+    # Eligible pending (the Non-SAT card) is a SUBSET of installed-not-SAT: never added together. 10 Nov retest:
+    # 'Which project is worst?' (pending SAT) UNION ALL'ed both and summed -> Agra 282,207 (= 185,835 + 96,372).
+    if "gold_non_sat_ageing_snapshot" in low and "gold_mi_sat_invoice_snapshot" in low \
+            and re.search(r"\bunion\s+all\b", low) and re.search(r"sat_stage\s+is\s+null", low) \
+            and re.search(r"\bsum\s*\(\s*(?:\w+\.)?meter_count\s*\)[^;]*\bfrom\s*\(\s*select\b", low, re.S):
+        problems.append("eligible pending SAT (gold_non_sat_ageing_snapshot) is part of installed-not-SAT "
+                        "(gold_mi_sat_invoice_snapshot WHERE sat_stage IS NULL): never UNION / add the two -- give "
+                        "installed_not_sat, eligible_pending and not_yet_due (= the difference) as separate columns per row")
 
     # % SAT vs eligible MI = ALL SAT / eligible MI. Live 27 Oct: 'eligible sat % in kashi' came back as
     # SAT(eligible) / eligible = 94.18% instead of the card's 95.33%.
@@ -1386,4 +1488,241 @@ def check(question: str, sql_texts: list[str], columns: set[str] | None = None, 
         if dated:
             problems.append(f"the SQL filters on the date {dated[0]} but the question names no period -- "
                             "no date means all time; remove that date filter")
+        problems += _install_window_problems(f"{question} {asked_words or ''}", low)
+    problems += _fanout_problems(sql)
+    # Two or more projects named, one IN (...) filter, no per-project rows: their figures come back added together.
+    # 11 Nov retest: 'Now show their pending SAT counts' (Kashi, Triveni) -> one combined row, read back as
+    # 'Kashi 340,756, Triveni 166,871' (true 75,066 / 91,805).
+    named_projects = _named(question, _PROJECTS)
+    if 1 < len(named_projects) < len(_PROJECTS) and re.search(r"\bproject\)?\s+in\s*\(", low) \
+            and not _grouped_by(low, "project") and not re.search(r"\bfilter\s*\(\s*where[^)]*\bproject\b", low) \
+            and not re.search(r"\b(?:combined|together|total of|sum of|altogether|overall)\b", question, re.I):
+        problems.append(f"the question names {len(named_projects)} projects ({', '.join(sorted(named_projects))}): "
+                        "give one row per project (GROUP BY project, or one FILTER column per project), never one "
+                        "combined figure")
+    problems += _varanasi_problems(asked_words or question, low)
+    problems += _null_band_sum_problems(low)
+    problems += _athena_slip_problems(sql_texts)
+    problems += _rollup_coalesce_problems(sql_texts)
+    problems += _defect_rate_base_problems(f"{question} {asked_words or ''}", low)
+    problems += _bare_count_problems(f"{asked_words or ''} {question}", sql)
+    problems += _week_window_problems(f"{asked_words or ''} {question}", low)
+    problems += _snapshot_history_problems(low)
+    return problems
+
+
+# A plain count with no breakdown asked ('Low PF flagged count', 'how many theft suspect meters') must come back as
+# its total. 11 Nov retest: 'Low PF flagged count' was grouped by data month x zone x category with no total row
+# and the answer read one row's figure as the count ('51 meters'; the card says 711,642).
+_BARE_COUNT_RE = re.compile(r"\b(?:count|how many|total|number of|kitne|kitni|कितने)\b", re.I)
+_BREAKDOWN_WORDS_RE = re.compile(
+    r"\b(?:wise|by|each|per|split|break\w*|which|top|bottom|compare\w*|vs|versus|where|areas?|list|show|trend\w*|"
+    r"highest|lowest|most|least|rank\w*|across|among|between|distribution|band\w*|bucket\w*|severity|categor\w*|"
+    r"types?|daily|weekly|monthly|month|day|week|year|hisaab|alag)\b|-wise", re.I)
+
+
+def _bare_count_problems(words: str, sql: str) -> list[str]:
+    if not _BARE_COUNT_RE.search(words) or _BREAKDOWN_WORDS_RE.search(words):
+        return []
+    try:
+        import sqlglot
+        from sqlglot import exp
+        tree = sqlglot.parse_one(sql, read="postgres") if ";" not in sql.strip().rstrip(";") else None
+    except Exception:
+        return []
+    if not isinstance(tree, exp.Select):
+        return []
+    group = tree.args.get("group")
+    if group is None or tree.args.get("limit") is not None:
+        return []
+    if "rollup" in group.sql().lower() or "cube" in group.sql().lower() or "grouping sets" in group.sql().lower():
+        return []
+    keys = [e for e in group.expressions if not (isinstance(e, exp.Column) and
+                                                  e.name.lower() in ("data_date", "data_month", "month_date"))]
+    if len(keys) >= 2:
+        return ["the question asks for one count, no breakdown: return the TOTAL (one row, no GROUP BY) -- or keep "
+                "the breakdown with GROUP BY ROLLUP so a Total row comes first; never only per-group rows"]
+    return []
+
+
+# Installed-meter counts with no period are all time (rule 'No date = all time'). 11 Nov retest: 'Kashi mein
+# installed meters batao' ran CURRENT_DATE - 7 .. - 1 (5,539 vs 1,383,993) and 'Give me the Kashi installation
+# figures' listed the last 30 days (ORDER BY period_start DESC LIMIT 30) and called their sum 'all time'.
+_INSTALL_TABLE_RE = re.compile(r"\bpublic\.gold_mi_installation_(?:day|month)_agg\b")
+_TREND_WORDS_RE = re.compile(r"\b(?:trend\w*|daily|weekly|monthly|day[- ]?wise|week[- ]?wise|month[- ]?wise|per (?:day|week|month)|"
+                             r"each (?:day|week|month)|over time|pace|productiv\w*|dashboard|card|recent|latest|peak|"
+                             r"declin\w*|growth|slow\w*|rate|past|curve|dip\w*|sag\w*|why|journey|time|days?|weeks?|"
+                             r"months?|years?|today|compare\w*|vs|versus|"
+                             # multi-KPI summaries mix all-time totals with a recent-activity figure (11 Nov: 'how is
+                             # Triveni doing overall?')
+                             r"overall|doing|health|summary|summari\w*|brief|scorecard|risk\w*|severity)\b", re.I)
+
+
+def _install_window_problems(words: str, low: str) -> list[str]:
+    if not _INSTALL_TABLE_RE.search(low) or _TREND_WORDS_RE.search(words):
+        return []
+    if re.search(r"\bperiod_start\s*(?:>=|>|between|=)\s*\(?\s*current_date\b", low) \
+            or re.search(r"\border\s+by\s+period_start\s+desc\b[^;]*\blimit\s+\d+", low):
+        return ["the question names no period: installed meters with no date = ALL TIME -- one SUM over every "
+                "period_start (no CURRENT_DATE bound, no recent-days LIMIT); say 'all time'"]
+    return []
+
+
+def _fanout_problems(sql: str) -> list[str]:
+    """A SUM over a JOIN of a gold aggregate table with another table / grouped subquery repeats each row once per
+    match. 11 Nov retest: installs JOIN the SAT snapshot on place -> '703.75 million installed, 3.51 billion SAT';
+    the Non-SAT snapshot JOIN a (project, category) complaints subquery -> '76,978,299 open complaints'."""
+    try:
+        import sqlglot
+        from sqlglot import exp
+        trees = sqlglot.parse(sql, read="postgres")
+    except Exception:
+        return []
+    for tree in trees:
+        if tree is None:
+            continue
+        for sel in tree.find_all(exp.Select):
+            srcs = [sel.args.get("from") or sel.args.get("from_")] + list(sel.args.get("joins") or [])
+            srcs = [s.this for s in srcs if s is not None]
+            gold = [s for s in srcs if isinstance(s, exp.Table)
+                    and re.match(r"(?:gold_|lpf2_|power_factor|theft|outage|total_anomal)", s.name.lower())
+                    and not s.name.lower().startswith("dim_")]
+            if not gold or len(srcs) < 2:
+                continue
+            aliases = {}
+            for s in srcs:
+                if isinstance(s, (exp.Table, exp.Subquery)):
+                    aliases[(s.alias_or_name or "").lower()] = s
+            summed: set[str] = set()
+            for agg in sel.find_all(exp.Sum, exp.Count, exp.Avg):
+                if agg.parent_select is not sel:
+                    continue
+                for col in agg.find_all(exp.Column):
+                    if col.table:
+                        summed.add(col.table.lower())
+            data_srcs = {a for a in summed if a in aliases}
+            if len(data_srcs) >= 2 or any(isinstance(aliases[a], exp.Subquery) for a in data_srcs):
+                names = ", ".join(sorted(t.name for t in gold))
+                return [f"the SQL aggregates across a JOIN of {names} with another table / subquery: each row repeats "
+                        "once per match, so the sums are multiplied. Aggregate EACH table on its own first (one "
+                        "subquery per table, GROUP BY the same key), then join the per-key totals 1:1 -- or use "
+                        "scalar subqueries / UNION ALL"]
+    return []
+
+
+def _varanasi_problems(user: str, low: str) -> list[str]:
+    """A bare 'Varanasi' = zones VARANASI I + II (rule 'Places'); only 'Varanasi project / cluster' or 'Kashi' is the
+    whole Kashi project. 11 Nov retest: 'How many meters are installed in Varanasi?' -> project kashi (1,383,993;
+    the two zones hold 854,706)."""
+    u = user.lower()
+    if not re.search(r"\bvaranasi\b(?!\s*(?:i|ii|1|2)\b)", u) or re.search(r"\b(?:kashi|kasi|project|cluster)\b", u) \
+            or re.search(r"\bvaranasi[_ ]?hw\b|\bwarehouse\b", u) or "hes_" in low or "varanasi" in low:
+        return []
+    return ["'Varanasi' = zones VARANASI I + VARANASI II (LOWER(zone) IN ('varanasi i', 'varanasi ii')), not the whole "
+            "Kashi project -- Azamgarh is a Kashi zone too"]
+
+
+# SUM(...) FILTER (WHERE ...) over no matching row is NULL, and NULL + x is NULL. 11 Nov: 'revenue impact of meters
+# stuck in non-SAT over 90 days' added the 91-120 and 120+ bands; Kashi has no 91-120 meters, so its 75,066 came
+# back blank and the answer said 'Kashi has none'.
+_FILTER_SUM_ALIAS_RE = re.compile(r"(coalesce\(\s*)?sum\((?:[^()]|\([^()]*\))*\)\s*filter\s*\(\s*where\s+(?:[^()]|\([^()]*\))*\)"
+                                  r"\s*(?:,\s*0\s*\))?\s+as\s+(\w+)")
+
+
+def _null_band_sum_problems(low: str) -> list[str]:
+    # Only parts ADDED together (bands summed into one total): a change 'b - a' that is NULL for a missing month is
+    # a fair 'no data', and whole-table FILTER sums are never empty (verified examples e83, e187 do both).
+    bare = {m.group(2) for m in _FILTER_SUM_ALIAS_RE.finditer(low) if not m.group(1)}
+    for a1 in sorted(bare):
+        for a2 in sorted(bare - {a1}):
+            if re.search(rf"\b{re.escape(a1)}\s*\+\s*(?:\w+\.)?{re.escape(a2)}\b", low):
+                return [f"'{a1}' and '{a2}' are SUM(...) FILTER (...), which is NULL when no row matches -- and NULL + x "
+                        "is NULL, so that row's total disappears: write COALESCE(SUM(...) FILTER (WHERE ...), 0) for each"]
+    return []
+
+
+# A defect / failure RATE needs the installed base. 11 Nov: 'segment consumers by meter type and show defect rate'
+# returned defect counts only; the answer divided faulty by all defects and called it '1PH defect rate 74.3%'
+# (the real rate is ~1%).
+_DEFECT_RATE_ASK_RE = re.compile(r"\b(?:defect(?:ive)?|failure|fault) (?:rate|probability|percentage|%)|"
+                                 r"(?:probability|chance|likel\w+|propensity) .{0,40}\b(?:defective|fail|faulty|burn)", re.I)
+
+
+def _defect_rate_base_problems(words: str, low: str) -> list[str]:
+    if not _DEFECT_RATE_ASK_RE.search(words) or "gold_meter_defect_event_day_agg" not in low:
+        return []
+    if re.search(r"gold_mi_installation_(?:day|month)_agg|installed|meter_count", low):
+        return []
+    return ["a defect rate needs the installed base: SUM(defect_rate_numerator_count) (Meter Faulty) * 100 / installed, "
+            "installed = SUM(meter_count) from public.gold_mi_installation_month_agg (NOT is_replacement AND "
+            "has_meter_serial AND oem IS NOT NULL, the same place / category / meter-type filters) -- return both counts "
+            "and the rate, never faulty / all defects"]
+
+
+# COALESCE(col, 'label') under ROLLUP labels the grand-total row (NULL col) like a real item. 11 Nov: 'compare installed
+# meters in WFM with HES per project' used COALESCE(project, 'Not placed') with ROLLUP -> the 4,340,272 total became a
+# 'Not placed' project and the answer said 'WFM shows 8,680,544 installed'.
+def _rollup_coalesce_problems(sql_texts: list[str]) -> list[str]:
+    for s in sql_texts:
+        sl = (s or "").lower()
+        if not re.search(r"\brollup\b|\bgrouping\s+sets\b|\bcube\b", sl):
+            continue
+        for col in set(re.findall(r"coalesce\s*\(\s*(?:upper\s*\(|lower\s*\()?\s*(?:\w+\.)?(\w+)\s*\)?\s*,\s*'[^']*'\s*\)", sl)):
+            if not re.search(rf"grouping\s*\(\s*(?:\w+\.)?{col}\s*\)", sl):
+                return [f"the ROLLUP total row has {col} = NULL, so COALESCE({col}, '...') labels the TOTAL as an item and "
+                        f"it is counted twice: write CASE WHEN GROUPING({col}) = 1 THEN 'Total' WHEN {col} IS NULL THEN "
+                        "'<label>' ELSE ... END"]
+    return []
+
+
+# 'Last week' = the 7 days ending yesterday (business_rules.yaml, dates rule). 11 Nov: 'what drove the change in O&M
+# tickets closed last week vs the week before' used date_trunc('week', CURRENT_DATE - 1) -- on a Monday that is
+# today's week, so 'last week' was one day (358 closures) against a full week (1,497): a fake 76% drop.
+_LAST_WEEK_RE = re.compile(r"\blast week\b|\bprevious week\b|\bweek before\b|\bpichl[ea] (?:hafte|hafta)\b|"
+                           r"\bweek[- ]on[- ]week\b|\bwow\b", re.I)
+
+
+def _week_window_problems(question: str, low: str) -> list[str]:
+    if not _LAST_WEEK_RE.search(question):
+        return []
+    if re.search(r"date_trunc\s*\(\s*'week'", low) and re.search(r"current_date|now\(\)", low):
+        return ["'last week' is the 7 days ending yesterday (CURRENT_DATE - 7 .. CURRENT_DATE - 1) and 'the week "
+                "before' is CURRENT_DATE - 14 .. CURRENT_DATE - 8 -- never date_trunc('week', ...), which on a Monday "
+                "makes 'last week' one day long"]
+    return []
+
+
+# Snapshots with no history (SAT / invoice, dashboard headline row): a 'previous month' read from them is the same
+# rows again. 11 Nov: 'SAT completion kyun kam hua pichle mahine?' scanned gold_mi_sat_invoice_snapshot twice as
+# 'latest_month' and 'prev_month' and answered 'no change' -- a comparison that never existed.
+_NO_HISTORY_TABLES = ("gold_mi_sat_invoice_snapshot", "gold_dashboard_stats_snapshot")
+
+
+def _snapshot_history_problems(low: str) -> list[str]:
+    for t in _NO_HISTORY_TABLES:
+        if len(re.findall(rf"\b{t}\b", low)) >= 2 and re.search(
+                r"\b(?:prev\w*|last_month|prior\w*|earlier|before|this_month|latest_month|curr\w*_month)\b\s+as\s*\(", low):
+            return [f"{t} is a snapshot with no history: reading it twice as two periods gives the same rows. Query it "
+                    "once for the current figures (the answer says month-by-month history is not stored)"]
+    return []
+
+
+# Athena-only slips seen 11 Nov on MDM cards:
+# * the dashboard default month ('latest month with 10+ days') read from the card's OWN monthly table -- one row per month,
+#   so COUNT(DISTINCT data_date) >= 10 never holds: 0 rows, and the answer said 'feeder loss data is not loaded';
+# * a Postgres '::' cast on Athena ('mismatched input ':'') -- the repair kept it.
+def _athena_slip_problems(sql_texts: list[str]) -> list[str]:
+    problems: list[str] = []
+    for s in sql_texts:
+        sl = (s or "").lower()
+        athena = re.search(r"\b(?:hes_gold|hes_silver|gmr_wfm_silver)\.", sl)
+        if not athena:
+            continue
+        if re.search(r"count\s*\(\s*distinct\s+data_date\s*\)\s*>=\s*10", sl) and "dt_load_profile" not in sl:
+            problems.append("the dashboard default month comes from hes_gold.dt_load_profile: data_date = (SELECT MAX(month_date) "
+                            "FROM (SELECT month_date FROM hes_gold.dt_load_profile WHERE month_date >= DATE '2026-06-01' GROUP BY "
+                            "month_date HAVING COUNT(DISTINCT data_date) >= 10) c) -- a monthly card table has one row per month, "
+                            "so counting its days returns nothing")
+        if re.search(r"[\w)\]]\s*::\s*[a-z]", re.sub(r"'(?:[^']|'')*'", "''", sl)):
+            problems.append("Athena (Trino) has no '::' cast: write CAST(x AS double) / CAST(x AS date)")
     return problems

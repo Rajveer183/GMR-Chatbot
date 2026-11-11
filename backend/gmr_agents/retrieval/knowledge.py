@@ -413,7 +413,7 @@ def table_hints(question: str, k: int) -> str:
 _KNOWN_VALUES: dict = {}
 
 
-def known_value(value: str) -> bool:
+def known_value(value: str, exact: bool = False) -> bool:
     """Is this string a real stored value (lower-case match) -- a catalog column's sample
     value, a data-skeleton dimension value or a geography name? A LIKE fragment matches
     when it is part of one. Rebuilt with the catalog / skeleton (RETRIEVAL_ITEMS_TTL)."""
@@ -421,18 +421,22 @@ def known_value(value: str) -> bool:
 
     now = time.monotonic()
     if not _KNOWN_VALUES or now - _KNOWN_VALUES["at"] >= config.RETRIEVAL_ITEMS_TTL:
-        values: set[str] = set()
+        raw: set[str] = set()
         for t in _catalog_tables():
             for c in t.columns:
-                values.update(str(v).strip().lower() for v in c.sample_values or [])
+                raw.update(str(v).strip() for v in c.sample_values or [])
         skel = data_skeleton.load()
         for card in skel.get("tables") or []:
             for vs in (card.get("dimensions") or {}).values():
-                values.update(str(v).strip().lower() for v in vs)
+                raw.update(str(v).strip() for v in vs)
         for g in skel.get("geography") or []:
-            values.update(str(v).strip().lower() for v in g.values() if v)
-        values.discard("")
-        _KNOWN_VALUES.update(at=now, values=values)
+            raw.update(str(v).strip() for v in g.values() if v)
+        raw.discard("")
+        _KNOWN_VALUES.update(at=now, values={v.lower() for v in raw}, exact=raw)
+    if exact and "%" not in str(value):
+        # As stored, case included: a plain '=' / IN in Postgres is case-sensitive ('EDC Agra' never
+        # matches the stored 'edc agra').
+        return str(value).strip() in _KNOWN_VALUES["exact"]
     v = str(value).strip().lower()
     if "%" in v:
         frag = v.replace("%", "")

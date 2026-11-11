@@ -46,7 +46,7 @@ from shared import config, llm_gateway, redis_client
 from shared.logging_config import append_jsonl, configure_logging, new_trace_id
 from shared.session_store import SessionStore
 from gmr_agents.ops import answer_cache, prewarm
-from gmr_agents.resolvers import language
+from gmr_agents.resolvers import language, multi_question
 from gmr_agents.llm_pipeline import run_agent
 from gmr_agents.catalog import business_rules
 from gmr_agents.catalog.catalog import MAX_CACHE_AGE_SECONDS, get_catalog
@@ -55,7 +55,9 @@ configure_logging()
 log = logging.getLogger(__name__)
 
 # Chat sessions (the pre-warmer keeps its throwaway sessions in a store of its own).
-sessions = SessionStore(os.path.join(config.OUTPUT_DIR, "gmr_chat_sessions.json"))
+# GMR_SESSIONS_FILE: a test backend running beside the live one keeps its own file -- two
+# processes on one file overwrite each other's sessions (each writes its whole in-memory set).
+sessions = SessionStore(os.environ.get("GMR_SESSIONS_FILE") or os.path.join(config.OUTPUT_DIR, "gmr_chat_sessions.json"))
 
 
 class AIQueryRequest(BaseModel):
@@ -427,6 +429,83 @@ def answer_question(question: str, session_id: str | None, *, store: SessionStor
     return response
 
 
+def answer_message(question: str, session_id: str | None, *, emit=None, canonical_question: str | None = None,
+                   **kw) -> dict:
+    """A message that holds several questions ('How many installed yesterday? And SAT % by project?') runs as
+    one turn per question (resolvers/multi_question.py) and comes back as one combined answer; anything else
+    is answer_question unchanged. Each part is stored in the session as its own turn, so a later part can use
+    an earlier one as context ('... in Kashi? And by zone?') and the history shows every question."""
+    parts, extra = ([question], []) if canonical_question else multi_question.split(question)
+    if len(parts) == 1:
+        return answer_question(question, session_id, emit=emit, canonical_question=canonical_question, **kw)
+    log.info("multi-question message -> %d parts%s", len(parts), f" (+{len(extra)} not run)" if extra else "")
+    answers: list[dict] = []
+    done = {"summary": "", "kpis": [], "charts": [], "tables": []}  # what earlier parts already showed
+    for i, part in enumerate(parts):
+        head = f"**{i + 1}. {part}**\n"
+        sub_emit = None
+        if emit is not None:
+            emit({"type": "status", "message": f"Question {i + 1} of {len(parts)}: {part}"})
+            text = {"t": ""}
+
+            def sub_emit(ev, head=head, text=text):
+                # The client shows ONE answer: keep earlier parts' text and tables, add this part's.
+                kind = ev.get("type")
+                if kind in ("summary_delta", "summary_replace"):
+                    text["t"] = (text["t"] + ev.get("text", "")) if kind == "summary_delta" else ev.get("text", "")
+                    emit({"type": "summary_replace", "text": done["summary"] + head + text["t"]})
+                elif kind == "partial":
+                    emit({**ev, **{k: done[k] + list(ev.get(k) or []) for k in ("kpis", "charts", "tables")}})
+                else:
+                    emit(ev)
+        # Later parts read the history from the session (it now holds the earlier parts), not the client's list.
+        part_kw = kw if i == 0 else {**kw, "prior_questions": None, "via_followup": False}
+        r = answer_question(part, session_id, emit=sub_emit, **part_kw)
+        session_id = r.get("session_id") or session_id
+        answers.append(r)
+        done["summary"] += head + str(r.get("summary") or "") + "\n\n"
+        for k in ("kpis", "charts", "tables"):
+            done[k] = done[k] + list(r.get(k) or [])
+    return _combine(question, parts, extra, answers)
+
+
+def _combine(question: str, parts: list[str], extra: list[str], answers: list[dict]) -> dict:
+    """One response from the per-question answers: a summary section per question; KPIs / charts / tables /
+    insights / sources in question order (ids prefixed so they stay unique; each table keeps the trace id it
+    pages from)."""
+    out = copy.deepcopy(answers[0])
+    out["question"] = question
+    summary = "\n\n".join(f"**{i + 1}. {p}**\n{a.get('summary') or ''}" for i, (p, a) in enumerate(zip(parts, answers)))
+    if extra:
+        summary += "\n\n" + f"Not answered here (ask separately): {'; '.join(extra)}"
+    out["summary"] = summary
+    for key in ("kpis", "charts", "tables", "insights", "warnings", "citations"):
+        merged, seen = [], set()
+        for i, a in enumerate(answers):
+            trace = (a.get("debug") or {}).get("trace_id")
+            for j, item in enumerate(a.get(key) or []):
+                if isinstance(item, dict):
+                    item = dict(item)
+                    if "id" in item:
+                        item["id"] = f"q{i + 1}-{item['id']}"
+                    if key == "tables":
+                        item.setdefault("trace_id", trace)
+                        item.setdefault("table_index", j)
+                sig = json.dumps(item, sort_keys=True, default=str) if key != "tables" else id(item)
+                if sig not in seen:
+                    seen.add(sig)
+                    merged.append(item)
+        out[key] = merged
+    out["suggested_followups"] = list(answers[-1].get("suggested_followups") or [])
+    out["suggested_followup_labels"] = answers[-1].get("suggested_followup_labels")
+    out["refused"] = all(a.get("refused") for a in answers)
+    out["debug"] = {**(answers[0].get("debug") or {}),
+                    "parts": [{"question": p, "trace_id": (a.get("debug") or {}).get("trace_id"),
+                               "refused": bool(a.get("refused"))} for p, a in zip(parts, answers)],
+                    "not_run": extra}
+    return out
+
+
 def _rate_limit_key(req: AIQueryRequest | TranslateRequest, request: Request) -> str:
     """Per-session when a session already exists; a brand-new chat (no
     session_id yet) is keyed by client IP instead, since there is no other
@@ -451,7 +530,7 @@ def ai_query(req: AIQueryRequest, request: Request) -> dict:
         raise HTTPException(status_code=400, detail="Question must not be empty.")
     _check_rate_limit(req, request)
     with prewarm.live_question():
-        return answer_question(question, req.session_id, prior_questions=req.prior_questions,
+        return answer_message(question, req.session_id, prior_questions=req.prior_questions,
                                via_followup=bool(req.via_followup), response_language=req.response_language,
                                canonical_question=req.canonical_question)
 
@@ -473,7 +552,7 @@ def ai_query_stream(req: AIQueryRequest, request: Request) -> StreamingResponse:
     def work() -> None:
         try:
             with prewarm.live_question():
-                response = answer_question(question, req.session_id, prior_questions=req.prior_questions,
+                response = answer_message(question, req.session_id, prior_questions=req.prior_questions,
                                            via_followup=bool(req.via_followup), emit=events.put,
                                            response_language=req.response_language,
                                            canonical_question=req.canonical_question)

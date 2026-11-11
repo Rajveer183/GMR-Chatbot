@@ -13,12 +13,13 @@ from gmr_agents.catalog import business_rules
 from gmr_agents.ops import answer_cache
 from gmr_agents.resolvers import language
 from gmr_agents.guards import injection
-from gmr_agents.checks import extreme_check, grounding, number_check
+from gmr_agents.checks import extreme_check, freshness, grounding, number_check, year_check
 import logging
 from gmr_agents.agents.common import _ALL_TIME_LEAD_RE, _ANSWER_ROWS, _PAST_DATE_RE, _PERIOD_RE, _emit, _step, _today
 from gmr_agents.agents.followups import _followup_options, _options_text, _pick_followups
 from gmr_agents.presentation.analyst import _date_window, _partial_periods, _result_facts, _result_preview, _short_weeks
 from gmr_agents.presentation.blocks import _tidy_ts
+from gmr_agents.presentation import drivers as _drivers, stats as _stats
 
 log = logging.getLogger("gmr_agents.llm_pipeline")  # same logger name as before the split
 
@@ -89,6 +90,28 @@ def _write_answer(state: dict, triage: dict, plan: dict, result: dict, extras: l
     if facts:
         parts.append("FACTS (computed by code from RESULT, Total rows excluded; partial period left out of highest / "
                      "lowest -- use these for totals and highest / lowest / lagging / leading claims):\n" + facts)
+    # Analytical asks (correlation, spread, forecast range, Monte Carlo, PCA ...): exact figures computed by
+    # code, plus the named methods that were NOT run -- nothing for ordinary questions.
+    analysis = _stats.analyse(state["question"] + " || " + str(triage["question"]), result.get("result"),
+                              extras=[ex.get("result") for ex in extras or []])
+    lined = ""
+    if triage.get("cross_domain") and extras:
+        lined = _stats.line_up(result.get("result"), [ex.get("result") for ex in extras])
+        if lined:
+            parts.append(lined)
+    if analysis:
+        parts.append(analysis)
+        _step(state, "stats", time.perf_counter(), methods=sorted(_stats.wanted(state["question"] + " " + str(triage["question"]))),
+              not_run=_stats.not_run(state["question"]))
+    # 'Why did X rise / fall': where the change came from, per group, computed by code (presentation/drivers.py).
+    try:
+        why = _drivers.breakdown(state["question"] + " || " + str(triage["question"]), result.get("result"))
+    except Exception:
+        log.warning("answer: driver breakdown failed", exc_info=True)
+        why = ""
+    if why:
+        parts.append(why)
+        _step(state, "drivers", time.perf_counter(), lines=why.count("\n"))
     periods = _partial_periods(result.get("result"))[2]
     if periods:
         parts.append(periods)
@@ -150,7 +173,11 @@ def _write_answer(state: dict, triage: dict, plan: dict, result: dict, extras: l
     # ('120 days', 'per 1,000 meters'). Measured: most number-check flags were these, each
     # costing a correction call -- or a code 'repair' that rewrote a correct figure.
     # FACTS too: its per-category totals are computed in code ('CONSUMER total across the 8 periods').
+    # STATS / LINED UP are computed by code from these results too: their figures (correlations, P10-P90, scenario
+    # values) are supported. 11 Nov: without them every Monte Carlo / projection figure was 'unsupported' and the
+    # code repair cut it -- 'The Monte Carlo simulation of the next 30 days. For a single day ...'.
     given = " ".join([state["question"], triage["question"], triage.get("assumption") or "", notes or "", facts,
+                      analysis or "", lined or "",
                       *(str(t.get("summary") or "")[:160] for t in memory[-2:])])
     allowed = number_check.allowed_values(frames, given)
     bad = number_check.unsupported(" ".join([summary, *insights]), allowed)
@@ -181,11 +208,24 @@ def _write_answer(state: dict, triage: dict, plan: dict, result: dict, extras: l
             log.warning("answer: summary still has unsupported numbers %s", left)
         if state.get("emit") is not None:
             _emit(state, "summary_replace", text=summary)
+    # Month-years the result / question never had ('October 2025' for 2026 data): corrected in code.
+    summary, wrong_years = year_check.fix(summary, frames, given)
+    insights = [year_check.fix(i, frames, given)[0] for i in insights]
+    summary, wrong_days = year_check.drop_wrong_weekdays(summary)
+    insights = [i for i in insights if not year_check.drop_wrong_weekdays(f"{summary} {i}")[1]]
+    if wrong_days:
+        _step(state, "weekday_check", time.perf_counter(), dropped=wrong_days)
+        wrong_years = [*wrong_years, *wrong_days]
+    if wrong_years:
+        _step(state, "year_check", time.perf_counter(), fixed=wrong_years)
+        if state.get("emit") is not None:
+            _emit(state, "summary_replace", text=summary)
     # Insights are observations about THIS result: a number from an earlier answer is not allowed
     # there. Seen live: 'Installation to SAT for LTCT' (105.39) got the insight 'shorter than HTCT
     # (406.82) and 3PH (301.12)' -- their TOTAL journey from the previous turn, so the comparison
     # was false (HTCT 87.50, 3PH 82.51 installation-to-SAT). The summary may still quote them.
-    own = number_check.allowed_values(frames, " ".join([state["question"], triage["question"], notes or ""]))
+    own = number_check.allowed_values(frames, " ".join([state["question"], triage["question"], notes or "",
+                                                         analysis or "", lined or ""]))
     insights = [i for i in insights if not number_check.unsupported(i, own)]
     # Highest / lowest check: a figure can be IN the result yet not be the max / min it is
     # called ('lowest feeder count (48)' when Feb had 29). Wrong insight = dropped; a wrong
@@ -215,8 +255,18 @@ def _write_answer(state: dict, triage: dict, plan: dict, result: dict, extras: l
         rest = _ALL_TIME_LEAD_RE.sub("", summary, count=1)
         summary = rest[:1].upper() + rest[1:]
     # Sources of a data answer: built by code from what actually ran (never by the LLM).
-    refreshed = answer_cache.current_version().split("|")[0]
-    state["citations"] = grounding.data_citations(plan, triage, f"{_tidy_ts(refreshed)} IST" if refreshed else None)
+    # The refresh time is the WFM gold snapshot's -- it says nothing about MDM tables.
+    refreshed = answer_cache.current_version().split("|")[0] if state.get("agent") != "mdm" else ""
+    try:
+        fresh = freshness.check(plan.get("tables") or [], plan.get("sql"))
+    except Exception:
+        log.warning("answer: freshness check failed", exc_info=True)
+        fresh = []
+    state["citations"] = grounding.data_citations(plan, triage, f"{_tidy_ts(refreshed)} IST" if refreshed else None, fresh)
+    stale = freshness.warnings(fresh)
+    if stale:
+        _step(state, "freshness", time.perf_counter(), stale=stale)
+        state["warnings"] = [*(state.get("warnings") or []), *stale]
     # What the answer is really written in (models skip the LANGUAGE line now and then); a
     # mismatch with the target is translated afterwards (main._in_language).
     state["answer_language"] = language.written_in(" ".join([summary, *insights]), writing)

@@ -145,7 +145,7 @@ def _save() -> None:
             for key in sorted(entries, key=lambda k: entries[k]["at"])[: len(entries) - config.ANSWER_CACHE_MAX_ENTRIES]:
                 entries.pop(key, None)
         snapshot = dict(entries)  # entries are replaced on put(), never changed in place
-    tmp = _PATH + ".tmp"
+    tmp = f"{_PATH}.{os.getpid()}.{threading.get_ident()}.tmp"  # per writer: see knowledge_store._save
     with _IO_LOCK:
         with open(tmp, "w", encoding="utf-8") as fh:
             json.dump(snapshot, fh, ensure_ascii=False, default=str)

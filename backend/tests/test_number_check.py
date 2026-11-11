@@ -70,3 +70,37 @@ class NumberCheckTests(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+def test_repair_never_cuts_inside_a_number_or_hyphenated_word():
+    # 10 Nov retest: 'with 10,279 ...' was cut to 'with 10' and 'have non-SAT ...' to 'have non.'
+    import pandas as pd
+    from gmr_agents.checks import number_check as N
+    df = pd.DataFrame({"division": ["EDD PIPARI", "EDD SORON"], "n": [10279, 9905]})
+    text = ("The ten divisions are led by EDD PIPARI with 10,279 meters, followed by EDD SORON at 9,905 and 7,777 "
+            "others. All ten divisions have non-SAT 120+ meters above 6,123.")
+    fixed, left = N.repair(text, N.allowed_values([df]), [df])
+    assert fixed == "The ten divisions are led by EDD PIPARI with 10,279 meters."
+    assert not left
+    df2 = pd.DataFrame({"a": [15.32, 11.47]})
+    fixed, _ = N.repair("Kashi leads at 15.32, while Agra is at 11.47 – roughly 3,333 fewer – and Triveni trails.",
+                        N.allowed_values([df2]), [df2])
+    assert fixed == "Kashi leads at 15.32, while Agra is at 11.47 and Triveni trails."
+
+
+def test_column_name_numbers_and_cross_query_differences_are_supported():
+    import pandas as pd
+    from gmr_agents.checks import number_check as N
+    df = pd.DataFrame({"division": ["EDD PIPARI"], "non_sat_120_plus": [10279]})
+    assert not N.unsupported("EDD PIPARI has 10,279 meters aged 120+ days.", N.allowed_values([df]))
+    main, extra = pd.DataFrame({"installed_not_sat": [524818]}), pd.DataFrame({"eligible_pending": [263243]})
+    assert not N.unsupported("Of these, 263,243 are eligible and 261,575 not yet due.", N.allowed_values([main, extra]))
+
+
+def test_repair_drops_dangling_lead_in_only_when_it_cut():
+    import pandas as pd
+    from gmr_agents.checks import number_check as N
+    m = pd.DataFrame({"n": [524818]})
+    fixed, _ = N.repair("524,818 meters have not cleared SAT. Of these, 999,999 are odd.", N.allowed_values([m]), [m])
+    assert fixed == "524,818 meters have not cleared SAT."
+    assert N.repair("Agra leads overall. 524,818 meters.", N.allowed_values([m]), [m])[0] == "Agra leads overall. 524,818 meters."

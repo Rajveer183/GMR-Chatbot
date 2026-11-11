@@ -178,6 +178,15 @@ class GatewayTests(unittest.TestCase):
         self.assertGreaterEqual(self._fail(_Resp()), llm_gateway._REPEATED_429_PARK - 1)
         self.assertIn("gemini:test-model", llm_gateway._PARKED)
 
+    def test_repeated_nvidia_429s_park_one_minute(self):
+        # NVIDIA: per-minute limit, no daily cap -- a 10-minute park left no model at all (10 Nov retest).
+        for _ in range(llm_gateway._REPEATED_429):
+            with self.assertRaises(llm_gateway._Skip):
+                llm_gateway._fail_status("sql", "nvidia", "test-model", self.st, 429, _Resp(), 5.0, "", "", 100)
+        wait = self.st.cooldown_until - time.monotonic()
+        self.assertGreaterEqual(wait, 59)
+        self.assertLessEqual(wait, 61)
+
     def test_daily_quota_parks_past_a_short_retry_delay(self):
         # Gemini: retryDelay "30s" on a spent daily quota -- still parked for the daily cap.
         wait = self._fail(_Resp(text='{"error": {"details": [{"quotaId": "GenerateRequestsPerDayPerProjectPerModel"},'

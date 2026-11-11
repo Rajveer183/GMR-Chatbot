@@ -215,6 +215,9 @@ _PARKED: dict[str, dict] = {}
 # LIMIT_COOLDOWN), 3 rate limits in a row 10 min, 2 timeouts in a row 30 min -- skips ~48% of
 # the time lost to failed attempts (~2s/question) while a recovered model is back soon.
 _REPEATED_429, _REPEATED_429_PARK = 3, 600
+# NVIDIA has no daily cap: its 429s are a per-minute window, so a 10-minute park only shut the last working models
+# (10 Nov retest: Gemini / Groq daily quotas spent, both nemotrons parked 600s -> 'all models busy' for 10 minutes).
+_REPEATED_429_PARK_BY_PROVIDER = {"nvidia": 60}
 _REPEATED_TIMEOUTS, _REPEATED_TIMEOUT_PARK = 2, 1800
 
 
@@ -238,7 +241,7 @@ def _park(model: str, seconds: float, reason: str, st: _ModelState | None = None
         live = {m: v for m, v in _PARKED.items() if v.get("until", 0) > now}
     try:
         os.makedirs(os.path.dirname(_PARKED_PATH), exist_ok=True)
-        tmp = _PARKED_PATH + ".tmp"
+        tmp = f"{_PARKED_PATH}.{os.getpid()}.{threading.get_ident()}.tmp"  # per writer: see knowledge_store._save
         with open(tmp, "w", encoding="utf-8") as fh:
             json.dump(live, fh, indent=1)
         os.replace(tmp, _PARKED_PATH)
@@ -509,7 +512,9 @@ def _fail_status(task, provider, model, st, status, resp, ms, system, prompt, ma
         if daily:
             _park(key, max(retry_after, config.LLM_MAX_DAILY_LIMIT_COOLDOWN), "daily quota spent", st)
         elif st.consecutive_429 >= _REPEATED_429:
-            _park(key, max(retry_after, _REPEATED_429_PARK), f"{st.consecutive_429} rate limits in a row", st)
+            park = _REPEATED_429_PARK_BY_PROVIDER.get(provider, _REPEATED_429_PARK)
+            _park(key, max(retry_after, park) if provider not in _REPEATED_429_PARK_BY_PROVIDER else park,
+                  f"{st.consecutive_429} rate limits in a row", st)
         else:
             st.cooldown_until = time.monotonic() + min(retry_after, config.LLM_MAX_RATE_LIMIT_COOLDOWN)
         raise _Skip("rate limited")

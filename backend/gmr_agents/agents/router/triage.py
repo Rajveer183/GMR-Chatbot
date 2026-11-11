@@ -28,12 +28,12 @@ _TRIAGE_SYSTEM = """You are the front desk of GMR's smart-meter analytics chatbo
 Data available:
 - WFM (workforce management): meter installations (MI), SAT, invoices/revenue/receivables, inventory/stock, O&M complaints/tickets, technicians, meter journey.
 - MDM: (1) the consumer-to-feeder mapping audit / auto-indexing (confirmed, reassigned, review, no-data consumers; mapping accuracy, pending verification; feeders' MI, CI, reassign in/out, confidence; one consumer's index-based vs AI-based feeder, substation and outage match; correction queue; by project/zone/division/substation/feeder); (2) power quality: voltage deviation index (VDI), voltage fluctuation index (VFI), voltage unbalance index (VUI), voltage drop, low-voltage pockets, meter current unbalance, % time beyond the voltage tolerance band, % time with unacceptable current imbalance; (3) load management: DT load (kVA), % DT loading, % DT peak loading (overloaded / underloaded DTs), DT load rise, % consumers with load violation (max demand above sanctioned load), overload / MD breach risk; (4) operation analytics: voltage / current imbalance (3-sigma test), imbalance alerts, phase imbalance reduced by 30%, reverse flow (net-meter export), data quality / completeness, meters stopped communicating, hidden outage pockets (hidden power events, outages not recorded, block-load gaps, abnormal current flow), consumption spikes / drops; (5) power factor: low power factor by DT/feeder, power factor deterioration; (6) supply reliability: SAIDI, SAIFI, CAIDI, CAIFI, MAIFI, number / duration of outages, feeders with most outages, reliability improvement trend; (7) theft analysis: theft suspect flags, load diversion, areas with highest theft risk, % reduction in theft events, total anomalies detected, repeat anomalies; (8) energy audit: feeder loss %, LT (DT) loss %, energy gap (feeder input vs consumer energy; the AT&C proxy), best / worst feeders and DTs by loss. Any other meter data (per-consumer billing or consumption trends) is NOT available -> out_of_scope.
-Known values: OEMs (make/vendor) are only AEW, CAP, HPL, SEIPL; SAT batches are SAT-1 .. SAT-13 (no SAT-14 yet); 'varanasi'/'kasi' = kashi project, 'trivei'/'triveni' = triveni. SAT = Site Acceptance Test; MI = meter installation; DT/DTR = distribution transformer meter; PMPM = per meter per month payment.
+Known values: OEMs (make/vendor) are only AEW, CAP, HPL, SEIPL; SAT batches are SAT-1 .. SAT-13 (no SAT-14 yet); 'kasi' = kashi project, 'trivei'/'triveni' = triveni; a bare 'Varanasi' = the zones Varanasi I + Varanasi II (write 'Varanasi I and Varanasi II zones'), only 'Varanasi project/cluster' = the kashi project. SAT = Site Acceptance Test; MI = meter installation; DT/DTR = distribution transformer meter; PMPM = per meter per month payment.
 Dates: compare every date with Today, never with the verb tense -- a date before Today is in the past even when asked 'will be installed on ...' (answer it as data: what was installed that day); only a date after Today is a forecast.
 The user's screen: the chatbot cannot see or change the dashboard page the user has open. 'What filters are applied on my page / what am I looking at' -> kind chitchat, reply that you cannot see their page and offer to fetch the data if they name the project, period or other filters (never mention tables).
 Decide everything about the user's message and reply with JSON only:
 {"kind": "data" | "explain" | "chitchat" | "out_of_scope",
- "question": "one standalone English question: translate Hindi/Hinglish/any Indian language and fix spelling. Translate literally, in plain fixed wording, so the same ask in any language becomes the same English question: periods as 'last N days/weeks/months' / 'yesterday' / 'this month' with N in digits (never 'past six months'), breakdowns as '<x>-wise' (month-wise, zone-wise, OEM-wise) -- never drop a breakdown the user asked for. A garbled or cut-off KPI name is completed to the reading that keeps the characters the user typed (e.g. '&M productivity' = O&M productivity, not MI) -- never swap it for a different KPI -- and that reading goes in assumption so the user sees it. Keep the form of the ask: 'tickets on meter X' / 'complaints of consumer X' / 'details of ticket X' ask to SEE the records ('Show the tickets on meter X'), never rewrite them as 'how many'. ONLY if the message is an incomplete follow-up ('and in agra?', 'same for SAT', 'break it down by zone', 'which OEM?', 'only in kashi', 'and three months ago?', 'draft a message about it') fill in what it refers to from the conversation, keeping ALL its filters and entities. A follow-up continues the LATEST TURN: keep its topic/measure (e.g. 'what about agra' after a SAT question = Agra's SAT figure, not an earlier turn's topic; 'Which OEM?' after 'How many burnt meters?' = 'Burnt meters OEM-wise', never a defect-rate question) and its place/OEM/period unless the message replaces them; take something from an earlier turn only when the message names it. 'that/it/this/there' points at what the PREVIOUS ANSWER singled out (e.g. the project it named as worst) -- carry that entity as a filter: 'Which project is worst?' -> A: 'Triveni ...' then 'Break that down by age' = 'Break down Triveni's eligible pending SAT meters by age'. A message addressed to a project's head ('draft a message to the Agra project head about it') is about THAT project's own figures for the topic: 'Draft a message to the Agra project head about Agra's eligible pending SAT meters by age'. A message that is complete on its own is a NEW question: never add places, periods or filters the user did not say (a question naming a technician / person plus a measure is complete -- never carry the previous turn's place onto it). A request about the reply language ('Hindi mein batao', 'explain in English') is not part of the question -- leave it out",
+ "question": "one standalone English question: translate Hindi/Hinglish/any Indian language and fix spelling. Translate literally, in plain fixed wording, so the same ask in any language becomes the same English question: periods as 'last N days/weeks/months' / 'yesterday' / 'this month' with N in digits (never 'past six months'), breakdowns as '<x>-wise' (month-wise, zone-wise, OEM-wise) -- never drop a breakdown the user asked for. A garbled or cut-off KPI name is completed to the reading that keeps the characters the user typed (e.g. '&M productivity' = O&M productivity, not MI) -- never swap it for a different KPI -- and that reading goes in assumption so the user sees it. Keep the form of the ask: 'tickets on meter X' / 'complaints of consumer X' / 'details of ticket X' ask to SEE the records ('Show the tickets on meter X'), never rewrite them as 'how many'. ONLY if the message is an incomplete follow-up ('and in agra?', 'same for SAT', 'break it down by zone', 'which OEM?', 'only in kashi', 'and three months ago?', 'draft a message about it') fill in what it refers to from the conversation, keeping ALL its filters and entities. A follow-up continues the LATEST TURN: keep its topic/measure (e.g. 'what about agra' after a SAT question = Agra's SAT figure, not an earlier turn's topic; 'Which OEM?' after 'How many burnt meters?' = 'Burnt meters OEM-wise', never a defect-rate question) and its place/OEM/period unless the message replaces them; take something from an earlier turn only when the message names it. 'that/it/this/there' points at what the PREVIOUS ANSWER singled out (e.g. the project it named as worst) -- carry that entity as a filter: 'Which project is worst?' -> A: 'Triveni ...' then 'Break that down by age' = 'Break down Triveni's eligible pending SAT meters by age'. A message addressed to a project's head ('draft a message to the Agra project head about it') is about THAT project's own figures for the topic: 'Draft a message to the Agra project head about Agra's eligible pending SAT meters by age'. A message that is complete on its own is a NEW question: never add places, periods or filters the user did not say (a past-tense verb -- 'install hue', 'were installed', 'lage' -- is NOT 'yesterday'; no period words = no period, i.e. all time) (a question naming a technician / person plus a measure is complete -- never carry the previous turn's place onto it). A request about the reply language ('Hindi mein batao', 'explain in English') is not part of the question -- leave it out",
  "followup": true only for such an incomplete follow-up,
  "parts": ["only when the message asks SEVERAL things ('X and Y', 'also tell me', a list of asks): each ask as its own standalone English question, in order"] or [],
  "examples": [0-3 ids from EXAMPLES whose question MEANS the same as (an ask in) this message, even if worded very differently, best first],
@@ -124,6 +124,23 @@ def _parse_triage(d: dict, state: dict, model: str) -> dict:
     asked = f"{state['question']} {d.get('question') or ''}"
     if kind == "explain" and (_WHY_DATA_RE.search(state["question"]) or _WHY_DATA_RE.search(str(d.get("question") or ""))):
         kind = "data"   # see _WHY_DATA_RE
+    elif kind == "explain" and _EXPLAIN_AND_VALUE_RE.search(state["question"]):
+        kind = "data"   # 'how is X worked out, and what is it right now?' -- the figure too (10 Nov retest)
+    elif kind == "explain" and _ACT_NOW_RE.search(state["question"]):
+        kind = "data"   # see _ACT_NOW_RE
+    elif kind in ("out_of_scope", "explain", "chitchat") and _analytic_ask(state["question"]):
+        # 'What threshold for non-SAT ageing should trigger escalation?', 'How do installation, SAT, invoicing and
+        # collection depend on each other?', 'Run PCA on zone-level KPIs': analysis of the programme's own figures, not
+        # a definition (11 Nov: ~15 such questions got a textbook answer with no number). Replay over 864 logged
+        # non-data triages: 17 flip, all analytical once 'tell me: what does X mean' is read as a definition.
+        kind = "data"
+    elif kind in ("out_of_scope", "explain") and _method_on_programme_data(state["question"]):
+        # 'Using reinforcement learning, optimise technician allocation' / 'survival analysis of meter failures': the
+        # named model is not run (presentation/stats.py says so in the answer), but the nearest real figures are --
+        # one honest answer instead of a refusal that asks the user to come back (11 Nov).
+        kind = "data"
+    elif kind == "data" and _CONCEPT_DIFF_RE.search(state["question"]):
+        kind = "explain"  # see _CONCEPT_DIFF_RE
     # Technical dashboard cards (power quality / DT load / load violation) are MDM whatever the model
     # says -- before 6 Nov the triage prompt called voltage and load out_of_scope. Checked before the
     # mapping words: '% consumers with load violation by feeder' also reads as a mapping question.
@@ -135,10 +152,29 @@ def _parse_triage(d: dict, state: dict, model: str) -> dict:
             and not _WFM_WORDS_RE.search(asked):
         kind, domain = ("data" if kind == "out_of_scope" else kind), "mdm"
         chosen = [t for t in business_rules.valid_topics(d.get("topics"), "mdm") if t != "mdm_autoindexing"]
-        d = {**d, "topics": list(dict.fromkeys([pq_topic, *chosen])), "tables": technical_tables(asked, pq_topic)}
+        tables, extra = technical_tables(asked, pq_topic), []
+        if _MULTI_CARD_RE.search(state["question"]):
+            tables, extra = multi_card_tables(asked, pq_topic)
+        d = {**d, "topics": list(dict.fromkeys([pq_topic, *extra, *chosen]))[:3], "tables": tables}
     elif kind in {"data", "explain", "out_of_scope"} and _MAPPING_RE.search(asked) and not _WFM_WORDS_RE.search(asked):
         kind, domain = ("data" if kind == "out_of_scope" else kind), "mdm"
         d = {**d, "topics": ["mdm_autoindexing"]}
+    else:
+        # The model's domain contradicting every topic it chose (10 Nov retest: the follow-up 'only DT' after an
+        # Agra installs / SAT / defects answer came back domain 'mdm' with three WFM topics -> run on the MDM
+        # catalog, WFM tables 'unknown', no answer). The topics -- and the tables it named -- decide.
+        picked = business_rules.valid_topics(d.get("topics"))
+        if picked and set(picked) <= {"mdm_meter_master", "mdm_meter_readings"} and _WFM.search(asked):
+            # The meter master / raw-readings topics are code-routed (meter_topic) and vetoed by WFM words; the
+            # model picking them for 'Non SAT meters zone wise in Kashi' ran it on the MDM catalog (10 Nov retest).
+            domain, picked = "wfm", []
+            d = {**d, "domain": "wfm", "topics": [], "tables": []}
+        doms = {business_rules.topics()[t].get("domain", "wfm") for t in picked}
+        if len(doms) == 1 and domain not in doms:
+            other = doms.pop()
+            names = {str(t) for t in d.get("tables") or []}
+            if not names or names & {t.table_name for t in get_catalog(other).list_tables()}:
+                domain = other
     known = {t.table_name for t in get_catalog(domain).list_tables()}
     triage = {
         "kind": kind, "question": str(d.get("question") or state["question"]).strip(),
@@ -178,6 +214,62 @@ _WHY_DATA_RE = re.compile(
     r"^\s*(?:why|kyu|kyon|kyun)\b.*\b(?:higher|lower|more|less|fall|fell|falling|drop\w*|dip\w*|sag\w*|rise|rose|rising|"
     r"increas\w*|decreas\w*|worst|best|worse|better|slow\w*|fast\w*|jump\w*|spike\w*|differ\w*|than|so many|so few|"
     r"behind|lag\w*|ahead|zyada|kam)\b", re.I)
+
+# 'What is the difference between % DT loading and % DT peak loading?' is a definition question; triage called it
+# data on 10 Nov and the SQL mixed two cards' columns. Only the bare form: no digits (arithmetic on given numbers is
+# data), no place / period / count words.
+_CONCEPT_DIFF_RE = re.compile(
+    r"^\s*(?:what(?:'s| is| are)|explain)\s+(?:the\s+)?differences?\s+between\s+(?!.*\d)"
+    r"(?!.*\b(?:agra|kashi|kasi|triveni|varanasi|prayagraj|mirzapur|aligarh|mathura|azamgarh|etah|firozabad|zones?|"
+    r"circles?|divisions?|projects?|feeder [a-z]*\d|meter [a-z]*\d|aew|cap|hpl|seipl)\b)"
+    r"(?!.*\b(?:today|yesterday|this|last|month|week|year|how many|count|number of)\b)[^?]{3,120}\??\s*$", re.I)
+
+_ANALYTIC_RE = re.compile(
+    r"\b(?:model\w*|predict\w*|forecast\w*|plan\b|planning|build\b|simulat\w*|score\w*|rank\w*|threshold\w*|probabilit\w*|"
+    r"depend\w*|relate[sd]?|relationship|transition\w*|bottleneck\w*|risk\w*|intervention\w*|dimensions|cluster\w*|segment\w*|"
+    r"pareto|optimi[sz]\w*|allocat\w*|trade.?off|cost.?benefit|expected (?:loss|value|utility)|scenario\w*|stress test|drift\w*|"
+    r"propensity|attribut\w*|cascad\w*|propagat\w*|pca|principal component|correlat\w*|affect\w*|impact\w*|confiden\w*)\b", re.I)
+_SUBJECT_RE = re.compile(r"\b(?:zones?|circles?|divisions?|projects?|feeders?|dts?|kpis?|meters?|consumers?|technicians?|"
+                         r"programme|program|operational|operations|tickets?|stock|sat|installations?|defects?|revenue|"
+                         r"collections?|journey|lifecycle)\b", re.I)
+_DEFINITION_RE = re.compile(
+    r"^\s*(?:(?:tell me|please|pls|can you tell me|explain)\s*[:,-]?\s*)?"
+    r"(?:what (?:is|are|does|do)\b(?!.*\b(?:now|today|current\w*|latest|this (?:week|month)|right now)\b)|define\b|"
+    r"definition|meaning of|what do you mean|how (?:is|are) .{0,60}\b(?:calculated|computed|defined|measured|derived)\b|"
+    r"explain (?:what|the (?:term|kpi|formula|definition))|where does .{0,40}come from)", re.I)
+
+
+def _analytic_ask(question: str) -> bool:
+    """Analysis of the programme's own figures (model / predict / threshold / depend / risk / PCA ...), not a definition."""
+    from gmr_agents.presentation import stats as _stats
+    from gmr_agents.agents.sql_writer.cross_domain import _MDM_RE, _WFM_RE
+    q = str(question or "")
+    if _DEFINITION_RE.search(q):
+        return False
+    asks = _ANALYTIC_RE.search(q) or _stats.wanted(q) or _stats.not_run(q)
+    return bool(asks) and bool(_SUBJECT_RE.search(q) or _WFM_RE.search(q) or _MDM_RE.search(q))
+
+
+def _method_on_programme_data(question: str) -> bool:
+    """A named analytical method this system does not run (SHAP, HMM, survival, reinforcement learning ...) applied to
+    the programme's own data (technicians, meters, defects, feeders ...)."""
+    from gmr_agents.presentation import stats as _stats
+    from gmr_agents.agents.sql_writer.cross_domain import _MDM_RE, _WFM_RE
+    q = str(question or "")
+    return bool(_stats.not_run(q)) and bool(_WFM_RE.search(q) or _MDM_RE.search(q) or re.search(r"\bmeters?\b", q, re.I))
+
+
+# Warnings / alerts / what needs attention NOW are read from today's figures, never a definition. 11 Nov: 'What early
+# warning signs should we watch in the O&M backlog right now?' was triaged explain and answered with no number.
+_ACT_NOW_RE = re.compile(
+    r"\b(?:early warning|warning signs?|alerts?|red flags?|danger|threshold|needs? (?:attention|action|intervention)|"
+    r"should we (?:watch|worry|prioriti[sz]e|focus|do)|intervene|intervention)\b.*\b(?:right now|now|currently|today|"
+    r"this (?:week|month)|at present|crossed|next month|before)\b|\b(?:right now|today|this week)\b.*\b(?:warning|alert|"
+    r"attention|action|risk)", re.I)
+
+_EXPLAIN_AND_VALUE_RE = re.compile(
+    r"\b(?:and|also|plus)\b[^?]*\b(?:what(?:'s| is) (?:it|the (?:value|figure|number|rate|current \w+))|how much is it|"
+    r"where (?:is it|does it stand|do we stand)|right now|currently|at present|as of today|today'?s (?:value|figure))\b", re.I)
 
 
 _CONSUMER_WORD_RE = entity_check._CONSUMER_RE
@@ -473,6 +565,24 @@ def technical_tables(text: str, topic: str) -> list[str]:
     return list(dict.fromkeys([*picked, "dt_load_profile"]))[:5]
 
 
+# A question that sets two cards side by side. 10 Nov retest: 'circles with both average VDI above 9% and load
+# violation above 9%' got only the load-violation tables (the writer invented a VDI from DT load), and 'compare DTs
+# overloaded on peak loading with DTs that peaked above rating on % DT loading' only dt_loading (rejected twice).
+_MULTI_CARD_RE = re.compile(r"\bcompar\w*|\bvs\.?(?=\s)|\bversus\b|\bboth\b|\bagainst\b|\bside by side\b|\bas well as\b", re.I)
+
+
+def multi_card_tables(text: str, topic: str) -> tuple[list[str], list[str]]:
+    """Every card the comparison names: all matching rules of `topic` plus the first card of each other
+    Technical topic the wording names. Returns (tables incl. dt_load_profile, the other topics)."""
+    picked = [t for rx, tables in _TECHNICAL_TABLE_WORDS.get(topic, ()) if rx != "." and re.search(rx, text, re.I)
+              for t in tables] or technical_tables(text, topic)[:-1]
+    others = [key for key, rx in _TECHNICAL_RES if key != topic and rx.search(text)
+              and not (key in _TECHNICAL_VETO and _TECHNICAL_VETO[key].search(text))]
+    for key in others[:1]:
+        picked += [t for t in technical_tables(text, key) if t != "dt_load_profile"]
+    return list(dict.fromkeys([*picked[:4], "dt_load_profile"])), others[:1]
+
+
 _WFM_WORDS_RE = re.compile(r"\b(?:tickets?|complaints?|install\w*|sat\b|invoic\w*|stock|technicians?|o&m|journey|"
                            r"escalat\w*|discom (?:officer|supervisor)s?|"
                            r"(?<!lose )(?<!lost )(?<!losing )supply|warehouse|replac\w*|defect\w*)", re.I)
@@ -499,6 +609,22 @@ def escalation_topic(text: str) -> str | None:
 _FOLLOWUP_WORDS = {"that", "it", "this", "those", "these", "them", "same", "also", "there", "only", "and"}
 
 
+def _card_key(text: str) -> tuple:
+    topic = meter_topic(text) or technical_topic(text)
+    return (topic, tuple(technical_tables(text, topic)) if topic and topic.startswith("mdm_") and topic not in
+            ("mdm_meter_readings", "mdm_meter_master") else ())
+
+
+def _same_card(question: str, wordings) -> bool:
+    """A fuzzy match one word away can be a different Technical card ('voltage unbalance by circle' = VUI vs the
+    example 'voltage imbalance by circle' = 3-sigma imbalance, 10 Nov): route only when some wording of the
+    matched example names the same card as the question."""
+    key = _card_key(question)
+    if key[0] is None:
+        return True
+    return any(_card_key(str(w)) == key for w in (wordings if isinstance(wordings, list) else [wordings]))
+
+
 def _route(state: dict, prior_turns: list[dict] | None) -> dict | None:
     """Router (no LLM): a question whose wording is a near-exact fuzzy match
     (ratio ROUTER_MIN_RATIO..1) to a verified example skips the understanding
@@ -523,6 +649,14 @@ def _route(state: dict, prior_turns: list[dict] | None) -> dict | None:
     examples = business_rules.examples()
     sql = str(examples[int(example_id)].get("sql") or "") if example_id.isdigit() and int(example_id) < len(examples) else ""
     domain = "mdm" if ("hes_gold." in sql or "hes_silver." in sql) else "wfm"
+    if domain == "mdm" and not _same_card(question, examples[int(example_id)].get("q")):
+        return None
+    wordings = examples[int(example_id)].get("q")
+    wordings = wordings if isinstance(wordings, list) else [wordings]
+    if domain == "mdm" and _WFM.search(question) and not any(_WFM.search(str(w)) for w in wordings):
+        # 11 Nov retest: 'Non SAT meters zone wise in Kashi' fuzzy-matched 'HES meters zone-wise in Kashi' (0.87)
+        # and answered from the MDM meter master (1,356,755 meters, not the 75,066 non-SAT).
+        return None
     all_topics = business_rules.topics()
     # Only keys the (possibly just reloaded) topics still have -- live 6 Nov: KeyError 'mdm_dt_load' on every
     # routed question while business_rules.yaml was swapped under a running server.
@@ -559,6 +693,18 @@ def fix_scope(state: dict, triage: dict, prior_turns: list[dict] | None) -> bool
         # A named technician is identified like a meter: 'O&M productivity of technician ABHAY'
         # after a Kashi turn got 'in Kashi' carried and missed the Agra / Triveni ABHAYs.
         return False
+    if _PLURAL_REF_RE.search(state["question"]):
+        # 'Compare both' / 'their pending SAT' points at places from SEVERAL earlier turns (11 Nov retest: Kashi, then
+        # 'What about Triveni?', then 'Compare both.' -> Kashi stripped as 'only an earlier turn had it'). Keep the
+        # resolved places when every one of them was named in a recent turn.
+        hierarchy.refresh_in_background()
+        hierarchy.wait_first_load()
+        names = hierarchy.place_names()
+        recent = " ".join(f"{t.get('resolved_question') or t.get('question') or ''} {t.get('summary') or ''}"
+                          for t in prior_turns[-4:])
+        mine = place_scope.found(triage["question"], names)
+        if len(mine) > 1 and set(mine) <= set(place_scope.found(recent, names)):
+            return False
     latest = prior_turns[-1]
     latest_domain = (latest.get("context") or {}).get("domain")
     hierarchy.refresh_in_background()
@@ -574,6 +720,10 @@ def fix_scope(state: dict, triage: dict, prior_turns: list[dict] | None) -> bool
     same_topic = set(triage["topics"]) & set((latest.get("context") or {}).get("topics") or [])
     triage["followup"] = triage["followup"] or bool(changes.get("carried") and same_topic)
     return True
+
+
+_PLURAL_REF_RE = re.compile(r"\b(?:both|their|them|they|these|those|each of them|all of them|the two|dono|donon|"
+                            r"unka|unke|inka|inke)\b|दोनों|उनके|इनके", re.I)
 
 
 _FRAME_WORDS = set("""
@@ -614,15 +764,23 @@ def fix_measure(state: dict, triage: dict, prior_turns: list[dict] | None) -> bo
     if not again or not (measure & _content_words(again["question"])):
         return False
     _step(state, "measure", time.perf_counter(), was=triage["question"][:140], now=again["question"][:140])
-    triage.update(question=again["question"], topics=again["topics"] or triage["topics"],
-                  tables=again["tables"] or triage["tables"], followup=True)
+    # The domain goes with the topics / tables it was decided with. 10 Nov retest: 'only DT' kept the first
+    # triage's 'mdm' with the re-triage's WFM topics -> WFM tables 'unknown', no answer.
+    if again["topics"]:
+        triage.update(domain=again["domain"], topics=again["topics"], tables=again["tables"])
+    elif again["tables"] and again["domain"] == triage["domain"]:
+        triage.update(tables=again["tables"])
+    triage.update(question=again["question"], followup=True)
     return True
 
 
 def fix_question(state: dict, triage: dict, prior_turns: list[dict] | None) -> bool:
     """Code-side corrections of the resolved question (graph/nodes.py
     understand_node). True if it changed."""
-    changed = fix_measure(state, triage, prior_turns)
+    if clarify_vague(state, triage, prior_turns):
+        return True
+    changed = drop_invented_period(state, triage, prior_turns)
+    changed = fix_measure(state, triage, prior_turns) or changed
     changed = fix_scope(state, triage, prior_turns) or changed
     if (triage["kind"] == "data" and _CONSUMER_WORD_RE.search(state["question"])
             and not _CONSUMER_WORD_RE.search(triage["question"])):
@@ -654,6 +812,96 @@ def fix_question(state: dict, triage: dict, prior_turns: list[dict] | None) -> b
         triage["question"] = re.sub(r"\(([^)]*\bto\b[^)]*)\)", "(" + _JOURNEY_STAGES + ")", triage["question"], count=1)
         changed = True
     return changed
+
+
+# --------------------------------------------------------------------------- #
+# Clarification: a first message that names no measure. 11 Nov retest: 'How many are flagged in Kashi?',
+# 'What is the current status?', 'Show me the pending ones', 'Which meters need attention?', 'Give me the worst-
+# performing areas', 'How many are remaining?', 'What changed this month?' were each answered from a guessed KPI
+# (one with '76,978,299 open complaints'); 'installation count for a particular Circle' listed every circle.
+# With no earlier turn to resolve them against, ask which measure / place is meant.
+# --------------------------------------------------------------------------- #
+
+_MEASURE_RE = re.compile(
+    r"install\w*|\binstal\w*|\bmi\b|\bsat\b|stock|inventor\w*|suppl\w*|warehouse|ticket|complain\w*|\bo&m\b|revenue|"
+    r"invoice\w*|pmpm|lumpsum|receivabl\w*|overdue|productiv\w*|technician|journey|stage|defect\w*|replac\w*|burnt|"
+    r"faulty|\bpf\b|power factor|voltage|\bv[dfu]i\b|\bload\b|loading|outage|saidi|saifi|reliab\w*|theft|anomal\w*|"
+    r"reading|consumption|mapping|reassign\w*|escalat\w*|\boem\b|cable|\bloss\w*|energy|spike|imbalance|unbalance|"
+    r"communicat\w*|non[- ]?comm|lage|lagaa|लग|इंस्टॉल|मीटर लगे|स्टॉक|शिकायत|program\w*|headline|\bkpis?\b|summary|"
+    r"overview|verification|audit|target|quality|risk|submission|\baew\b|\bcap\b|\bhpl\b|\bseipl\b", re.I)
+
+# (cue, the options offered)
+_VAGUE_CUES = (
+    (re.compile(r"\bflagged\b|\bflag(?:s|ged)? (?:count|meters)\b", re.I),
+     "Low power factor (Low PF) flagged meters, theft-suspect meters, or anomaly flags (hidden outages, consumption spikes)"),
+    (re.compile(r"^(?!.*\b(?:meters?|मीटर)\b).*(?:\bpending\b|\bbaa?ki\b|अटके|लंबित)", re.I),
+     "eligible meters pending SAT, meters supplied but not yet installed (stock), open O&M complaints, or revenue pending"),
+    (re.compile(r"^(?!.*\b(?:meters?|मीटर)\b).*\b(?:remaining|left|bache)\b", re.I),
+     "remaining stock (supplied but not installed), meters still pending SAT, or open O&M complaints"),
+    (re.compile(r"\bneed\w* attention\b|\bproblem (?:meters|areas)\b|\bissues?\b", re.I),
+     "eligible meters waiting longest for SAT, Low PF or theft-suspect meters, meters with open complaints, or meters "
+     "that stopped communicating"),
+    (re.compile(r"\b(?:worst|best|poor\w*|top|under|low)[- ]?perform(?:ing|ance)\b", re.I),
+     "installation progress, SAT completion, technician productivity, Low PF or power outages -- and at which level "
+     "(zone, circle, division)"),
+    (re.compile(r"\bwhat(?:'s| has| is)? changed\b|\bwhat changed\b|\bchanges?\b", re.I),
+     "installations, SAT, stock or O&M complaints, compared with last month"),
+    (re.compile(r"\b(?:current |overall )?status\b|\bkya haal\b|\bupdate\b", re.I),
+     "installation progress, SAT status, O&M complaint status or stock -- for all projects or one of Agra, Kashi, Triveni"),
+)
+
+_PARTICULAR_RE = re.compile(r"\b(?:a|one|some|any|certain)\s+(?:particular|specific|certain|given|single)\s+"
+                            r"(zone|circle|division|sub[- ]?division|feeder|sub[- ]?station|dt)\b", re.I)
+
+
+def clarify_vague(state: dict, triage: dict, prior_turns: list[dict] | None) -> bool:
+    """Turn a measure-less first message into a clarifying question (kind chitchat). True if it did."""
+    # 'explain' too: 'What is the current status?' was triaged explain and refused ('no KPI called current status').
+    if prior_turns or triage["kind"] not in ("data", "explain") or _METER_SERIAL_RE.search(state["question"]):
+        return False
+    q = state["question"]
+    reply = ""
+    if (m := _PARTICULAR_RE.search(q)):
+        level = re.sub(r"[- ]", "_", m.group(1).lower())
+        hierarchy.refresh_in_background()
+        hierarchy.wait_first_load()
+        names = sorted(n for n, lv in hierarchy.place_names().items() if lv == level)[:6]
+        example = f" For example: {', '.join(n.upper() for n in names)}." if names else ""
+        reply = f"Which {m.group(1).lower()} would you like? Please name it and I'll fetch the figure.{example}"
+    elif not _MEASURE_RE.search(q):
+        for cue, options in _VAGUE_CUES:
+            if cue.search(q):
+                reply = f"Could you tell me which figure you mean? For example: {options}."
+                break
+    if not reply:
+        return False
+    triage.update(kind="chitchat", reply=reply, topics=[], tables=[])
+    _step(state, "clarify", time.perf_counter(), outcome="asked which measure / place")
+    return True
+
+
+# A period the user never said ('Kitne meter install hue?' -> 'How many meters were installed yesterday?', 11 Nov).
+_USER_PERIOD_RE = re.compile(
+    r"\d|\b(?:today|yesterday|tomorrow|day|days|daily|week\w*|month\w*|year\w*|quarter|since|from|till|until|upto|"
+    r"before|after|ago|last|this|past|previous|next|recent\w*|latest|so far|till date|jan\w*|feb\w*|mar\w*|apr\w*|"
+    r"may|jun\w*|jul\w*|aug\w*|sep\w*|oct\w*|nov\w*|dec\w*|kal|aaj|parso|din|dino|hafte|hafta|mahine|mahina|saal|"
+    r"varsh|pichh\w*|abhi|tak|trend\w*)\b|कल|आज|दिन|हफ्त|सप्ताह|महीन|माह|साल|वर्ष|पिछल|इस", re.I)
+_INVENTED_PERIOD_RE = re.compile(
+    r",?\s*\b(?:on |for |in )?(?:yesterday|today|this (?:week|month|year)|last (?:week|month|year)|"
+    r"(?:in |over |during )?the (?:last|past) \d+ (?:days?|weeks?|months?)|last \d+ (?:days?|weeks?|months?))\b", re.I)
+
+
+def drop_invented_period(state: dict, triage: dict, prior_turns: list[dict] | None) -> bool:
+    if triage["kind"] != "data" or triage.get("followup") or _USER_PERIOD_RE.search(state["question"]) \
+            or re.search(r"\bsince\b", triage["question"], re.I):   # 'load rise since last month' = a card's definition
+        return False
+    fixed = _INVENTED_PERIOD_RE.sub("", triage["question"])
+    if fixed == triage["question"]:
+        return False
+    fixed = re.sub(r"\s+([?.])", r"\1", re.sub(r"\s{2,}", " ", fixed)).strip()
+    _step(state, "period", time.perf_counter(), was=triage["question"][:140], now=fixed[:140])
+    triage["question"] = fixed
+    return True
 
 
 _PROJECT_LEVEL_WISE_RE = re.compile(r"\bin (agra|kashi|triveni) (zone|circle|division)[- ]?wise\b", re.I)

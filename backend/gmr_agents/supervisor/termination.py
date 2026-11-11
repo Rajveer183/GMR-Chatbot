@@ -35,7 +35,12 @@ def give_up_node(state: AgentState, config: RunnableConfig) -> dict[str, Any]:
         message = err["message"] if err["kind"] == "connectivity" else (
             "This question needed more database queries than one answer is allowed -- please narrow it down.")
     else:
-        message = f"I couldn't build a working query for this ({str(err.get('message') or 'no usable query')[:300]})."
+        # Plain words only: the guard's reason ('mixes postgres and athena tables -- put the athena part in
+        # extra_queries', 'column sat_date could not be resolved') was shown to users as the answer on 11 Nov.
+        # The reason stays in the trace (validate steps) and the log.
+        C.log.info("give up: last error %s", str(err.get("message") or "")[:300])
+        message = ("I couldn't get a reliable figure for this from the data. Try asking for one KPI with a place or "
+                   "period -- for example 'SAT % by project' or 'installations by zone in October'.")
     C._finish(ctx.pipeline_state, message, refused=True, source="planner", agent=state["triage"]["domain"])
     return {"status": "refused" if state.get("status") != "busy" else "busy", "refused": True,
             "step_count": _tick(state)}

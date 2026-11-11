@@ -83,12 +83,18 @@ def collect_explain_evidence(question: str, topics: list[str], *, k: int) -> lis
             continue
         lines = [f"{t.get('title', key)}: {t.get('description', '')}", *map(str, t.get("answer_notes") or []),
                  *map(str, t.get("rules") or [])]
+        # The topic triage chose holds the definitions; its cosine score alone once dropped it under the
+        # relevance floor (10 Nov retest: 'Explain Confirmed, Reassign, Review and No data' got O&M and stock
+        # chunks, and the model invented 'ownership needs to shift ... meter or ticket').
         chunks.append(Evidence(f"rule:{key}", SOURCE_PRIORITY[0], str(t.get("title", key)), "\n".join(lines),
-                               topic_rel.get(key, 0.0)))
+                               1.0 if key in topics[:2] else topic_rel.get(key, 0.0)))
     terms = business_rules.glossary()
-    for key in sorted(term_rel, key=lambda t: -term_rel[t])[:k]:
-        if key in terms:
-            chunks.append(Evidence(f"term:{key}", SOURCE_PRIORITY[2], key, f"{key}: {terms[key]}", term_rel[key]))
+    words = " " + re.sub(r"[^a-z0-9]+", " ", question.lower()) + " "
+    named = [key for key in terms if f" {key.replace('_', ' ').lower()} " in words]
+    for key in dict.fromkeys([*named, *sorted(term_rel, key=lambda t: -term_rel[t])[:k]]):
+        if key in terms:   # a term the question names word for word is relevant by definition
+            chunks.append(Evidence(f"term:{key}", SOURCE_PRIORITY[2], key, f"{key}: {terms[key]}",
+                                   1.0 if key in named else term_rel.get(key, 0.0)))
     picked = select(chunks, k=k, min_relevance=config.GROUNDING_MIN_RELEVANCE)
     return picked + kpi_evidence(question, k=config.GROUNDING_KPI_CHUNKS, exclude={c.content for c in picked})
 
@@ -208,10 +214,17 @@ def _citation(c: Evidence) -> dict:
     return {"id": c.chunk_id, "source": c.source, "location": c.location}
 
 
-def data_citations(plan: dict, triage: dict, refreshed_at: str | None) -> list[dict]:
+def data_citations(plan: dict, triage: dict, refreshed_at: str | None,
+                   fresh: list[dict] | None = None) -> list[dict]:
     """Sources of a data answer, built by code: the live query and the verified
-    pattern / rules it was written from. Never produced by the LLM."""
-    out = [{"id": "sql", "source": "Live query", "location": ", ".join(plan.get("tables") or []) +
+    pattern / rules it was written from. Never produced by the LLM. `fresh` =
+    checks/freshness.check() items: each table gets its 'data up to <date>'."""
+    from gmr_agents.checks import freshness
+
+    upto = {f["table"]: freshness.label(f) for f in fresh or []}
+    tables = [f"{t} ({upto[t.split('.')[-1].lower()]})" if t.split(".")[-1].lower() in upto else t
+              for t in plan.get("tables") or []]
+    out = [{"id": "sql", "source": "Live query", "location": ", ".join(tables) +
             (f" (data refreshed {refreshed_at})" if refreshed_at else "")}]
     from gmr_agents.catalog import business_rules
 

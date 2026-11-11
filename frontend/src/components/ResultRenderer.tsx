@@ -9,6 +9,7 @@ import { ExpandableChartModal } from "./ExpandableChartModal";
 import { ResultTable } from "./ResultTable";
 import { InsightList } from "./InsightList";
 import { WarningBox } from "./WarningBox";
+import { SourcesNote } from "./SourcesNote";
 import { SuggestedQuestions } from "./SuggestedQuestions";
 import { resultToPayload } from "../utils/clipboard";
 import { resultToSpeech } from "../utils/speech";
@@ -117,7 +118,8 @@ export const ResultRenderer: React.FC<ResultRendererProps> = ({ result, onFollow
           <h4 className="chat-section-heading">
             {table.display_heading || table.heading || (index === 0 ? uiText(lang, "resultPreview") : table.display_title || table.title)}
           </h4>
-          <ResultTable table={table} traceId={result.debug?.trace_id} tableIndex={index} lang={lang} />
+          <ResultTable table={table} traceId={table.trace_id ?? result.debug?.trace_id}
+            tableIndex={table.table_index ?? index} lang={lang} />
         </section>
       ))}
 
@@ -137,6 +139,8 @@ export const ResultRenderer: React.FC<ResultRendererProps> = ({ result, onFollow
       ) : null}
 
       <WarningBox warnings={result.warnings ?? []} title={uiText(lang, "warnings")} />
+
+      <SourcesNote citations={result.citations ?? []} title={uiText(lang, "sources")} />
 
       <ExpandableChartModal
         open={expandedChart !== null}

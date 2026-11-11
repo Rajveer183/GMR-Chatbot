@@ -90,6 +90,10 @@ export interface AIChartSpec {
 export interface AITableSpec {
   id: string;
   title: string;
+  /** Set when one message held several questions: the answer run this table pages from
+   * (/api/table-page), and its position in that run. Absent = the answer's own trace id. */
+  trace_id?: string;
+  table_index?: number;
   /** The template's own heading for this table, shown instead of "Result Preview". */
   heading?: string | null;
   columns: string[];

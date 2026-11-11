@@ -278,7 +278,8 @@ def written_in(text: str, claimed: str) -> str:
 # English grammar words: an English SENTENCE left in the text has them, a list of English
 # technical terms ('WFM (meter installation, SAT, O&M tickets)') does not.
 _ENGLISH_GRAMMAR = {"the", "is", "are", "was", "were", "you", "so", "far", "has", "have", "which", "this", "that",
-                    "with", "of", "to", "in", "for", "it", "be", "been", "there", "their", "will", "can"}
+                    "with", "of", "to", "in", "for", "it", "be", "been", "there", "their", "will", "can",
+                    "assuming", "mean"}  # the narrator's English "Assuming you mean ..." lead (11 Nov: kept in a Hindi answer)
 
 
 def in_script(text: str, script: str) -> bool:

@@ -77,7 +77,7 @@ def run_graph(pipeline_state: dict[str, Any], prior_turns: list[dict] | None, se
         "question": pipeline_state["question"], "session_id": session_id, "trace_id": tid,
         "prior_turns": _compact_turns(prior_turns), "step_count": 0, "attempt": 0, "status": "running",
         "tool_call": None, "validated": None, "last_error": None, "has_result": False, "has_fallback": False,
-        "entities_checked": False, "zero_rows_retried": False, "route": "data",
+        "entities_checked": False, "zero_rows_retried": False, "implausible_retried": False, "route": "data",
         "triage": {}, "summary": "", "insights": [], "followups": [], "refused": False,
         # None = reset (see state.py reducers): the thread's checkpoint holds the last question's lists
         "tool_calls": None, "errors": None, "executed": None,

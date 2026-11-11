@@ -440,7 +440,7 @@ class AthenaCatalog:
             ],
         }
         # Write-then-rename, so a reader never sees a half-written file.
-        tmp = self._cache_path.with_suffix(".json.tmp")
+        tmp = self._cache_path.with_suffix(f".json.{os.getpid()}.{threading.get_ident()}.tmp")  # per writer: see knowledge_store._save
         tmp.write_text(json.dumps(payload, indent=2), encoding="utf-8")
         os.replace(tmp, self._cache_path)
 
@@ -665,7 +665,26 @@ class AthenaCatalog:
 _CATALOGS: dict[str, AthenaCatalog] = {}
 
 
+class CombinedCatalog:
+    """Read-only view over the WFM and MDM catalogs for a question that spans both systems ('do zones with more
+    non-comm tickets show more meters stopped communicating in MDM?'). Each query still runs on ONE engine (the SQL
+    guard enforces it); the other system's figures come from a parallel extra query."""
+
+    domain = "all"
+
+    def list_tables(self) -> list[TableMeta]:
+        return [*get_catalog("wfm").list_tables(), *get_catalog("mdm").list_tables()]
+
+    def get_table(self, table_name: str) -> TableMeta | None:
+        return get_catalog("wfm").get_table(table_name) or get_catalog("mdm").get_table(table_name)
+
+    def all_join_candidates(self) -> list[JoinCandidate]:
+        return [*get_catalog("wfm").all_join_candidates(), *get_catalog("mdm").all_join_candidates()]
+
+
 def get_catalog(domain: str) -> AthenaCatalog:
+    if domain == "all":
+        return CombinedCatalog()  # type: ignore[return-value]
     if domain not in _CATALOGS:
         _CATALOGS[domain] = AthenaCatalog(domain)
     return _CATALOGS[domain]

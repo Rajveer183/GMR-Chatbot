@@ -14,6 +14,7 @@ from shared import config
 from gmr_agents.catalog import business_rules, schema_dictionary
 from gmr_agents.retrieval import knowledge
 from gmr_agents.catalog.schema_brief import build as build_schema
+from gmr_agents.presentation import stats as _stats
 from gmr_agents.catalog.table_metadata import SCHEMA_RE
 from gmr_agents.execution import executor
 from gmr_agents.ops import context_manager
@@ -37,7 +38,7 @@ _PLAN_SYSTEM = """You write the read-only SQL SELECT that answers a business que
 - Follow GLOBAL RULES and TOPIC rules exactly: they define how every KPI is computed so numbers match the dashboard. Use exactly the filters the rules give for a KPI -- never add extra boolean/flag filters (e.g. has_sat_number) the rules do not list, and never drop one they list.
 - Apply ONLY the filters the question states (or the previous turn, for a follow-up). Never copy a place, period or category filter from an example. In top-N lists do not add a ROLLUP total row; when you do use ROLLUP, label the GROUPING row 'Total', never 'Unmapped'. 'Which <project/discom/zone/category> has the highest / lowest X' (no N given) returns EVERY one of them ranked by X (no LIMIT 1), so the answer can say who is next and by how much.
 - Give every selected expression a snake_case alias. No SELECT *. Lists: ORDER BY + LIMIT (200 unless asked).
-- 'why', 'should we', 'is it rising', 'what changed', summaries and what-ifs: return the numbers that answer it (comparisons, shares, trends) -- the answer writer reasons from them.
+- 'why', 'should we', 'is it rising', 'what changed', summaries and what-ifs: return the numbers that answer it (comparisons, shares, trends) -- the answer writer reasons from them. 'Why did X rise / fall / change' (no breakdown named), when X's table has a date / period column: return X for the period asked about AND the one before it (the latest complete period and the previous one when none is named), split by the most useful place / category (zone or discom; OEM / agency when the question is about them) -- one row per (period, group), the period column first; no ROLLUP total row. When X comes from a snapshot with no history (TOPIC rules say so, e.g. SAT, invoice): do not look for dates in another engine -- return X's current breakdown; the answer says the month-by-month history is not stored.
 - When the answer needs data from another engine or a differently-shaped result (e.g. a batch-date table plus a meter-count table, a trend plus a total), put up to 3 more queries in extra_queries (they run in parallel). Keep them small.
 - Summaries, status briefs, CXO notes, 'risks and actions', drafts: never unanswerable -- query the headline KPIs (dashboard stats, SAT / non-SAT, stock, defects, collections) and the answer writer derives risks and actions from those numbers.
 - If the data genuinely cannot answer it, set answer_kind "unanswerable" and explain in reason -- reason is shown to the user as is: plain business words, never table or column names. A 'why' / 'how come' / 'explain the difference' question is NOT unanswerable when the figures behind it can be shown: return those figures side by side.
@@ -107,6 +108,12 @@ def _plan_prompt(triage: dict, catalog, previous: dict | None) -> tuple[str, lis
                           joiner="\n", required=True,
                           header="RELEVANT COLUMNS (retrieved for this question, with their REAL stored values -- use "
                                  "these exact spellings in filters):"))
+    if triage.get("cross_domain"):
+        from gmr_agents.agents.sql_writer.cross_domain import PLAN_HINT as _XD_HINT
+        sections.append(S("cross_domain", 1, [_XD_HINT], required=True))
+    if _stats.wanted(question):
+        # Statistics are computed by code from the rows (presentation/stats.py): ask for a series.
+        sections.append(S("analysis_rows", 1, [_stats.PLAN_HINT], required=True))
     sections.append(S("chart_guide", 6, business_rules.chart_guide(question).splitlines(), joiner="\n", min_items=12,
                       header="CHART GUIDE (pick the chart whose 'when' best matches the question and the rows your SQL "
                              "returns; shape the SQL so the chart can be drawn -- e.g. one column per stacked part, or a "
@@ -235,7 +242,20 @@ def _clean_sql(raw: Any) -> str:
     # Restoring it is safe: the SQL guard still validates the whole statement.
     if text and not _SQL_START_RE.match(text) and re.search(r"\bFROM\b", text, re.IGNORECASE):
         text = "SELECT " + text
+    # The Technical default month written as MAX over a GROUP BY (one row per qualifying month, right today only
+    # because one month has 10+ days): the same subquery wrapped, as the rules give it. 10 Nov retest: the entity
+    # check sent this back 14 times in one run (a full SQL repair round each, 5 never fixed).
+    text = _FLAT_DEFAULT_MONTH_RE.sub(
+        lambda m: (f"(SELECT MAX(month_date){m.group('alias') or ''} FROM (SELECT month_date FROM hes_gold.dt_load_profile "
+                   f"WHERE month_date >= DATE '{m.group('since') or '2026-06-01'}' GROUP BY month_date "
+                   "HAVING COUNT(DISTINCT data_date) >= 10) c)"), text)
     return text.rstrip(";").strip()
+
+
+_FLAT_DEFAULT_MONTH_RE = re.compile(
+    r"\(\s*SELECT\s+MAX\s*\(\s*month_date\s*\)(?P<alias>\s+AS\s+\w+)?\s+FROM\s+hes_gold\.dt_load_profile\s+"
+    r"(?:WHERE\s+month_date\s*>=\s*DATE\s*'(?P<since>\d{4}-\d{2}-\d{2})'\s+)?GROUP\s+BY\s+month_date\s+"
+    r"HAVING\s+COUNT\s*\(\s*DISTINCT\s+data_date\s*\)\s*>=\s*10\s*\)", re.IGNORECASE)
 
 
 def _to_plan(raw: dict, guard: dict, catalog, model: str) -> dict:
@@ -277,6 +297,17 @@ def _repair_hint(sql: str, problem: str, catalog=None) -> str:
         hint += ("\nAn alias column list (AS v(a, b, ...)) must name exactly as many columns as each VALUES row / "
                  "subquery has. Either add the value (e.g. l.project) to EVERY row or drop that name from the list; "
                  "for a per-project split, GROUP BY project instead of unpivoting.")
+    if re.search(r"keyword\(s\) not allowed", problem, re.IGNORECASE):
+        # The read-only check refuses command words anywhere, aliases included. 11 Nov: 'why did installations drop
+        # last month' aliased a column AS drop; both repairs kept it and the question failed.
+        hint += ("\nA column alias or name is a SQL command word (drop, update, delete, create, merge, copy ...), which "
+                 "the read-only check refuses: rename it (e.g. drop -> fall_in_installs, update -> last_updated).")
+    if re.search(r"column reference \"?\w+\"? is ambiguous|ambiguous column", problem, re.IGNORECASE):
+        # 11 Nov: 'compare Agra and Kashi on installs, SAT % and defect rate' joined three per-project subqueries
+        # and kept ORDER BY project -- the repair sent the same SQL twice and the question failed.
+        hint += ("\nA column name exists in more than one joined table / subquery: qualify it EVERYWHERE it is used "
+                 "(SELECT, WHERE, GROUP BY, ORDER BY) with its alias, e.g. i.project, or ORDER BY the output alias / "
+                 "position (ORDER BY 1).")
     if catalog is not None and re.search(r"could not be resolved|Unknown column|does not exist", problem, re.IGNORECASE):
         # An unknown column usually means the SQL used a table whose schema was not in the
         # prompt: give that table's REAL columns, else the repair guesses again (seen live:
@@ -308,7 +339,17 @@ def _zero_is_genuine(sql: str) -> bool:
     is the answer (e.g. no project below a stock threshold) -- a repair round would only
     resend the same SQL. An unknown value (a likely misspelling / wrong column) still
     gets the repair."""
-    return all(knowledge.known_value(v) for v in _filter_literals(sql))
+    # A literal compared case-sensitively (plain '=' / IN, no LOWER / UPPER / ILIKE around it) must be stored
+    # in that exact case. 10 Nov retest: circle = 'EDC Agra' (stored 'edc agra') -> 0 rows kept as the answer
+    # ('no 1PH installs') instead of a repair; the real figure was 536.
+    return all(knowledge.known_value(v) and (_case_insensitive(sql, v) or knowledge.known_value(v, exact=True))
+               for v in _filter_literals(sql))
+
+
+def _case_insensitive(sql: str, literal: str) -> bool:
+    lit = re.escape(f"'{literal}'")
+    return bool(re.search(r"\b(?:lower|upper)\s*\([^()]*\)\s*(?:=|<>|!=|(?:not\s+)?in\s*\([^)]*?|(?:not\s+)?like\s*)" + lit,
+                          sql, re.I) or re.search(r"\bilike\s*" + lit, sql, re.I))
 
 
 def _table_columns(table_names: list[str], catalog) -> set[str] | None:
@@ -333,6 +374,31 @@ def _is_empty(df: pd.DataFrame | None, plan: dict) -> bool:
         return True
     cards = [m["alias"] for m in plan["metrics"] if m["alias"] in df.columns]
     return len(df) == 1 and bool(cards) and all(pd.isna(df.iloc[0][c]) or df.iloc[0][c] == 0 for c in cards)
+
+
+# Share-of-a-whole columns can never pass 100%. 10 Nov retest: 'Compare Kashi and Triveni on installs last month,
+# SAT % and defect rate' divided all-time SAT by one month's installs -> 'SAT % 1,140,615.93', 'defect rate 14,261%'.
+# Growth / change / vs-target / loading / variance columns can legitimately exceed 100 and are not matched.
+_SHARE_COL = re.compile(
+    r"(?:sat|defect|faulty|burnt|share|conversion|complet|accura|efficien|collect|realis|realiz|utili[sz]|coverage|"
+    r"complian|concluded|confirmed|pending|eligible|invoiced|stuck|success|availability)\w*(?:pct|percent|rate|_%)"
+    r"|^(?:pct|percent)_(?:of_|sat|defect|share|complet|collect|realis|utili|eligible|pending|confirmed)", re.I)
+_NOT_SHARE = re.compile(r"change|growth|delta|diff|vs_?(?:prev|last|target)|increase|decrease|rise|fall|load|variance", re.I)
+
+
+def _impossible_shares(df: pd.DataFrame | None) -> list[str]:
+    """Share columns (SAT %, defect rate %, collection % ...) holding a value above 100."""
+    if not isinstance(df, pd.DataFrame) or df.empty:
+        return []
+    out = []
+    for c in df.columns:
+        name = str(c)
+        if not _SHARE_COL.search(name) or _NOT_SHARE.search(name):
+            continue
+        vals = pd.to_numeric(df[c], errors="coerce")
+        if vals.notna().any() and float(vals.max()) > 100.5:
+            out.append(f"{name} = {float(vals.max()):,.2f}")
+    return out
 
 
 def _run_one_extra(i: int, ex: dict, raw: dict, catalog, model: str) -> dict:

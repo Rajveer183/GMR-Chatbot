@@ -1586,6 +1586,30 @@ button {
   margin-bottom: 6px;
 }
 
+/* Sources line under an answer: where the figures came from (backend-built, never the LLM). */
+.chat-sources {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: 4px 8px;
+  font-size: 12px;
+  line-height: 1.5;
+  color: var(--text-muted);
+}
+
+.chat-sources strong {
+  font-weight: 600;
+}
+
+.chat-sources-item {
+  overflow-wrap: anywhere;
+}
+
+.chat-sources-item + .chat-sources-item::before {
+  content: "·";
+  margin-right: 8px;
+}
+
 /* ==========================================================================
    8. Buttons & chips
    ========================================================================== */

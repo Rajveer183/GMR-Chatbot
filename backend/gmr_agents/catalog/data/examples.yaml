@@ -962,6 +962,20 @@ examples:
       GROUP BY ROLLUP (u.project)
       ORDER BY GROUPING(u.project) DESC, pending_pct_of_mi DESC
 
+  - q: ["Show pending SAT counts for Kashi and Triveni", "pending SAT for two projects", "compare pending SAT of Agra and Kashi", "their pending SAT counts"]
+    note: "One row per named project (plus their Total): eligible pending = the Non-SAT Ageing card, installed not SAT and not yet due from the MI-vs-SAT snapshot. EVERY UNION leg filters the same projects (11 Nov retest: one unfiltered leg added an Agra row; another run labelled total MI as eligible pending)."
+    sql: |
+      SELECT CASE WHEN GROUPING(u.project) = 1 THEN 'Total' ELSE UPPER(u.project) END AS project,
+             SUM(u.not_sat) AS installed_not_sat,
+             SUM(u.pending) AS eligible_pending_sat,
+             SUM(u.not_sat) - SUM(u.pending) AS not_yet_due
+      FROM (SELECT LOWER(project) AS project, CASE WHEN sat_stage IS NULL THEN meter_count ELSE 0 END AS not_sat, 0 AS pending
+            FROM public.gold_mi_sat_invoice_snapshot WHERE LOWER(project) IN ('kashi', 'triveni')
+            UNION ALL
+            SELECT LOWER(project), 0, meter_count FROM public.gold_non_sat_ageing_snapshot WHERE LOWER(project) IN ('kashi', 'triveni')) u
+      GROUP BY ROLLUP (u.project)
+      ORDER BY GROUPING(u.project) DESC, u.project
+
   - q: ["SAT percentage against eligible MI for Agra", "eligible sat % in Kashi", "SAT % vs eligible MI", "how much of eligible MI has SAT done", "SAT progress against eligible meters"]
     note: "% SAT vs eligible MI = ALL SAT meters (sat_stage IS NOT NULL, eligible or not) / eligible MI -- the dashboard formula, can exceed 100%. Never SAT(eligible) / eligible. Show both percentages."
     sql: |
@@ -1464,6 +1478,19 @@ examples:
              SUM(installation_count) AS installations
       FROM public.gold_mi_technician_productivity_day_agg
       WHERE category = 'ALL' AND period_start BETWEEN CURRENT_DATE - 30 AND CURRENT_DATE - 1
+      GROUP BY ROLLUP (project)
+      ORDER BY GROUPING(project) DESC, productivity_per_tech_day DESC
+
+  - q: ["What is the technician productivity this month?", "What is the MI productivity per technician per day this month?", "technician productivity", "MI productivity this month", "installation productivity this month"]
+    note: "One overall figure (installs / technician-days) with the card tiles, Total first then each project -- never one row per technician or per date (11 Nov retest: a per-technician-per-day list came back and the answer quoted the range 1-25). 'This month' = the 1st .. today."
+    sql: |
+      SELECT CASE WHEN GROUPING(project) = 1 THEN 'Total' ELSE UPPER(project) END AS project,
+             SUM(installation_count) AS installations,
+             COUNT(DISTINCT technician_name) AS active_technicians,
+             COUNT(DISTINCT period_start) AS active_days,
+             ROUND(SUM(installation_count)::numeric / NULLIF(SUM(technician_day_count), 0), 2) AS productivity_per_tech_day
+      FROM public.gold_mi_technician_productivity_day_agg
+      WHERE category = 'ALL' AND period_start >= DATE_TRUNC('month', CURRENT_DATE)::date AND period_start <= CURRENT_DATE
       GROUP BY ROLLUP (project)
       ORDER BY GROUPING(project) DESC, productivity_per_tech_day DESC
 
@@ -5569,3 +5596,142 @@ examples:
     - which circle has the most load violators
     note: 'The card''s chart: violators per circle, MOST violators first (EDC PRATAPGARH 11,765 in July) -- lead with that circle and its % of assessed; name the highest % separately only if it is another circle.'
     sql: "WITH v AS (SELECT circle, COUNT(DISTINCT meter_no) AS violators FROM hes_gold.load_violation\n           WHERE data_date = (SELECT MAX(month_date) FROM (SELECT month_date FROM hes_gold.dt_load_profile WHERE month_date >= DATE '2026-06-01' GROUP BY month_date HAVING COUNT(DISTINCT data_date) >= 10) c) AND circle IS NOT NULL GROUP BY circle),\n     a AS (SELECT circle, SUM(assessed_meters) AS assessed FROM hes_gold.load_assessed_consumers\n           WHERE data_date = (SELECT MAX(month_date) FROM (SELECT month_date FROM hes_gold.dt_load_profile WHERE month_date >= DATE '2026-06-01' GROUP BY month_date HAVING COUNT(DISTINCT data_date) >= 10) c) AND circle IS NOT NULL GROUP BY circle)\nSELECT (SELECT MAX(month_date) FROM (SELECT month_date FROM hes_gold.dt_load_profile WHERE month_date >= DATE '2026-06-01' GROUP BY month_date HAVING COUNT(DISTINCT data_date) >= 10) c) AS data_month, v.circle, v.violators, a.assessed,\n       ROUND(v.violators * 100.0 / NULLIF(a.assessed, 0), 2) AS pct_consumers_with_load_violation\nFROM v JOIN a ON v.circle = a.circle\nORDER BY v.violators DESC"
+
+  # ---- Analytical patterns (11 Nov 2026): the rows a statistic is computed from. Correlation, spread, outliers,
+  # ---- change points, projections, Monte Carlo ranges, PCA and tiers are computed BY CODE from these rows
+  # ---- (gmr_agents/presentation/stats.py) -- the SQL only returns the series, never a made-up statistic.
+  - q: ["Is there a relationship between active technicians and installations per day?", "do more technicians mean more installations", "correlation between active technicians and daily installs", "does workforce size drive installation output", "attribute installation output to workforce size vs productivity"]
+    note: "Relationship / correlation / driver between two daily measures: one row per day (last 60 complete days unless asked), the measure asked about first. Pearson / Spearman r, p-value and slope are computed by code from these rows (r 0.97 on 11 Nov) -- name the method and say correlation is not proof of cause."
+    sql: |
+      SELECT period_start AS work_date,
+             SUM(installation_count) AS installations,
+             COUNT(DISTINCT technician_name) AS active_technicians,
+             ROUND(SUM(installation_count)::numeric / NULLIF(SUM(technician_day_count), 0), 2) AS productivity
+      FROM public.gold_mi_technician_productivity_day_agg
+      WHERE category = 'ALL'
+        AND period_start BETWEEN CURRENT_DATE - 60 AND CURRENT_DATE - 1
+      GROUP BY period_start
+      ORDER BY period_start
+
+  - q: ["Run a Monte Carlo simulation of next month's installations", "forecast installations for the next 30 days with a range", "how confident can we be in next month's installation forecast", "best case and worst case installations next month", "detect change points in daily installations", "autocorrelation of daily installations"]
+    note: "Forecast with a range / simulation / change point / weekday pattern on installations: return the daily series of the last 90 complete days (MI progress filters). The projection, Monte Carlo P10-P90, change point and weekday means are computed by code from it; say they assume the recent pattern holds."
+    sql: |
+      SELECT period_start AS install_date, SUM(meter_count) AS meters_installed
+      FROM public.gold_mi_installation_day_agg
+      WHERE has_meter_serial AND progress_category IS NOT NULL AND NOT is_replacement
+        AND period_start BETWEEN CURRENT_DATE - 90 AND CURRENT_DATE - 1
+      GROUP BY period_start
+      ORDER BY period_start
+
+  - q: ["If technician productivity rises by 20%, how many more meters would we install per month?", "what if installation productivity improves by 10%", "simulate installations next month if 10% of technicians are absent", "how sensitive are installations to productivity"]
+    note: "What-if on productivity / technicians: return only the BASE over the last 30 complete days (installs, technician-days, technicians a day, productivity) -- the stated % change is applied by code (+20% = +20,030 installs a month on 11 Nov). Never write assumed values like (3.0 - 2.7) into the SQL."
+    sql: |
+      SELECT SUM(installation_count) AS installs_last_30_days,
+             SUM(technician_day_count) AS technician_days_last_30_days,
+             ROUND(SUM(technician_day_count) / 30.0, 1) AS technicians_per_day,
+             ROUND(SUM(installation_count)::numeric / NULLIF(SUM(technician_day_count), 0), 2) AS productivity
+      FROM public.gold_mi_technician_productivity_day_agg
+      WHERE category = 'ALL'
+        AND period_start BETWEEN CURRENT_DATE - 30 AND CURRENT_DATE - 1
+
+  - q: ["Group zones into high, medium and low performers on installation productivity", "cluster zones by installation productivity", "which zones are outliers in installation productivity", "run PCA on zone-level installation KPIs", "benchmark each zone's installation productivity against the average"]
+    note: "Zone-level KPI table for tiers / outliers / PCA / benchmarking: one row per zone over the last 30 complete days (say so) unless a period is asked, no Total row. Terciles, z-scores, correlations and PCA are computed by code from these rows (VARANASI I 4.44 was the productivity outlier on 11 Nov)."
+    sql: |
+      SELECT UPPER(zone) AS zone,
+             SUM(installation_count) AS installations,
+             ROUND(SUM(installation_count)::numeric / NULLIF(SUM(technician_day_count), 0), 2) AS productivity,
+             COUNT(DISTINCT technician_name) AS active_technicians,
+             ROUND(SUM(technician_day_count)::numeric / NULLIF(COUNT(DISTINCT technician_name), 0), 1) AS days_per_technician
+      FROM public.gold_mi_technician_productivity_day_agg
+      WHERE category = 'ALL' AND zone IS NOT NULL AND zone <> ''
+        AND period_start BETWEEN CURRENT_DATE - 30 AND CURRENT_DATE - 1
+      GROUP BY UPPER(zone)
+      ORDER BY productivity DESC
+
+  - q: ["Detect regime shifts in monthly installations", "when did the installation trend change significantly", "project installations for the next 6 months if the trend continues", "long-term projection of installations", "multi-horizon forecast of installations"]
+    note: "Monthly history for regime shifts / long-term projection: every COMPLETE month (the running month left out), MI progress filters. The change point and the projection (recent 6-month trend, or the recent average when that trend is weak) are computed by code."
+    sql: |
+      SELECT period_start AS month, SUM(meter_count) AS meters_installed
+      FROM public.gold_mi_installation_month_agg
+      WHERE has_meter_serial AND progress_category IS NOT NULL AND NOT is_replacement
+        AND period_start < date_trunc('month', CURRENT_DATE)::date
+      GROUP BY period_start
+      ORDER BY period_start
+
+  - q: ["What is the revenue impact of meters stuck in non-SAT for more than 90 days?", "revenue at risk from non-SAT meters older than 90 days", "how much lumpsum is blocked by old non-SAT meters", "expected revenue loss from the 120+ day non-SAT meters", "business impact of the non-SAT backlog on revenue"]
+    note: "Revenue blocked = stuck meters x lumpsum per meter, per project: blocked (crore) = stuck meters x that project's LATEST receivables row lumpsum_invoiced (already crore) / its lumpsum-invoiced meters (has_lumpsum_invoice) -- about Rs 860-930 a meter, so 263,243 meters over 90 days block Rs 23.74 crore (11 Nov). Never divide by the stuck meters, never quote a project's whole lumpsum_invoiced as the impact. For 120+ only use age_key = 'age_120_plus'."
+    sql: |
+      WITH bands AS (
+        SELECT LOWER(project) AS project,
+               COALESCE(SUM(meter_count) FILTER (WHERE age_key IN ('age_91_120', 'age_120_plus')), 0) AS meters_over_90_days
+        FROM public.gold_non_sat_ageing_snapshot
+        GROUP BY LOWER(project)),
+      inv AS (
+        SELECT LOWER(project) AS project,
+               COALESCE(SUM(meter_count) FILTER (WHERE has_lumpsum_invoice), 0) AS lumpsum_invoiced_meters
+        FROM public.gold_mi_sat_invoice_snapshot
+        GROUP BY LOWER(project)),
+      rr AS (
+        SELECT LOWER(project) AS project, lumpsum_invoiced
+        FROM (SELECT r.*, ROW_NUMBER() OVER (PARTITION BY project ORDER BY created_at DESC, id DESC) AS rn
+              FROM public.revenue_receivables r) x
+        WHERE rn = 1)
+      SELECT CASE WHEN GROUPING(b.project) = 1 THEN 'Total' ELSE UPPER(b.project) END AS project,
+             SUM(b.meters_over_90_days) AS meters_over_90_days,
+             SUM(i.lumpsum_invoiced_meters) AS lumpsum_invoiced_meters,
+             ROUND(SUM(b.meters_over_90_days * rr.lumpsum_invoiced / NULLIF(i.lumpsum_invoiced_meters, 0))::numeric, 2) AS lumpsum_blocked_cr
+      FROM bands b
+      LEFT JOIN inv i ON i.project = b.project
+      LEFT JOIN rr ON rr.project = b.project
+      GROUP BY ROLLUP (b.project)
+      ORDER BY GROUPING(b.project) DESC, lumpsum_blocked_cr DESC
+
+  - q: ["In plain English, how is Triveni doing overall?", "how is Agra doing", "overall status of Kashi project", "give me a health check of Triveni", "project scorecard for Agra"]
+    note: "One project's overall picture = one row of headline KPIs: all-time meters installed (MI progress), recent output and productivity (last 30 complete days, productivity card), SAT % of eligible, eligible meters pending SAT, unused stock, open O&M tickets (snapshots as on the latest refresh). Use the project the question names; the answer judges strengths and gaps from these numbers."
+    sql: |
+      SELECT 'TRIVENI' AS project,
+             (SELECT SUM(meter_count) FROM public.gold_mi_installation_month_agg
+               WHERE has_meter_serial AND progress_category IS NOT NULL AND NOT is_replacement AND LOWER(project) = 'triveni') AS meters_installed,
+             (SELECT SUM(installation_count) FROM public.gold_mi_technician_productivity_day_agg
+               WHERE category = 'ALL' AND LOWER(project) = 'triveni' AND period_start BETWEEN CURRENT_DATE - 30 AND CURRENT_DATE - 1) AS installs_last_30_days,
+             (SELECT ROUND(SUM(installation_count)::numeric / NULLIF(SUM(technician_day_count), 0), 2)
+                FROM public.gold_mi_technician_productivity_day_agg
+               WHERE category = 'ALL' AND LOWER(project) = 'triveni' AND period_start BETWEEN CURRENT_DATE - 30 AND CURRENT_DATE - 1) AS productivity_last_30_days,
+             (SELECT ROUND(SUM(meter_count) FILTER (WHERE sat_stage IS NOT NULL) * 100.0
+                           / NULLIF(SUM(meter_count) FILTER (WHERE is_sat_eligible), 0), 2)
+                FROM public.gold_mi_sat_invoice_snapshot WHERE LOWER(project) = 'triveni') AS sat_pct_of_eligible,
+             (SELECT SUM(meter_count) FROM public.gold_non_sat_ageing_snapshot WHERE LOWER(project) = 'triveni') AS eligible_pending_sat,
+             (SELECT SUM(stock_count) FROM public.gold_inventory_unutilized_stock_snapshot WHERE LOWER(project) = 'triveni') AS unused_stock,
+             (SELECT SUM(ticket_count) FROM public.gold_om_open_ageing_snapshot WHERE LOWER(project) = 'triveni') AS open_om_tickets
+
+  - q: ["Rank operational risks by severity: backlog, stock, SAT and defects", "what are the top risks in the programme right now", "operational risk register", "which operational risk needs attention first", "enterprise-wide operational risk summary"]
+    note: "Risk register = one row per risk with a SEVERITY measure and its base, never raw totals (installed meters are not a risk): O&M tickets older than 30 days (% of open), eligible meters waiting for SAT over 120 days (% of eligible), days of unused stock at the last-30-day pace (lower = worse), faulty meters per 100 installed in the last 30 days. The answer ranks them by how far each is from healthy and names one action each. For one project add LOWER(project) = 'x' to every subquery."
+    sql: |
+      WITH pace AS (
+        SELECT SUM(meter_count) / 30.0 AS per_day
+        FROM public.gold_mi_installation_day_agg
+        WHERE has_meter_serial AND progress_category IS NOT NULL AND NOT is_replacement
+          AND period_start BETWEEN CURRENT_DATE - 30 AND CURRENT_DATE - 1)
+      SELECT 'O&M backlog' AS risk, 'open tickets older than 30 days' AS measure,
+             (SELECT SUM(ticket_count) FILTER (WHERE age_key IN ('age_31_60', 'age_60_plus')) FROM public.gold_om_open_ageing_snapshot) AS value,
+             (SELECT ROUND(SUM(ticket_count) FILTER (WHERE age_key IN ('age_31_60', 'age_60_plus')) * 100.0 / NULLIF(SUM(ticket_count), 0), 2)
+                FROM public.gold_om_open_ageing_snapshot) AS pct_of_base,
+             'of all open tickets' AS base
+      UNION ALL
+      SELECT 'SAT backlog', 'eligible meters waiting for SAT over 120 days',
+             (SELECT COALESCE(SUM(meter_count) FILTER (WHERE age_key = 'age_120_plus'), 0) FROM public.gold_non_sat_ageing_snapshot),
+             (SELECT ROUND(COALESCE(SUM(meter_count) FILTER (WHERE age_key = 'age_120_plus'), 0) * 100.0
+                           / NULLIF((SELECT SUM(meter_count) FILTER (WHERE is_sat_eligible) FROM public.gold_mi_sat_invoice_snapshot), 0), 2)
+                FROM public.gold_non_sat_ageing_snapshot),
+             'of eligible installed meters'
+      UNION ALL
+      SELECT 'Stock', 'days of unused stock at the last-30-day installation pace',
+             (SELECT ROUND(SUM(stock_count) / NULLIF((SELECT per_day FROM pace), 0), 0) FROM public.gold_inventory_unutilized_stock_snapshot),
+             NULL, 'days (lower = closer to a stock-out)'
+      UNION ALL
+      SELECT 'Defects', 'meters found faulty in the last 30 days',
+             (SELECT SUM(defect_rate_numerator_count) FROM public.gold_meter_defect_event_day_agg
+               WHERE period_start BETWEEN CURRENT_DATE - 30 AND CURRENT_DATE - 1),
+             (SELECT ROUND(SUM(defect_rate_numerator_count) * 100.0 / NULLIF((SELECT per_day FROM pace) * 30, 0), 2)
+                FROM public.gold_meter_defect_event_day_agg WHERE period_start BETWEEN CURRENT_DATE - 30 AND CURRENT_DATE - 1),
+             'per 100 meters installed in the same 30 days'
