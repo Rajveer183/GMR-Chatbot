@@ -268,6 +268,11 @@ PREWARM_BANK = _flag("PREWARM_BANK")                      # also warm the whole 
 PREWARM_MAX_QUESTIONS = _int("PREWARM_MAX_QUESTIONS")     # LLM-answered questions per run (0 = no cap)
 PREWARM_SETTLE_SECONDS = _float("PREWARM_SETTLE_SECONDS") # a new version must stay unchanged this long first
 
+# --- Daily digest (gmr_agents/ops/alerts.py) ---------------------------------
+# Writes outputs/digests/digest_<date>.md once a day from the logs (no LLM call, no DB query)
+# and logs high-severity alerts. Optional setting: on unless DAILY_DIGEST_ENABLED=0.
+DAILY_DIGEST_ENABLED = os.environ.get("DAILY_DIGEST_ENABLED", "1").strip().lower() in {"1", "true", "yes", "on"}
+
 # --- Redis (shared/redis_client.py) -------------------------------------------
 # Optional cache/session/rate-limit layer -- REDIS_HOST="" or Redis unreachable both
 # degrade to the existing local-file / in-memory logic (redis_client.available()).

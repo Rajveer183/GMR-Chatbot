@@ -1,6 +1,7 @@
 import React, { useEffect, useMemo, useRef, useState } from "react";
-import { Menu, Plus, MessageSquare, Pencil, Trash2, Send, Mic, Search, X, User, Bot, ChevronDown, FileSpreadsheet } from "lucide-react";
+import { Menu, Plus, MessageSquare, Pencil, Trash2, Send, Mic, Search, X, User, Bot, ChevronDown, FileSpreadsheet, Download } from "lucide-react";
 import { apiClient } from "../api/client";
+import type { FeedbackRating } from "../api/client";
 import type { AIQueryResponse, AIStreamEvent, DatasetSummary, FilterRequest, SessionSummary, SessionDetail, SessionMessage, TranslatedAnswer } from "../api/client";
 import { LanguageSelect } from "./LanguageSelect";
 import { langTag, readStoredLanguage, screenLanguage, speechLocale, statusText, storeLanguage, uiText } from "../i18n/languages";
@@ -138,6 +139,17 @@ export const AIWorkspace: React.FC<AIWorkspaceProps> = ({ filters }) => {
     setSessions(list);
     return list;
   };
+
+  // trace_id -> this session's thumbs vote (loaded with the session; failures just show no vote)
+  const [votes, setVotes] = useState<Record<string, FeedbackRating>>({});
+  const [exportOpen, setExportOpen] = useState(false);
+  const recordVote = (traceId: string, rating: FeedbackRating) =>
+    setVotes((v) => {
+      const next = { ...v };
+      if (rating === "clear") delete next[traceId];
+      else next[traceId] = rating;
+      return next;
+    });
 
   const openSession = async (sessionId: string, scrollToLatest = true) => {
     if (scrollToLatest) {
@@ -304,6 +316,17 @@ export const AIWorkspace: React.FC<AIWorkspaceProps> = ({ filters }) => {
   useEffect(() => {
     if (activeSession?.session_id) storeSessionId(activeSession.session_id);
     setShownLanguage({});  // another chat: every answer as written
+  }, [activeSession?.session_id]);
+
+  useEffect(() => {
+    const id = activeSession?.session_id;
+    setVotes({});
+    setExportOpen(false);
+    if (!id) return;
+    apiClient
+      .getFeedback(id)
+      .then((v) => setVotes(v))
+      .catch(() => undefined);  // no votes shown; answering is unaffected
   }, [activeSession?.session_id]);
 
   const requestTranslation = (response: AIQueryResponse, language: LanguagePreference) => {
@@ -689,6 +712,30 @@ export const AIWorkspace: React.FC<AIWorkspaceProps> = ({ filters }) => {
           </div>
           <div className="chat-header-controls">
             <span className="chat-active-badge">{t("activeSession")}</span>
+            {activeSession?.messages?.length ? (
+              <div className="export-menu">
+                <button
+                  type="button"
+                  className="summary-audio-btn"
+                  onClick={() => setExportOpen((o) => !o)}
+                  aria-expanded={exportOpen}
+                  title={t("exportTitle")}
+                >
+                  <Download size={14} />
+                  <span>{t("exportChat")}</span>
+                </button>
+                {exportOpen ? (
+                  <div className="export-menu-list" role="menu" onMouseLeave={() => setExportOpen(false)}>
+                    <a role="menuitem" href={apiClient.exportSessionUrl(activeSession.session_id, "html")} onClick={() => setExportOpen(false)}>
+                      {t("exportHtml")}
+                    </a>
+                    <a role="menuitem" href={apiClient.exportSessionUrl(activeSession.session_id, "md")} onClick={() => setExportOpen(false)}>
+                      {t("exportMd")}
+                    </a>
+                  </div>
+                ) : null}
+              </div>
+            ) : null}
             <LanguageSelect value={responseLanguage} onChange={changeLanguage} label={t("answerLanguage")} />
           </div>
         </header>
@@ -758,6 +805,11 @@ export const AIWorkspace: React.FC<AIWorkspaceProps> = ({ filters }) => {
                             result={shown.result}
                             onFollowUp={(q, canonical) => runQuery(q, 1, ALL_ROWS, true, canonical)}
                             showFollowups={msg.id === lastAssistantId}
+                            feedback={{
+                              sessionId: activeSession?.session_id,
+                              rating: votes[msg.response?.debug?.trace_id ?? ""],
+                              onChange: recordVote,
+                            }}
                           />
                         ) : (
                           <div className="chat-summary-text">{msg.content}</div>

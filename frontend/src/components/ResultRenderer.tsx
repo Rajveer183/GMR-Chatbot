@@ -11,6 +11,8 @@ import { InsightList } from "./InsightList";
 import { WarningBox } from "./WarningBox";
 import { SourcesNote } from "./SourcesNote";
 import { SuggestedQuestions } from "./SuggestedQuestions";
+import { FeedbackButtons } from "./FeedbackButtons";
+import type { FeedbackRating } from "../api/client";
 import { resultToPayload } from "../utils/clipboard";
 import { resultToSpeech } from "../utils/speech";
 import { uiText } from "../i18n/languages";
@@ -23,6 +25,8 @@ interface ResultRendererProps {
    * a translated chip, when there is one. */
   onFollowUp?: (question: string, canonical?: string) => void;
   showFollowups?: boolean;
+  /** Thumbs up / down under the summary; omitted for drafts still streaming. */
+  feedback?: { sessionId?: string; rating?: FeedbackRating; onChange?: (traceId: string, rating: FeedbackRating) => void };
 }
 
 // The backend now decides what to show per-answer (backend/ai/response_shape.py):
@@ -31,7 +35,7 @@ interface ResultRendererProps {
 // "compact" rendering mode any more -- an answer with empty arrays already
 // renders identically to the old summary-first view, just from real data
 // instead of a UI-side toggle.
-export const ResultRenderer: React.FC<ResultRendererProps> = ({ result, onFollowUp, showFollowups }) => {
+export const ResultRenderer: React.FC<ResultRendererProps> = ({ result, onFollowUp, showFollowups, feedback }) => {
   const [expandedChart, setExpandedChart] = useState<AIChartSpec | null>(null);
   const followups = result.suggested_followups?.length && showFollowups ? result.suggested_followups : [];
   // Shown in the answer's language when the backend translated them; a click still runs the
@@ -139,6 +143,17 @@ export const ResultRenderer: React.FC<ResultRendererProps> = ({ result, onFollow
       ) : null}
 
       <WarningBox warnings={result.warnings ?? []} title={uiText(lang, "warnings")} />
+
+      {/* Below the follow-ups, right above Sources. */}
+      {feedback && result.debug?.trace_id ? (
+        <FeedbackButtons
+          traceId={result.debug.trace_id}
+          sessionId={feedback.sessionId}
+          initial={feedback.rating}
+          lang={lang}
+          onChange={feedback.onChange}
+        />
+      ) : null}
 
       <SourcesNote citations={result.citations ?? []} title={uiText(lang, "sources")} />
 

@@ -92,12 +92,33 @@ const en = {
   es_card2Text: "Click a project, OEM or division bar in a chart to get its full breakdown.",
   es_card3Title: "KPIs, charts & data",
   es_card3Text: "Answers come with a plain-language summary, KPI tiles or a dashboard-style chart, and the underlying table to verify it.",
+  // feedback + export
+  helpful: "Helpful",
+  notHelpful: "Not helpful",
+  feedbackThanks: "Thanks for the feedback",
+  feedbackWhat: "What was wrong?",
+  feedbackComment: "Optional: what should it have said?",
+  feedbackSend: "Send",
+  feedbackFailed: "Could not send feedback",
+  fb_wrong_number: "Wrong number",
+  fb_wrong_period: "Wrong period",
+  fb_wrong_filter: "Wrong area / filter",
+  fb_not_what_i_asked: "Not what I asked",
+  fb_incomplete: "Incomplete",
+  fb_slow: "Too slow",
+  fb_other: "Other",
+  exportChat: "Export",
+  exportHtml: "Report (HTML / print to PDF)",
+  exportMd: "Markdown",
+  exportTitle: "Download this whole conversation",
 };
 
 export type UIKey = keyof typeof en;
 type Strings = Partial<Record<UIKey, string>>;
 
 const hinglish: Strings = {
+  helpful: "Kaam ka hai", notHelpful: "Kaam ka nahi", feedbackThanks: "Feedback ke liye shukriya",
+  feedbackWhat: "Kya galat tha?", feedbackSend: "Bhejo", exportChat: "Export",
   interpretedAs: "Samjha gaya:",
   translating: "Translate ho raha hai…",
   translationFailed: "Translation abhi available nahi hai — original answer dikha rahe hain.",
@@ -159,6 +180,8 @@ const hinglish: Strings = {
 };
 
 const hi: Strings = {
+  helpful: "उपयोगी", notHelpful: "उपयोगी नहीं", feedbackThanks: "प्रतिक्रिया के लिए धन्यवाद",
+  feedbackWhat: "क्या गलत था?", feedbackSend: "भेजें", exportChat: "एक्सपोर्ट",
   summary: "सारांश", keyMetrics: "मुख्य मीट्रिक्स", insights: "इनसाइट्स", followups: "सुझाए गए अगले प्रश्न",
   resultPreview: "परिणाम पूर्वावलोकन", warnings: "चेतावनियाँ", sources: "स्रोत", interpretedAs: "इस रूप में समझा गया:",
   dashboardView: "डैशबोर्ड जैसा: {card}",

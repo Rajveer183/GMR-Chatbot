@@ -19,6 +19,19 @@ plus chat sessions, the dataset list, text-to-speech, and the question log:
     GET /api/metrics            P50/P95 latency + time to first token, tokens, cost, refusal / repair /
                                 cache-hit rates vs the SLO_* targets (?hours=24)
 
+and the learning / proactive layer (from the logs only -- no LLM call, no DB query):
+
+    POST /api/feedback               thumbs up / down (+ reason, comment) on an answer
+    GET  /api/feedback?session_id=   that session's votes
+    GET  /api/insights/quality       root causes, unanswered questions, recurring failures,
+                                     model comparison, auto-generated regression cases
+    GET  /api/alerts                 regressions vs the last 7 days, SLO breaches, failing models,
+                                     schema changes, stale sources
+    GET  /api/insights/digest        daily digest (?format=md); also written to outputs/digests/
+    GET  /api/data/freshness         every source table's 'data up to' date
+    GET  /api/data/schema-changes    tables / columns added, removed, emptied or shrunk
+    GET  /api/sessions/{id}/export   the conversation as Markdown / HTML / JSON
+
 Every answer is written by an LLM (gmr_agents/llm_pipeline.py); debug.trace
 has one entry per stage with its timing and the model that ran it.
 """
@@ -149,9 +162,15 @@ def _turn_context(state: dict, response: dict) -> dict:
 
 
 async def _refresh_one_catalog(domain: str) -> None:
+    from gmr_agents.ops import schema_watch
+
     try:
+        # In-memory tables only (list_tables() could start a live build on the event loop).
+        before = schema_watch.snapshot(getattr(get_catalog(domain), "_tables", None) or [])
         tables = await asyncio.to_thread(get_catalog(domain).refresh)
         log.info("Catalog refresh: %s catalog -- %d table(s).", domain, len(tables))
+        # Added / removed tables or columns, type changes, emptied / shrunk tables -> schema_changes.jsonl
+        schema_watch.record(domain, before, schema_watch.snapshot(tables))
     except Exception:
         # A transient Athena / Postgres outage must not kill future refreshes;
         # the catalog already in memory keeps serving meanwhile.
@@ -210,6 +229,22 @@ async def _keep_cache_warm() -> None:
         await asyncio.sleep(config.PREWARM_CHECK_SECONDS)
 
 
+async def _keep_digest() -> None:
+    """Once a day: outputs/digests/digest_<date>.md + high-severity alerts in the log.
+    Reads the logs only (no LLM call, no DB query), in a background thread."""
+    from gmr_agents.ops import alerts
+
+    await asyncio.sleep(120)
+    while True:
+        try:
+            path = await asyncio.to_thread(alerts.write_daily_digest)
+            if path:
+                log.info("Daily digest written: %s", path)
+        except Exception:
+            log.exception("daily digest failed -- will retry")
+        await asyncio.sleep(3600)
+
+
 @asynccontextmanager
 async def lifespan(_: FastAPI):
     # Start from the cached catalogs whatever their age (a live rebuild takes
@@ -236,6 +271,7 @@ async def lifespan(_: FastAPI):
     refresher = asyncio.create_task(_keep_catalogs_fresh(stale))
     skeleton = asyncio.create_task(_keep_skeleton_fresh())
     warmer = asyncio.create_task(_keep_cache_warm()) if config.PREWARM_ENABLED else None
+    digester = asyncio.create_task(_keep_digest()) if config.DAILY_DIGEST_ENABLED else None
     log.info("Catalog refresh scheduled every %d seconds%s.", MAX_CACHE_AGE_SECONDS,
              f" (stale now: {', '.join(stale)})" if stale else "")
     log.info("Redis: %s (%s:%s) -- %s", "reachable" if redis_client.available() else "unreachable",
@@ -247,6 +283,8 @@ async def lifespan(_: FastAPI):
     skeleton.cancel()
     if warmer:
         warmer.cancel()
+    if digester:
+        digester.cancel()
 
 
 app = FastAPI(title="GMR Agentic Router (MDM/WFM)", version="0.1.0", lifespan=lifespan)
@@ -753,8 +791,107 @@ def service_metrics(hours: float = 24.0) -> dict:
 
 
 # --------------------------------------------------------------------------- #
+# Feedback, learning, alerts, data health (gmr_agents/ops/learning.py, alerts.py,
+# schema_watch.py) -- computed from the logs; no LLM call, no DB query, not on the
+# question path.
+# --------------------------------------------------------------------------- #
+
+class FeedbackRequest(BaseModel):
+    trace_id: str
+    rating: str                      # up | down | clear
+    session_id: str | None = None
+    reason: str | None = None        # see learning.REASONS (downvotes only)
+    comment: str | None = None
+
+
+@app.post("/api/feedback")
+def submit_feedback(req: FeedbackRequest) -> dict:
+    from gmr_agents.ops import learning
+
+    try:
+        record = learning.record_feedback(req.trace_id, req.rating, session_id=req.session_id,
+                                          reason=req.reason, comment=req.comment)
+    except ValueError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from None
+    return {"ok": True, "trace_id": record["trace_id"], "rating": record["rating"]}
+
+
+@app.get("/api/feedback")
+def session_feedback(session_id: str) -> dict:
+    """{trace_id: 'up'|'down'} for one session -- the thumbs state after a reload."""
+    from gmr_agents.ops import learning
+
+    return {"session_id": session_id, "votes": learning.session_votes(session_id)}
+
+
+@app.get("/api/insights/quality")
+def quality_insights(hours: float = 168.0) -> dict:
+    """Root causes, frequently unanswered questions, recurring failures, model comparison,
+    feedback and auto-generated regression cases (gmr_agents/ops/learning.py)."""
+    from gmr_agents.ops import learning
+
+    return learning.compute(max(1.0, min(hours, 24 * 30)))
+
+
+@app.get("/api/alerts")
+def current_alerts(hours: float = 24.0) -> dict:
+    """Quality / latency regressions vs the previous 7 days, SLO breaches, failing models,
+    new failure patterns, low satisfaction, schema changes, stale sources."""
+    from gmr_agents.ops import alerts
+
+    d = alerts.compute(max(1.0, min(hours, 24 * 7)))
+    return {k: v for k, v in d.items() if not k.startswith("_")}
+
+
+@app.get("/api/insights/digest")
+def insights_digest(hours: float = 24.0, format: str = "json"):
+    """The daily digest: headline numbers, alerts, most-asked topics, why answers failed."""
+    from gmr_agents.ops import alerts
+
+    d = alerts.digest(max(1.0, min(hours, 24 * 7)))
+    if format == "md":
+        return Response(alerts.to_markdown(d), media_type="text/markdown; charset=utf-8")
+    return d
+
+
+@app.get("/api/data/schema-changes")
+def schema_changes(hours: float = 168.0) -> dict:
+    from gmr_agents.ops import schema_watch
+
+    return {"changes": schema_watch.recent(max(1.0, min(hours, 24 * 90)))}
+
+
+@app.get("/api/data/freshness")
+def data_freshness() -> dict:
+    """Every source table's 'data up to' date and whether it is behind (from the data skeleton)."""
+    from gmr_agents.ops import alerts
+
+    items = alerts.stale_sources()
+    return {"tables": sorted(items, key=lambda i: (not i["stale"], i["table"])),
+            "stale": sum(1 for i in items if i["stale"])}
+
+
+# --------------------------------------------------------------------------- #
 # Sessions
 # --------------------------------------------------------------------------- #
+
+@app.get("/api/sessions/{session_id}/export")
+def export_session(session_id: str, format: str = "md", include_sql: bool = False) -> Response:
+    """The whole conversation as Markdown, a printable HTML page or JSON -- from the stored
+    answers (no query re-run, no LLM call)."""
+    from gmr_agents.ops import export
+
+    session = sessions.get_session(session_id)
+    if session is None:
+        raise HTTPException(status_code=404, detail="Session not found.")
+    safe = "".join(ch if ch.isalnum() or ch in "-_" else "_" for ch in (session.get("session_name") or "chat"))[:50] or "chat"
+    if format == "html":
+        body, media, ext = export.to_html(session, include_sql), "text/html; charset=utf-8", "html"
+    elif format == "json":
+        body, media, ext = export.to_json(session), "application/json", "json"
+    else:
+        body, media, ext = export.to_markdown(session, include_sql), "text/markdown; charset=utf-8", "md"
+    return Response(body, media_type=media, headers={"Content-Disposition": f'attachment; filename="{safe}.{ext}"'})
 
 @app.get("/api/sessions")
 def list_sessions() -> list[dict]:

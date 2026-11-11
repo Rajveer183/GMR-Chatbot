@@ -2235,3 +2235,136 @@ button {
 .table-page-error {
   color: #b42318;
 }
+
+/* ---- Answer feedback (thumbs up / down) ------------------------------- */
+.feedback-wrap {
+  margin-top: var(--space-3);
+}
+
+.feedback-buttons {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+}
+
+.feedback-btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 28px;
+  height: 28px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-pill);
+  background: var(--card-bg);
+  color: var(--text-muted);
+  cursor: pointer;
+  transition: background var(--duration-fast) ease, border-color var(--duration-fast) ease, color var(--duration-fast) ease;
+}
+
+.feedback-btn:hover {
+  border-color: var(--accent);
+  color: var(--text-main);
+}
+
+.feedback-btn.active.up {
+  border-color: var(--success);
+  background: var(--success-soft);
+  color: #15803d;
+}
+
+.feedback-btn.active.down {
+  border-color: var(--danger);
+  background: var(--danger-soft);
+  color: var(--danger);
+}
+
+.feedback-note {
+  font-size: 12px;
+  color: var(--text-muted);
+}
+
+.feedback-note.error {
+  color: var(--danger);
+}
+
+.feedback-reason {
+  margin-top: var(--space-2);
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2);
+}
+
+.feedback-reason-label {
+  font-size: 12.5px;
+  color: var(--text-muted);
+}
+
+.feedback-chips {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+
+.feedback-chip {
+  padding: 4px 10px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-pill);
+  background: var(--card-bg);
+  color: var(--text-main);
+  font-size: 12px;
+  cursor: pointer;
+}
+
+.feedback-chip.selected {
+  border-color: var(--accent);
+  background: var(--accent-soft);
+}
+
+.feedback-comment-row {
+  display: flex;
+  gap: var(--space-2);
+  align-items: center;
+}
+
+.feedback-comment {
+  flex: 1;
+  min-width: 0;
+  padding: 6px 10px;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background: var(--card-bg);
+  color: var(--text-main);
+  font-size: 12.5px;
+}
+
+/* ---- Conversation export menu ------------------------------------------ */
+.export-menu {
+  position: relative;
+}
+
+.export-menu-list {
+  position: absolute;
+  right: 0;
+  top: calc(100% + 4px);
+  z-index: 20;
+  min-width: 220px;
+  display: flex;
+  flex-direction: column;
+  padding: 4px;
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  background: var(--card-bg);
+  box-shadow: 0 8px 24px rgba(15, 23, 42, 0.12);
+}
+
+.export-menu-list a {
+  padding: 8px 10px;
+  border-radius: 6px;
+  color: var(--text-main);
+  font-size: 13px;
+  text-decoration: none;
+}
+
+.export-menu-list a:hover {
+  background: var(--accent-soft);
+}

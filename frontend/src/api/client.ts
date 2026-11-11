@@ -240,6 +240,19 @@ export interface SessionDetail {
 
 export const FilterRequest = {};
 
+export type FeedbackRating = "up" | "down" | "clear";
+
+export const FEEDBACK_REASONS = ["wrong_number", "wrong_period", "wrong_filter", "not_what_i_asked", "incomplete", "slow", "other"] as const;
+export type FeedbackReason = (typeof FEEDBACK_REASONS)[number];
+
+export interface FeedbackPayload {
+  trace_id: string;
+  rating: FeedbackRating;
+  session_id?: string;
+  reason?: FeedbackReason;
+  comment?: string;
+}
+
 
 const API_BASE = import.meta.env.VITE_API_BASE ?? "";
 
@@ -477,6 +490,23 @@ export const apiClient = {
 
   listDatasets: async (): Promise<{ datasets: DatasetSummary[] }> => {
     return getJSON("/api/datasets");
+  },
+
+  /** Thumbs up / down on an answer (rating "clear" withdraws the vote). Logged for the
+   * learning reports only -- it never changes the answer. */
+  sendFeedback: async (payload: FeedbackPayload): Promise<{ ok: boolean; trace_id: string; rating: FeedbackRating }> => {
+    return postJSON("/api/feedback", payload);
+  },
+
+  /** trace_id -> rating for one session (the thumbs state after a reload). */
+  getFeedback: async (session_id: string): Promise<Record<string, FeedbackRating>> => {
+    const data = (await getJSON(`/api/feedback?session_id=${encodeURIComponent(session_id)}`)) as { votes: Record<string, FeedbackRating> };
+    return data.votes ?? {};
+  },
+
+  /** Download link for the whole conversation (no query re-run, no LLM call). */
+  exportSessionUrl: (session_id: string, format: "md" | "html" = "html"): string => {
+    return `${API_BASE}/api/sessions/${encodeURIComponent(session_id)}/export?format=${format}`;
   },
 
   // Summary "Play" button: sends the summary text, gets back a playable
