@@ -100,6 +100,8 @@ wala wale wali waala liye baare mujhe hume humein hamein hamko mujhko yeh ye woh
 chahiye milega milenge abhitak kitno konsa konse kon kyu
 """.split())
 _HINGLISH_WEAK = {"ka", "ki", "ke", "ko", "se", "me", "par", "tak"}
+_ENGLISH_ME = {"give", "tell", "show", "let", "help", "send", "get", "remind", "email", "mail", "ask", "for", "to",
+               "with", "from", "about", "explain", "brief", "update", "list", "find", "draft", "write"}
 _ENGLISH_HINTS = {"the", "a", "an", "is", "are", "was", "were", "what", "how", "show", "give", "and", "of", "for",
                   "by", "which", "list", "tell", "explain", "compare", "many", "much", "total", "please", "why",
                   "who", "where", "when", "does", "do", "can", "my", "our", "from", "with", "about", "between"}
@@ -147,7 +149,9 @@ def detect(text: str) -> str | None:
         return None
     words = re.findall(r"[a-z]+", text.lower())
     strong = sum(w in _HINGLISH_STRONG for w in words)
-    weak = sum(w in _HINGLISH_WEAK for w in words)
+    # 'me' after an English verb/preposition is the English pronoun ('give me ... tell me'), not 'mein'
+    weak = sum(w in _HINGLISH_WEAK and not (w == "me" and i and words[i - 1] in _ENGLISH_ME)
+               for i, w in enumerate(words))
     if strong >= 1 or weak >= 2:
         return "hinglish"
     if len(words) >= 3 or _ENGLISH_HINTS & set(words):

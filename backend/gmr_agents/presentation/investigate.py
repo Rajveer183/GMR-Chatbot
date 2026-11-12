@@ -292,7 +292,7 @@ def assess(question: str, main, extras: list[tuple[str, object]] | None = None,
     lines = [f"INVESTIGATION (each explanation tested by code on {len(dims)} split(s) of the rows -- figures exact). "
              "Structure the answer: (1) verdict -- the explanation the data SUPPORTS, coverage first (if the change is a "
              "data-coverage gap, say so and do NOT name a place as the cause); (2) evidence -- the figures below; (3) what "
-             "was ruled out (NOT SUPPORTED); (4) confidence and why; (5) one concrete action aimed at the lead. This shows "
+             "was ruled out (NOT SUPPORTED); (4) how far it can be relied on, in plain words -- any caveat, never a score or a confidence label; (5) one concrete action aimed at the lead. This shows "
              "WHERE the change is, not the field-level cause: never invent one (staff, weather, supply) the data does not show."]
     for d in dims:
         p0, p1 = d["periods"]

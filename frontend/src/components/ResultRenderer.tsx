@@ -12,7 +12,6 @@ import { WarningBox } from "./WarningBox";
 import { SourcesNote } from "./SourcesNote";
 import { SuggestedQuestions } from "./SuggestedQuestions";
 import { FeedbackButtons } from "./FeedbackButtons";
-import { InvestigationPanel } from "./InvestigationPanel";
 import type { FeedbackRating } from "../api/client";
 import { resultToPayload } from "../utils/clipboard";
 import { resultToSpeech } from "../utils/speech";
@@ -130,7 +129,8 @@ export const ResultRenderer: React.FC<ResultRendererProps> = ({ result, onFollow
 
       <InsightList title={uiText(lang, "insights")}items={result.insights ?? []} />
 
-      <InvestigationPanel investigation={result.investigation} related={result.related_investigations} />
+      {/* Internal checks (hypotheses tested, confidence, earlier investigations) stay in the backend: the
+          answer itself carries the verdict. */}
 
       {followups.length && onFollowUp ? (
         <section

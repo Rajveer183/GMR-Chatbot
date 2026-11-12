@@ -17,7 +17,7 @@ from gmr_agents.checks import extreme_check, freshness, grounding, number_check,
 import logging
 from gmr_agents.agents.common import _ALL_TIME_LEAD_RE, _ANSWER_ROWS, _PAST_DATE_RE, _PERIOD_RE, _emit, _step, _today
 from gmr_agents.agents.followups import _followup_options, _options_text, _pick_followups
-from gmr_agents.presentation.analyst import _date_window, _partial_periods, _result_facts, _result_preview, _short_weeks
+from gmr_agents.presentation.analyst import _date_window, _month_to_date, _partial_periods, _stated_figures, _result_facts, _result_preview, _short_weeks
 from gmr_agents.presentation.blocks import _tidy_ts
 from gmr_agents.presentation import drivers as _drivers, investigate as _investigate, stats as _stats
 
@@ -135,6 +135,15 @@ def _write_answer(state: dict, triage: dict, plan: dict, result: dict, extras: l
     periods = _partial_periods(result.get("result"))[2]
     if periods:
         parts.append(periods)
+    mtd = _month_to_date(state["question"] + " || " + str(triage["question"]), result.get("result"))
+    if mtd:
+        parts.append(mtd)
+        _step(state, "month_to_date", time.perf_counter())
+        why = f"{why}\n{mtd}" if why else mtd  # its per-day figures are code-computed: allowed by number_check
+    stated = _stated_figures(state["question"], [result.get("result")] + [ex.get("result") for ex in extras or []])
+    if stated:
+        parts.append(stated)
+        _step(state, "premise_check", time.perf_counter())
     window = _date_window(plan, result.get("result"))
     if window:
         parts.append(window)
@@ -198,7 +207,7 @@ def _write_answer(state: dict, triage: dict, plan: dict, result: dict, extras: l
     # code repair cut it -- 'The Monte Carlo simulation of the next 30 days. For a single day ...'.
     given = " ".join([state["question"], triage["question"], triage.get("assumption") or "", notes or "", facts,
                       analysis or "", lined or "", why or "",
-                      *(str(t.get("summary") or "")[:160] for t in memory[-2:])])
+                      *(str(t.get("summary") or "")[:160] for t in memory[-2:] if _same_projects(t, triage, summary))])
     allowed = number_check.allowed_values(frames, given)
     bad = number_check.unsupported(" ".join([summary, *insights]), allowed)
     if bad:
@@ -293,6 +302,19 @@ def _write_answer(state: dict, triage: dict, plan: dict, result: dict, extras: l
         summary = cleaned
         if state.get("emit") is not None:
             _emit(state, "summary_replace", text=summary)
+    # A corrected premise must quote the code's totals. 12 Nov: 'Why did installations in Agra drop last month ...'
+    # -- the INVESTIGATION said 24,070 -> 34,757 (+44.4%), the answer quoted zone 'agra' (3,333 -> 3,899) as the
+    # project. When the summary lacks the real current total, the answer is rebuilt from the investigation by code.
+    try:
+        rebuilt = _premise_summary(state.get("investigation"), summary, writing)
+    except Exception:
+        log.warning("answer: premise rebuild failed", exc_info=True)
+        rebuilt = None
+    if rebuilt:
+        _step(state, "premise_rebuild", time.perf_counter())
+        summary, insights = rebuilt, [i for i in insights if not number_check.unsupported(i, own)][:1]
+        if state.get("emit") is not None:
+            _emit(state, "summary_replace", text=summary)
     # Sources of a data answer: built by code from what actually ran (never by the LLM).
     # The refresh time is the WFM gold snapshot's -- it says nothing about MDM tables.
     refreshed = answer_cache.current_version().split("|")[0] if state.get("agent") != "mdm" else ""
@@ -311,5 +333,43 @@ def _write_answer(state: dict, triage: dict, plan: dict, result: dict, extras: l
     state["answer_language"] = language.written_in(" ".join([summary, *insights]), writing)
     return {"summary": summary, "insights": insights,
             "followups": _pick_followups(d.get("followups"), options), "source": res.model}
+
+def _same_projects(turn: dict, triage: dict, summary: str = "") -> bool:
+    """An earlier answer's figures back this answer only when that turn was about the same project(s) (or this one
+    names none). 12 Nov: 'Sorry, I meant Kashi, not Triveni' -> 'Kashi installed 45,322 ... PRAYAGRAJ I led with
+    14,973' -- Triveni's zones from the previous answer, passed by number_check as conversation figures."""
+    from gmr_agents.checks.entity_check import _PROJECTS, _named
+    now = _named(str(triage.get("question") or ""), _PROJECTS)
+    then = _named(str(turn.get("resolved_question") or turn.get("question") or ""), _PROJECTS)
+    # A comparison that names the earlier project ('... vs 23,150 in Kashi') may still quote it.
+    said = {p for p in then - now if re.search(rf"\b{re.escape(p)}\b", summary, re.I)}  # the project's own name
+    return not now or not then or then <= now or bool(said)
+
+
+def _premise_summary(inv: dict | None, summary: str, writing: str | None) -> str | None:
+    """The summary rewritten from the investigation's own figures when it corrects a premise ('why did X drop'
+    when X rose) without quoting the real totals; None when the summary already quotes them."""
+    if not inv or not inv.get("premise") or not inv.get("dimensions") or (writing or "en") != "en":
+        return None
+    d = inv["dimensions"][0]
+    prev, curr, chg = d.get("total_prev"), d.get("total_curr"), d.get("change")
+    if prev is None or curr is None or not chg:
+        return None
+    digits = re.sub(r"[^\d]", " ", summary)
+    if str(int(round(curr))) in digits.replace(" ", "") or f"{curr:,.0f}" in summary:
+        return None
+    pct = f", {d['pct']:+.1f}%" if d.get("pct") is not None else ""
+    out = [f"It did not {'fall' if chg > 0 else 'rise'} -- it {'rose' if chg > 0 else 'fell'} from {prev:,.0f} to "
+           f"{curr:,.0f} ({chg:+,.0f}{pct})."]
+    tops = [t for t in d.get("top") or [] if t.get("chg")][:3]
+    if tops:
+        out.append(f"By {d['by']}, the largest moves were " + ", ".join(
+            f"{t['name']} ({t['prev']:,.0f} -> {t['curr']:,.0f}, {t['chg']:+,.0f})" for t in tops) + ".")
+    lead = inv.get("lead")
+    if lead and lead.get("by") != d["by"]:
+        out.append(f"By {lead['by']}, {lead['name']} stands out ({lead['prev']:,.0f} -> {lead['curr']:,.0f}, "
+                   f"{lead['share']:.0f}% of the change).")
+    return " ".join(out)
+
 
 _ANSWER_SYSTEM += "\n" + injection.UNTRUSTED_RULE

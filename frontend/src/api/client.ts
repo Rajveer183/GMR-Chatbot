@@ -375,11 +375,16 @@ const API_BASE = import.meta.env.VITE_API_BASE ?? "";
  * normal console stays readable, but the full request/response body is one
  * click away when debugging -- this is the "each step" logging on the
  * frontend side, mirroring the backend's per-request trace. */
+// Request/SQL/trace logging is a developer aid: production builds never print it.
+const DEBUG_LOG = import.meta.env.DEV;
+
 function logRequest(method: string, endpoint: string, body?: unknown) {
+  if (!DEBUG_LOG) return;
   console.log(`%c[api] -> ${method} ${endpoint}`, "color:#7a7a7a", body ?? "");
 }
 
 function logResponse(method: string, endpoint: string, ms: number, ok: boolean, data: unknown) {
+  if (!DEBUG_LOG) return;
   const style = ok ? "color:#2e7d32" : "color:#c62828";
   console.groupCollapsed(`%c[api] <- ${method} ${endpoint} (${ms.toFixed(0)}ms)`, style);
   console.log(data);
@@ -391,6 +396,7 @@ function logResponse(method: string, endpoint: string, ms: number, ok: boolean, 
  * timing. Printed as a table so the whole journey from question to response
  * is visible in the browser console without touching the server logs. */
 function logQueryTrace(question: string, data: AIQueryResponse) {
+  if (!DEBUG_LOG) return;
   const trace = data.debug?.trace;
   console.groupCollapsed(
     `%c[query] "${question}" -> ${data.debug?.answer_model ?? data.debug?.planner_used ?? "?"}${

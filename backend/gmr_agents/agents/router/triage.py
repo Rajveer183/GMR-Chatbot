@@ -649,6 +649,12 @@ def _route(state: dict, prior_turns: list[dict] | None) -> dict | None:
     examples = business_rules.examples()
     sql = str(examples[int(example_id)].get("sql") or "") if example_id.isdigit() and int(example_id) < len(examples) else ""
     domain = "mdm" if ("hes_gold." in sql or "hes_silver." in sql) else "wfm"
+    extra_sql = " ".join(str(e.get("sql") or "") for e in examples[int(example_id)].get("extra") or [] if isinstance(e, dict)) \
+        if example_id.isdigit() and int(example_id) < len(examples) else ""
+    if extra_sql and (("hes_gold." in extra_sql or "hes_silver." in extra_sql) != (domain == "mdm")):
+        # The example spans both systems (WFM main + HES extra): one domain's catalog cannot run it. 12 Nov: 'Compare
+        # installed meters in WFM with meters present in MDM' -> 'Unknown table(s): dim_meter' x3. Full path = cross-domain.
+        return None
     if domain == "mdm" and not _same_card(question, examples[int(example_id)].get("q")):
         return None
     wordings = examples[int(example_id)].get("q")
@@ -848,6 +854,11 @@ _VAGUE_CUES = (
      "installations, SAT, stock or O&M complaints, compared with last month"),
     (re.compile(r"\b(?:current |overall )?status\b|\bkya haal\b|\bupdate\b", re.I),
      "installation progress, SAT status, O&M complaint status or stock -- for all projects or one of Agra, Kashi, Triveni"),
+    # 12 Nov: 'Show performance for Varanasi' had no measure -> 3 plan attempts, 46 s, 31k tokens, then a refusal.
+    (re.compile(r"\bperform(?:ance|ing)?\b|\bhow (?:is|are|has|have) .{1,40} (?:doing|performing|going)\b|"
+                r"\bkaisa chal\w*\b|\bkaise chal\w*\b", re.I),
+     "installation progress, SAT completion, technician productivity, open O&M complaints or Low PF meters -- and "
+     "for which project or zone"),
 )
 
 _PARTICULAR_RE = re.compile(r"\b(?:a|one|some|any|certain)\s+(?:particular|specific|certain|given|single)\s+"

@@ -25,7 +25,11 @@ from gmr_agents.checks.entity_check import _PROJECTS, _words
 _RESET_RE = re.compile(
     r"\b(overall|all (projects|zones|discoms|circles|divisions|places)|whole (programme|program|project)|"
     r"programme|program[- ]wide|across (all|projects|the program)|everywhere|total (programme|program)|"
-    r"(project|discom)[- ]?wise|by (project|discom)|each (project|discom)|per (project|discom)|sab|poore)\b",
+    r"(project|discom)[- ]?wise|by (project|discom)|each (project|discom)|per (project|discom)|sab|poore|"
+    # An explicit fresh start drops the earlier turns' places (12 Nov: 'New topic: what is the total stock available
+    # in all warehouses?' after Kashi turns was answered for Kashi's warehouses only).
+    r"new (topic|question|query)|different (topic|question)|unrelated|change of topic|start over|start fresh|"
+    r"forget (that|this|the previous|the last|it)|naya (sawal|sawaal|topic))\b",
     re.IGNORECASE)
 _LEVEL_WORD = {"zone": "zone", "circle": "circle", "division": "division", "discom": "discom", "project": ""}
 _ROMAN = {"i", "ii", "iii", "iv", "v"}

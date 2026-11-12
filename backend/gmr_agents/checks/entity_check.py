@@ -61,8 +61,13 @@ def _words(text: str) -> str:
     return " " + re.sub(r"[^a-z0-9]+", " ", str(text).lower()) + " "
 
 
+# A correction names the value it takes BACK: 'Sorry, I meant Kashi, not Triveni' (12 Nov: the SQL was sent back
+# for never using Triveni and then filtered IN ('kashi', 'triveni')).
+_NEGATED_RE = re.compile(r"\b(?:not|instead of|rather than|na ki)\s+([a-z0-9]+)|\b([a-z0-9]+)\s+nahi\b", re.I)
+
+
 def _named(text: str, table: dict[str, list[str]]) -> set[str]:
-    w = _words(text)
+    w = _words(_NEGATED_RE.sub(" ", str(text or "")))
     return {key for key, aliases in table.items() if any(f" {a} " in w for a in aliases)}
 
 
@@ -1468,10 +1473,19 @@ def check(question: str, sql_texts: list[str], columns: set[str] | None = None, 
     if re.search(r"\blast month\b|\bprevious month\b|\bpichhle mahine\b", question, re.I):
         import datetime as _dt
         this_month = _dt.date.today().replace(day=1).isoformat()
+        prev_month = (_dt.date.today().replace(day=1) - _dt.timedelta(days=1)).strftime("%Y-%m")
+        pinned = re.findall(r"'(\d{4}-\d{2})-\d{2}'", low)
+        hes = any(re.search(rf"\bhes_gold\.{t}\b", low) for t in _TECHNICAL_TABLES) or "hes_silver." in low
         if f"'{this_month}'" in low and "interval '1 month'" not in low:
             problems.append(f"'last month' is the previous calendar month -- {this_month} is the current month's first "
                             "day; use period_start >= (date_trunc('month', CURRENT_DATE) - INTERVAL '1 month')::date "
                             "AND period_start < date_trunc('month', CURRENT_DATE)::date")
+        elif pinned and prev_month not in pinned and "interval '1 month'" not in low and not hes:
+            # 12 Nov: 'If Triveni had installed at Kashi's average daily rate last month ...' pinned September
+            # ('2026-09-01'..'2026-09-30') in November -- the answer then called September 'last month'.
+            problems.append(f"'last month' is {prev_month} (the previous calendar month), but the SQL pins other months "
+                            f"({', '.join(sorted(set(pinned)))}); use period_start >= (date_trunc('month', CURRENT_DATE) "
+                            "- INTERVAL '1 month')::date AND period_start < date_trunc('month', CURRENT_DATE)::date")
 
     # Leak: a specific calendar date in the SQL when the question names no period at all
     # (no year / month / date / 'yesterday' / 'last N days' ...) -- 'No date = all time'.

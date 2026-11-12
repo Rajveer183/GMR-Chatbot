@@ -593,3 +593,10 @@ class RoutingUnchangedTests(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+def test_english_me_pronoun_is_not_hinglish_mein():
+    from gmr_agents.resolvers.language import detect
+    assert detect("Give me installed meters for Kashi and Triveni, and tell me which project is behind") == "en"
+    assert detect("Kashi me kitne meter lage") == "hinglish"
+    assert detect("Kashi me SAT ka status") == "hinglish"

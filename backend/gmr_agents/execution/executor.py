@@ -26,6 +26,7 @@ from gmr_agents.execution import hierarchy
 from gmr_agents.execution.dialect import DIALECT, guard_division, has_aggregate
 
 log = logging.getLogger(__name__)
+_ROW_CAP = int(__import__("os").environ.get("AGENT_ROW_CAP", "10000"))  # rows a no-LIMIT agent query may return
 
 
 def run_sql(sql: str, database: str | None, engine: str) -> pd.DataFrame:
@@ -183,6 +184,17 @@ def execute_sql(plan: dict, catalog: AthenaCatalog) -> dict[str, Any]:
     dialect = "postgres" if engine == "postgres" else DIALECT
     headline_alias = plan.get("headline_alias")
     warnings: list[str] = []
+    # Row cap: a query with no LIMIT of its own gets one. 12 Nov: 'Show me every row of the meter master table' ran
+    # SELECT ... FROM hes_gold.dim_meter (4.38M rows) and held the request for 400 s fetching them -- the Athena time
+    # limit covers execution, not the fetch. The LIMIT branch below then counts the full scope for the answer.
+    try:
+        top = sqlglot.parse_one(sql, dialect=dialect)
+        if isinstance(top, (exp.Select, exp.Union)) and top.args.get("limit") is None:
+            body = sql.rstrip().rstrip(";").rstrip()
+            sql = f"{body}\nLIMIT {_ROW_CAP}"
+            plan["sql"] = sql
+    except Exception:
+        pass  # unparsable here = the database reports it, as before
 
     try:
         # Local materialised results (outputs/sql_results.json): the same SQL since the last data refresh

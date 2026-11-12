@@ -24,6 +24,10 @@ _LEAKS = [
     (re.compile(r"\b(?:the\s+)?RESULT(?:\s+\d+)?\s+(?:contains|has|holds|shows|lists)\s+\d[\d,]*\s+rows?\b[^;.]*[;.]\s*"), ""),
     (re.compile(r"\b(?:in|from|within)\s+(?:the\s+)?(?:RESULT|FACTS|DRIVERS|INVESTIGATION|STATS)(?:\s+\d+)?\b"), "in the data"),
     (re.compile(r"\b(?:the\s+)?(?:RESULT|FACTS)(?:\s+\d+)?\s+(?:shows?|indicates?|lists?|contains?|has)\b"), "the data shows"),
+    # 12 Nov: '... with 115,910 tickets, excluding the ROLLUP Total row.' -- query mechanics, not business talk
+    (re.compile(r"\s*[,;(]?\s*\b(?:excluding|ignoring|not counting|without|except)\s+(?:the\s+)?(?:ROLLUP\s+)?"
+                r"(?:grand[- ])?total\s+rows?\b\)?", re.I), ""),
+    (re.compile(r"\b(?:the\s+)?ROLLUP\s+(?:grand[- ])?total(\s+rows?)?\b", re.I), "the overall total"),
     (re.compile(r"\bRESULT(?:\s+\d+)?\b"), "the data"),
     (re.compile(r"\bFACTS\b"), "the figures"),
 ]

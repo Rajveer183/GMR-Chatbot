@@ -208,11 +208,15 @@ wfm_postgres_tables:
   # src/app/application/kpi_catalog): revenue_receivables.py (with
   # geography_nodes for project/DISCOM names), and mi_vs_sat.py /
   # non_sat_ageing.py (sat_eligibility_config's per-project SAT cutoff).
-  # Everything else non-gold (rbac_*, kpi_*, milestone_*, sku_catalog,
+  # Everything else non-gold (rbac_*, kpi_*, milestone_history, sku_catalog,
   # *_history, *_uploads, alembic) is still excluded -- not KPI inputs.
   - revenue_receivables
   - geography_nodes
   - sat_eligibility_config
+  # SAT batch dates (12 Nov 2026): the Postgres source of Athena sat_milestones. Without it
+  # "SAT completions per month" had no single-engine path: the planner mixed engines and gave up,
+  # or counted gold_mi_sat_invoice_day_agg by its INSTALLATION date and called that SAT.
+  - milestone_config
   # Newer O&M gold tables (added 2026-10-03 on request; not yet read by the
   # dashboard KPI code in the local WFM repo as of 2026-09-24).
   - gold_om_closed_tickets_day_agg
@@ -1008,6 +1012,13 @@ table_descriptions:
   sat_eligibility_config: >-
     Per-project SAT eligibility cutoff date (eligibility_cutoff_date) -- meters installed after it are not yet
     eligible for SAT; used by the MI vs SAT and Non-SAT ageing KPIs.
+  milestone_config: >-
+    Postgres copy of the SAT batch milestones (same rows as Athena gmr_wfm_silver.sat_milestones): one row per
+    project + sat_number ('SAT-n') with sat_date, lumpsum/pmpm invoice and collection dates. The only Postgres
+    source of WHEN a SAT happened: SAT completions in a month/period = the batch sizes (public.gold_mi_sat_invoice_snapshot
+    SUM(meter_count) per LOWER(project), sat_stage) of batches whose sat_date falls in it, joined on LOWER(project) AND
+    sat_number = 'SAT-' || sat_stage. Batches with no sat_date are undated (say so). Use this table with Postgres
+    tables; with Athena tables (sat_meter_mappings, unified_installations) use sat_milestones.
   gold_om_closed_tickets_day_agg: >-
     O&M tickets closed per day (closed_date) by place, feeder, dtr, category (CONSUMER / DT / FEEDER), meter_type,
     complaint_type -- the Ticket Closed Analysis card, every category; SUM(closed_tickets). Place values lower-case.

@@ -49,6 +49,105 @@ def _partial_periods(df: pd.DataFrame | None) -> tuple[str | None, set[str], str
     return None, set(), ""
 
 
+_THIS_MONTH_Q = re.compile(r"\b(this|current|curr?ent) month\b|month[- ]to[- ]date|\bmtd\b|\b(?:is|iss) mahine\b", re.I)
+_LAST_MONTH_Q = re.compile(r"\b(last|previous|prev|prior|pichle|pichhle) month\b|\bmonth before\b", re.I)
+_THIS_COL = re.compile(r"(?:^|_)(this|current|curr|cur|mtd)(?:_|$)", re.I)
+_LAST_COL = re.compile(r"(?:^|_)(last|previous|prev|prior|lm)(?:_|$)", re.I)
+
+
+def _month_to_date(question: str, df: pd.DataFrame | None) -> str:
+    """'This month vs last month' where RESULT has no period column (one wide row: installed_this_month,
+    installed_last_month): the current month holds only the days up to yesterday, the last one is complete.
+    12 Nov 2026: 'Compare installations this month vs last month' -> '24,211 vs 107,317, a decrease of 77%
+    ... follows the month-end push pattern' (11 days vs 31). Per-day rates computed here make it like-for-like."""
+    if not isinstance(df, pd.DataFrame) or df.empty or len(df) > 15:
+        return ""
+    if not (_THIS_MONTH_Q.search(question or "") and _LAST_MONTH_Q.search(question or "")):
+        return ""
+    if _partial_periods(df)[0]:
+        return ""  # month-wise rows: the PERIODS line already flags the current month
+    now = datetime.now(_IST)
+    days_now = now.day - 1  # complete days: data runs to yesterday
+    if days_now < 1:
+        return ""
+    prev_end = now.replace(day=1) - pd.Timedelta(days=1)
+    days_prev = prev_end.day
+    head = (f"MONTH TO DATE (checked by code): this month ({now:%b %Y}) holds only {days_now} complete day(s) "
+            f"(1-{days_now} {now:%b}); last month ({prev_end:%b %Y}) is complete ({days_prev} days). The raw totals are "
+            "NOT like-for-like: never call their difference a drop / rise, and never explain it. Say the month is "
+            "still in progress and compare per day")
+    nums = [c for c in df.columns if pd.api.types.is_numeric_dtype(df[c])]
+    pairs = []
+    for c in nums:
+        if not _THIS_COL.search(c):
+            continue
+        base = _THIS_COL.sub("_", c).strip("_")
+        match = next((o for o in nums if o != c and _LAST_COL.search(o) and _LAST_COL.sub("_", o).strip("_") == base), None)
+        if match:
+            name = re.sub(r"(?:^|_)month(?:_|$)", "_", base).strip("_").replace("_", " ")
+            pairs.append((name or "value", c, match))
+    if not pairs:
+        return head + f" (this month's figure / {days_now}, last month's / {days_prev})."
+    label = next((c for c in df.columns if c not in nums), None)
+    lines = []
+    for _, row in df.head(10).iterrows():
+        tag = f"{row[label]}: " if label is not None else ""
+        for base, c_now, c_prev in pairs:
+            a, b = row[c_now], row[c_prev]
+            if pd.isna(a) or pd.isna(b):
+                continue
+            ra, rb = float(a) / days_now, float(b) / days_prev
+            chg = f" ({(ra - rb) / rb * 100:+.1f}% per day)" if rb else ""
+            lines.append(f"- {tag}{base}: {ra:,.1f} per day this month vs {rb:,.1f} per day last month{chg}")
+    return head + ":\n" + "\n".join(lines) if lines else head + "."
+
+
+_SCALE = {"million": 1e6, "mn": 1e6, "m": 1e6, "lakh": 1e5, "lakhs": 1e5, "lac": 1e5, "crore": 1e7, "cr": 1e7,
+          "thousand": 1e3, "k": 1e3, "billion": 1e9}
+_STATED_RE = re.compile(r"(?<![\w.,-])(\d{1,3}(?:,\d{2,3})+|\d+(?:\.\d+)?)\s*(million|mn|lakhs?|lac|crore|cr|thousand|billion|k|m)?(?![\w%])",
+                        re.I)
+
+
+_THRESHOLD_RE = re.compile(r"(?:more|less|fewer|greater|higher|lower) than\s*$|\b(?:over|above|below|under|exceeding|"
+                           r"exceeds?|cross|crossing|at least|at most|upto|up to|top|bottom|first|last|add|adding|hire|"
+                           r"if|per|every|each|within|beyond|reach|target|to|of|ticket|consumer|number|no\.?|id)\s*$"
+                           r"|[<>=]\s*$", re.I)
+
+
+def _stated_figures(question: str, frames: list) -> str:
+    """A large figure the user states as a fact ('Kashi has already installed 5 million meters, so how many are
+    left?') that no value in the results comes near: the answer must correct it, not build on it. 12 Nov: the
+    answer skipped the 5 million (the card: 1,384,855). Rupee amounts and years are left out."""
+    q = str(question or "")
+    stated = []
+    for m in _STATED_RE.finditer(q):
+        before = q[max(0, m.start() - 4):m.start()].lower()
+        if "rs" in before or "₹" in before or re.match(r"(19|20)\d\d$", m.group(1)):
+            continue
+        if _THRESHOLD_RE.search(q[max(0, m.start() - 24):m.start()]) or (not m.group(2) and len(m.group(1)) >= 7
+                                                                         and "," not in m.group(1)):
+            continue  # 'more than 1,000', 'cross 45 lakh', 'ticket 2034060' -- a filter / target / id, not a claim
+        val = float(m.group(1).replace(",", "")) * _SCALE.get((m.group(2) or "").lower(), 1)
+        if val >= 1000:
+            stated.append((m.group(0).strip(), val))
+    if not stated:
+        return ""
+    vals = []
+    for f in frames:
+        if isinstance(f, pd.DataFrame) and not f.empty and len(f) <= 200:
+            for c in f.columns:
+                v = pd.to_numeric(f[c], errors="coerce").dropna()
+                vals += [abs(float(x)) for x in v]
+    if not vals:
+        return ""
+    off = [(t, v) for t, v in stated if not any(abs(x - v) <= 0.15 * v for x in vals)]
+    if not off:
+        return ""
+    return ("PREMISE CHECK (checked by code): the question states " + ", ".join(t for t, _ in off) + " as a fact, but no "
+            "figure in RESULT is close to it. If RESULT measures the same thing, open the answer by saying the stated "
+            "figure does not match the data and give the real one -- never build on the stated figure.")
+
+
 _WEEK_LABEL_RE = re.compile(r"^(\d{1,2})\s+([A-Za-z]{3})[a-z]*\s*[-–]\s*(\d{1,2})\s+([A-Za-z]{3})[a-z]*$")
 
 

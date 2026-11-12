@@ -16,7 +16,9 @@ import re
 
 import pandas as pd
 
-_MAX = r"highest|peak(?:ed|s)?|most|maximum|max|largest|biggest|top"
+# 'the most recent 30 days' / 'at most' / 'most likely' / 'most of' are not a claim about the maximum (12 Nov: the
+# scenario answer's 'most recent 30 days' was read as 'the most = 30' and the sentence was cut).
+_MAX = r"highest|peak(?:ed|s)?|(?<!\bat )most(?!\s+(?:recent|recently|likely|of)\b)|maximum|max|largest|biggest|top"
 _MIN = r"lowest|least|fewest|minimum|min|smallest|bottom"
 # superlative, then up to 80 chars without a sentence end or another superlative, then the number
 _CLAIM = re.compile(rf"\b(?P<word>{_MAX}|{_MIN})\b(?P<gap>(?:(?!\b(?:{_MAX}|{_MIN})\b)[^.;!?\d]){{0,80}}?)"

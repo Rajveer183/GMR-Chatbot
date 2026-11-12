@@ -5735,3 +5735,107 @@ examples:
              (SELECT ROUND(SUM(defect_rate_numerator_count) * 100.0 / NULLIF((SELECT per_day FROM pace) * 30, 0), 2)
                 FROM public.gold_meter_defect_event_day_agg WHERE period_start BETWEEN CURRENT_DATE - 30 AND CURRENT_DATE - 1),
              'per 100 meters installed in the same 30 days'
+
+  - q: ["Month-wise installations vs SAT completions for the last 6 months for each project", "SAT completions per month", "how many meters were SAT done last month", "SAT completion trend project-wise"]
+    note: "SAT is accepted in BATCHES: a meter is SAT-completed on its batch's sat_date (public.milestone_config, joined on LOWER(project) AND sat_number = 'SAT-' || sat_stage; batch size = public.gold_mi_sat_invoice_snapshot meter_count). Never date SAT by gold_mi_sat_invoice_day_agg / gold_mi_installation_*_agg periods -- those are INSTALLATION dates. Months with no batch are 0 (say SAT is batch-wise, so months without a batch are normal); the extra query gives SAT-done meters whose batch has no date yet -- say them. Installed = the installation card (no replacements); SAT batches include replacements. Last N months = this month so far + N-1 full months."
+    sql: |
+      WITH months AS (
+        SELECT generate_series(date_trunc('month', CURRENT_DATE) - INTERVAL '5 months',
+                               date_trunc('month', CURRENT_DATE), INTERVAL '1 month')::date AS month
+      ), inst AS (
+        SELECT period_start AS month, LOWER(project) AS project, SUM(meter_count) AS installed
+        FROM public.gold_mi_installation_month_agg
+        WHERE has_meter_serial AND progress_category IS NOT NULL AND NOT is_replacement
+          AND period_start >= (date_trunc('month', CURRENT_DATE) - INTERVAL '5 months')::date
+        GROUP BY 1, 2
+      ), sat AS (
+        SELECT date_trunc('month', m.sat_date)::date AS month, LOWER(s.project) AS project,
+               SUM(s.meter_count) AS sat_completed, STRING_AGG(DISTINCT m.sat_number, ', ') AS sat_batches
+        FROM public.gold_mi_sat_invoice_snapshot s
+        JOIN public.milestone_config m ON LOWER(m.project) = LOWER(s.project) AND m.sat_number = 'SAT-' || s.sat_stage
+        WHERE s.sat_stage IS NOT NULL AND m.sat_date >= (date_trunc('month', CURRENT_DATE) - INTERVAL '5 months')::date
+        GROUP BY 1, 2
+      ), projects AS (SELECT project FROM inst UNION SELECT project FROM sat)
+      SELECT mo.month, UPPER(p.project) AS project,
+             COALESCE(i.installed, 0) AS meters_installed,
+             COALESCE(s.sat_completed, 0) AS meters_sat_completed,
+             COALESCE(s.sat_batches, 'no SAT batch') AS sat_batches
+      FROM months mo CROSS JOIN projects p
+      LEFT JOIN inst i ON i.month = mo.month AND i.project = p.project
+      LEFT JOIN sat s ON s.month = mo.month AND s.project = p.project
+      ORDER BY mo.month, p.project
+    extra:
+      - purpose: "SAT-done meters whose batch has no SAT date yet (per project)"
+        sql: |
+          SELECT UPPER(s.project) AS project, STRING_AGG(DISTINCT 'SAT-' || s.sat_stage, ', ') AS undated_batches,
+                 SUM(s.meter_count) AS sat_meters_undated
+          FROM public.gold_mi_sat_invoice_snapshot s
+          LEFT JOIN public.milestone_config m ON LOWER(m.project) = LOWER(s.project) AND m.sat_number = 'SAT-' || s.sat_stage
+          WHERE s.sat_stage IS NOT NULL AND m.sat_date IS NULL
+          GROUP BY 1 ORDER BY 1
+
+  - q: ["Does the sum of zone-wise installations match each project's total? Show any mismatch", "reconcile zone totals with project totals", "do zone installs add up to the project total", "check installation totals across tables"]
+    note: "Reconciliation = the same measure from independent cuts: project total vs the sum of its zone rows (rows with no zone are the usual gap -- show them) vs the day table's total. Compare per PROJECT, never a zone row against the whole project. All three equal = 'match': say the totals reconcile and quote each project's figure; otherwise name the project and the gap."
+    sql: |
+      WITH m AS (
+        SELECT LOWER(project) AS project, SUM(meter_count) AS project_total,
+               SUM(meter_count) FILTER (WHERE NULLIF(TRIM(zone), '') IS NOT NULL) AS sum_of_zones,
+               SUM(meter_count) FILTER (WHERE NULLIF(TRIM(zone), '') IS NULL) AS no_zone
+        FROM public.gold_mi_installation_month_agg
+        WHERE has_meter_serial AND progress_category IS NOT NULL AND NOT is_replacement
+        GROUP BY 1
+      ), d AS (
+        SELECT LOWER(project) AS project, SUM(meter_count) AS day_table_total
+        FROM public.gold_mi_installation_day_agg
+        WHERE has_meter_serial AND progress_category IS NOT NULL AND NOT is_replacement
+        GROUP BY 1
+      )
+      SELECT UPPER(COALESCE(m.project, d.project)) AS project, m.project_total, m.sum_of_zones,
+             COALESCE(m.no_zone, 0) AS meters_without_zone,
+             COALESCE(m.project_total, 0) - COALESCE(m.sum_of_zones, 0) AS zone_gap,
+             d.day_table_total, COALESCE(d.day_table_total, 0) - COALESCE(m.project_total, 0) AS day_vs_month_gap,
+             CASE WHEN m.project_total = m.sum_of_zones AND m.project_total = d.day_table_total THEN 'match' ELSE 'mismatch' END AS status
+      FROM m FULL OUTER JOIN d ON d.project = m.project
+      ORDER BY 1
+
+  - q: ["Compare installed meters in WFM with meters present in MDM for each project", "WFM vs HES meter count by project", "are all installed meters present in HES", "installed meters vs HES meters project wise"]
+    note: "Two systems = two queries, lined up by project in code: main = WFM installation card per project (Postgres, replacements excluded); extra = HES meter master per project (Athena hes_gold.dim_meter, cluster = project; the current meter population). Quote both counts and the gap per project. HES 'NOT PLACED' meters have no project (inventory only) -- list them separately, never fold them into a project."
+    sql: |
+      SELECT CASE WHEN GROUPING(project) = 1 THEN 'Total' ELSE UPPER(project) END AS project,
+             SUM(meter_count) AS wfm_installed
+      FROM public.gold_mi_installation_month_agg
+      WHERE has_meter_serial AND progress_category IS NOT NULL AND NOT is_replacement
+      GROUP BY ROLLUP (project)
+      ORDER BY GROUPING(project) DESC, 1
+    extra:
+      - purpose: "HES (MDM) meter master count per project"
+        sql: |
+          SELECT CASE WHEN GROUPING(cluster) = 1 THEN 'Total' WHEN cluster IS NULL THEN 'NOT PLACED (no project)'
+                      ELSE UPPER(cluster) END AS project,
+                 COUNT(*) AS hes_meters
+          FROM hes_gold.dim_meter
+          GROUP BY ROLLUP (cluster)
+          ORDER BY GROUPING(cluster) DESC, 1
+
+  - q: ["Why did SAT completions fall last month compared with the month before?", "SAT done last month vs previous month", "why did SAT drop last month", "SAT completions this month vs last month"]
+    note: "SAT is accepted in BATCHES on the batch's sat_date (public.milestone_config): compare the two CALENDAR months asked (0 when no batch fell in them) -- never the last two months that had batches. When both are 0 or one is 0, the reason is the batch calendar: say SAT is batch-wise, name the latest dated batch per project (latest_batch, latest_batch_date, meters) and that the next batch has not been dated yet. Undated SAT-done batches (no sat_date) are not counted in any month."
+    sql: |
+      WITH b AS (
+        SELECT LOWER(s.project) AS project, m.sat_number, m.sat_date, SUM(s.meter_count) AS meters
+        FROM public.gold_mi_sat_invoice_snapshot s
+        JOIN public.milestone_config m ON LOWER(m.project) = LOWER(s.project) AND m.sat_number = 'SAT-' || s.sat_stage
+        WHERE s.sat_stage IS NOT NULL AND m.sat_date IS NOT NULL
+        GROUP BY 1, 2, 3
+      ), latest AS (
+        SELECT DISTINCT ON (project) project, sat_number AS latest_batch, sat_date AS latest_batch_date, meters AS latest_batch_meters
+        FROM b ORDER BY project, sat_date DESC
+      )
+      SELECT UPPER(l.project) AS project,
+             COALESCE(SUM(b.meters) FILTER (WHERE b.sat_date >= (date_trunc('month', CURRENT_DATE) - INTERVAL '2 months')::date
+                                              AND b.sat_date < (date_trunc('month', CURRENT_DATE) - INTERVAL '1 month')::date), 0) AS sat_month_before,
+             COALESCE(SUM(b.meters) FILTER (WHERE b.sat_date >= (date_trunc('month', CURRENT_DATE) - INTERVAL '1 month')::date
+                                              AND b.sat_date < date_trunc('month', CURRENT_DATE)::date), 0) AS sat_last_month,
+             l.latest_batch, l.latest_batch_date, l.latest_batch_meters
+      FROM latest l LEFT JOIN b ON b.project = l.project
+      GROUP BY l.project, l.latest_batch, l.latest_batch_date, l.latest_batch_meters
+      ORDER BY 1

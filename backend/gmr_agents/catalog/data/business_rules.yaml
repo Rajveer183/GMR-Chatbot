@@ -156,8 +156,8 @@ topics:
     domain: wfm
     title: "MI vs SAT progress and invoice funnel"
     description: "Total MI, eligible MI, Total SAT, SAT %, SAT stages (SAT-1..13), meters pending SAT, lumpsum/PMPM invoiced meters and %, MI vs SAT vs invoice funnel, which project lags on SAT."
-    keywords: [sat, sat done, total sat, sat progress, sat percent, sat %, eligible, eligible mi, total mi, sat stage, sat 1, sat 13, stage wise, lumpsum invoiced, pmpm invoiced, funnel, certified, lagging, sat pending, not invoiced, baaki]
-    tables: [gold_mi_sat_invoice_snapshot, gold_mi_installation_day_agg, sat_eligibility_config]
+    keywords: [sat, sat done, total sat, sat progress, sat percent, sat %, eligible, eligible mi, total mi, sat stage, sat 1, sat 13, stage wise, lumpsum invoiced, pmpm invoiced, funnel, certified, lagging, sat pending, not invoiced, baaki, sat completions, sat completed per month, sat trend]
+    tables: [gold_mi_sat_invoice_snapshot, gold_mi_installation_day_agg, sat_eligibility_config, milestone_config]
     answer_notes:
       - "SAT batches are accepted per project in sequence (SAT-1 oldest). The newest batches are smaller/partial; SAT-12 and SAT-13 have no batch dates yet."
       - "Installed-not-SAT (sat_stage IS NULL) = eligible pending (non-SAT) + installed after the cutoff (not yet due). Never call the whole figure eligible."
@@ -176,6 +176,7 @@ topics:
       - "'SAT progress' = Total MI, Total SAT, % SAT vs MI and pending. Lagging/behind = lowest % SAT vs MI, not fewest SAT."
       - "MI vs SAT vs Invoice funnel = installed, SAT done, lumpsum invoiced, PMPM invoiced, plus % lumpsum of SAT and % PMPM of SAT. Lumpsum and PMPM counts are equal today (every batch carries both) -- that is the data."
       - "Stage-wise: WHERE sat_stage IS NOT NULL GROUP BY sat_stage, label 'SAT-' || sat_stage. sat_stage is a tier: never SUM it."
+      - "SAT completions over time (per month / day, last month, trend, 'SAT fell'): SAT happens per BATCH on its sat_date (public.milestone_config; LOWER(project) AND sat_number = 'SAT-' || sat_stage); meters = the batch's snapshot SUM(meter_count). Never use gold_mi_sat_invoice_day_agg / gold_mi_installation_*_agg period dates for SAT -- they are installation dates. Months without a batch = 0; batches without sat_date are undated. 'Last month vs the month before' = those two CALENDAR months (0 each when no batch fell in them: say SAT is batch-wise and name the latest batch and its date) -- never swap in the last two months that had batches."
       - "OEM-wise: the snapshot has no oem; use gold_mi_installation_day_agg (no replacement filter) with inventory_category as category, inventory_meter_type, sat_stage, meter_count - Total MI / Total SAT only."
     example:
       question: "SAT progress project-wise"
@@ -198,12 +199,12 @@ topics:
     title: "SAT target, gap and ETA"
     description: "How many more SAT meters are needed to reach X% of eligible (or total) MI, room left, SAT pace per month and when the target will be reached."
     keywords: [sat target, reach, 95%, 98%, how many more sat, when will we reach, by when, kab tak, sat pace, eta, target percent, achieve, gap to target]
-    tables: [gold_mi_sat_invoice_snapshot, sat_milestones]
+    tables: [gold_mi_sat_invoice_snapshot, milestone_config]
     rules:
       - "Base = Eligible MI (Total MI when the question says 'of MI/installed') from public.gold_mi_sat_invoice_snapshot; % now = Total SAT / base * 100."
       - "Needed = GREATEST(CEIL(target / 100.0 * base) - Total SAT, 0). Strict view: CEIL(target/100 * eligible) - SAT(eligible)."
       - "Room = Eligible MI - SAT(eligible) (Total MI - Total SAT on the MI base); needed > room means unreachable until the cutoff moves."
-      - "Pace (separate Athena query): gmr_wfm_silver.sat_milestones (project, sat_number 'SAT-n', sat_date) gives each batch's SAT date; batch size = snapshot SUM(meter_count) per LOWER(project), sat_stage. Pace = meters in batches with sat_date >= today - 182 days, * 30.44 / 182 per month. Undated batches sit between their dated neighbours."
+      - "Pace (same Postgres query, one engine): public.milestone_config (project, sat_number 'SAT-n', sat_date) gives each batch's SAT date, joined on LOWER(project) AND sat_number = 'SAT-' || sat_stage; batch size = snapshot SUM(meter_count) per LOWER(project), sat_stage. Never Athena sat_milestones here (it would mix engines). Pace = meters in batches with sat_date >= today - 182 days, * 30.44 / 182 per month. Undated batches sit between their dated neighbours."
       - "ETA = today + needed / (pace / 30.44) days; also say how many batches of the recent average size that is. Give per-project figures when several projects are in scope."
     example:
       question: "How many more SAT meters does Triveni need to reach 95% of eligible?"
@@ -514,11 +515,12 @@ topics:
     title: "O&M not-closed ticket ageing"
     description: "Open O&M complaint tickets by age band (0-7 .. 60+ days), source (1912/AUTO/MANUAL), status, complaint type, place, category; ticket lists, one ticket, technician/agency backlog."
     keywords: [open tickets, open complaints, not closed, pending complaints, ticket ageing, complaint ageing, 60+ days, backlog, 1912, auto ticket, unassigned, escalated, not in communication, never comm, complaint type, ticket number, o&m open]
-    tables: [gold_om_open_ageing_snapshot, unified_active_complaints, unified_non_qc_complaints]
+    tables: [gold_om_open_ageing_snapshot, gold_om_open_ticket_detail_snapshot, unified_active_complaints, unified_non_qc_complaints]
     answer_notes:
       - "Open tickets per technician: also say how many open tickets have no technician assigned (out of all open), when that figure is in the results -- they sit with no one."
     rules:
       - "public.gold_om_open_ageing_snapshot: SUM(ticket_count); age_key 'age_0_7','age_8_15','age_16_30','age_31_60','age_60_plus' (days since raised, frozen at refresh), order with CASE; thresholds only at 7/15/30/60. Default answer = Total plus every band."
+      - "Tickets OPENED / raised in a period (last month, month-wise, by zone): the ageing snapshot has no raised date -- use public.gold_om_open_ticket_detail_snapshot SUM(ticket_count) with raised_month (first of the month; e.g. raised_month = (date_trunc('month', CURRENT_DATE) - INTERVAL '1 month')::date). These are the tickets raised then and still not closed: say so."
       - "Card answer (O&M Active Ticket Ageing): Total open, SAT Done (sat_status = 'SAT DONE'), SAT Pending (sat_status = 'SAT PENDING') and every age band, for the asked filters (source / status / complaint type / SAT status / category / place). Several values of one filter (AUTO and MANUAL, two statuses): a Total row for them combined first (GROUP BY ROLLUP), then one row each."
       - "Includes every active-feed row, RESOLVED too - say so unless a status is filtered. complaint_status upper-case ('UNASSIGNED','ASSIGNED','CAN NOT ATTEND','ESCALATED TO DISCOM','WORK IN PROGRESS','RESOLVED','ACCEPTED','ON HOLD'); complaint_source '1912','AUTO','MANUAL'; complaint_type upper-case (e.g. 'METER NOT IN COMMUNICATION','NEVER COMM'); category label 'DT'. 'meter type wise' = meter_type, not complaint_type."
       - "Ticket lists, one ticket, technician/supervisor/agency backlog (Athena): gmr_wfm_silver.unified_active_complaints, age = date_diff('day', CAST(complaint_created_date AS DATE), current_date) (as of today); columns complaint_no, ticket_id, complaint_status, complaint_type, complaint_by, old_meter_serial_number, consumer_number, technician_name, supervisor, agency, project, zone, division. Status there is mixed case: compare UPPER(TRIM(complaint_status)). Require a filter; LIMIT 200."

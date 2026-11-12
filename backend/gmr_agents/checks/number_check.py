@@ -113,6 +113,9 @@ def _allowed(frames: list[pd.DataFrame], extra_text: str, keep_pct: bool) -> set
 
 def _numbers(text: str) -> list[tuple[float, str]]:
     text = _DATE.sub(" ", str(text or ""))
+    # Range notation '0..6,800' (STATS lines) read as 0 and 800: 12 Nov the scenario answer quoted 6,800 from
+    # STATS, it was flagged as invented, and the repair cut the answer to one line.
+    text = re.sub(r"(\d)\.\.+(?=\d)", r"\1 to ", text)
     out = []
     for raw, unit in _NUM.findall(text):
         try:

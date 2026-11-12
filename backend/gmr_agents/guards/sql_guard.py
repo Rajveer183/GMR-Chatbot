@@ -319,6 +319,45 @@ def _check_month_table_window(root: exp.Expression) -> str | None:
     return None
 
 
+def _check_day_plus_month(root: exp.Expression) -> str | None:
+    """A total from <x>_day_agg ADDED to a total from <x>_month_agg: the two hold the same events at two grains,
+    so the sum counts everything twice. 12 Nov: 'Kashi has already installed 5 million meters, so how many are
+    left?' -> (month_agg total) + (day_agg total) = 2,769,710 (the card: 1,384,855). Side-by-side columns or a
+    UNION of the two (reconciliation) are fine -- only '+' between them is flagged."""
+    ctes = {c.alias_or_name.lower(): c.this for c in root.find_all(exp.CTE)}
+    memo: dict[str, set[str]] = {}
+
+    def tables(node: exp.Expression, seen: frozenset = frozenset()) -> set[str]:
+        out: set[str] = set()
+        for t in node.find_all(exp.Table):
+            name = t.name.lower()
+            if name in ctes and name not in seen:
+                if name not in memo:
+                    memo[name] = tables(ctes[name], seen | {name})
+                out |= memo[name]
+            elif name.endswith(("_day_agg", "_month_agg")):
+                out.add(name)
+        for col in node.find_all(exp.Column):  # (SELECT x FROM cte) is a Table; a bare cte.col reference is a Column
+            name = (col.table or "").lower()
+            if name in ctes and name not in seen:
+                if name not in memo:
+                    memo[name] = tables(ctes[name], seen | {name})
+                out |= memo[name]
+        return out
+
+    for add in root.find_all(exp.Add):
+        left, right = tables(add.left), tables(add.right)
+        for t in left:
+            base = t.rsplit("_", 2)[0]
+            day, month = f"{base}_day_agg", f"{base}_month_agg"
+            for a, b in ((day, month), (month, day)):
+                if a in left and b in right and b not in left and a not in right:
+                    return (f"This adds a total from {a} to a total from {b}: both tables hold the SAME events (one "
+                            f"per day, one per month), so the sum counts everything twice. Read ONE of them for the "
+                            f"figure (the month table for whole months, the day table for day ranges).")
+    return None
+
+
 def _single_row_ctes(root: exp.Expression) -> set[str]:
     """CTEs that yield one row: an aggregate without GROUP BY (MAX(month) ...), or a projection read only from
     such CTEs (DATE_ADD('month', -1, lm) FROM latest_month)."""
@@ -772,7 +811,7 @@ def check_sql_safety(sql: str, catalog: AthenaCatalog) -> dict:
     cumulative_reason = (_check_cumulative_sums(root, cte_names) or _check_cross_join_fanout(root)
                          or _check_grouping_level(root) or _check_rollup_level(root)
                          or _check_month_table_window(root) or _check_meter_type_column(root)
-                         or _check_impossible_equalities(root))
+                         or _check_impossible_equalities(root) or _check_day_plus_month(root))
     if cumulative_reason:
         return _fail(cumulative_reason)
     return {

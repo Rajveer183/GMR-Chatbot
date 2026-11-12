@@ -74,9 +74,9 @@ const en = {
   st_running: "Running the query",
   st_writingAnswer: "Writing the answer",
   st_calculating: "Calculating",
-  ld_analyzing: "Analyzing with backend tools...",
-  ld_resolving: "Resolving entity matches...",
-  ld_calculating: "Calculating metrics from workbook...",
+  ld_analyzing: "Analysing your question...",
+  ld_resolving: "Matching projects and places...",
+  ld_calculating: "Calculating the figures...",
   ld_preparing: "Preparing charts and tables...",
   // empty chat
   es_message: "Start the conversation by asking a question. Your AI insights, summaries, and charts will appear here.",
@@ -537,9 +537,11 @@ export function lookup(language: string, key: UIKey): string {
 /** The backend's progress messages (graph/nodes.py, llm_pipeline.py) -> their keys. */
 export const STATUS_KEYS: Record<string, UIKey> = {
   "Understanding your question": "st_understanding",
-  "Writing the query": "st_writingQuery",
-  "Validating the query": "st_validating",
-  "Running the query": "st_running",
+  // Internal pipeline steps (query writing / validation / execution) are not shown to users:
+  // all three read as one neutral "Calculating" step.
+  "Writing the query": "st_calculating",
+  "Validating the query": "st_calculating",
+  "Running the query": "st_calculating",
   "Writing the answer": "st_writingAnswer",
   Calculating: "st_calculating",
   "Analyzing with backend tools...": "ld_analyzing",
