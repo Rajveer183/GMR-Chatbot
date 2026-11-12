@@ -58,7 +58,8 @@ from pydantic import BaseModel
 from shared import config, llm_gateway, redis_client
 from shared.logging_config import append_jsonl, configure_logging, new_trace_id
 from shared.session_store import SessionStore
-from gmr_agents.ops import answer_cache, prewarm
+from gmr_agents.ops import answer_cache, investigations, prewarm
+from gmr_agents.presentation import restyle
 from gmr_agents.resolvers import language, multi_question
 from gmr_agents.llm_pipeline import run_agent
 from gmr_agents.catalog import business_rules
@@ -110,6 +111,8 @@ def _build_response(question: str, state: dict) -> dict:
         "suggested_followups": state.get("followups") or [],
         "citations": state.get("citations") or [],
         "execution": state.get("execution") or {},
+        # Investigation (presentation/investigate.py): hypotheses tested, splits reconciled, confidence.
+        "investigation": state.get("investigation"),
         "refused": bool(state.get("refused")),
         "response_language": state.get("language_pref") or language.AUTO,
         "detected_language": state.get("detected_language"),
@@ -290,6 +293,7 @@ async def lifespan(_: FastAPI):
 app = FastAPI(title="GMR Agentic Router (MDM/WFM)", version="0.1.0", lifespan=lifespan)
 app.add_middleware(
     CORSMiddleware, allow_origins=["*"], allow_credentials=True, allow_methods=["*"], allow_headers=["*"],
+    expose_headers=["Content-Disposition", "X-Row-Count", "X-Truncated"],
 )
 
 
@@ -409,8 +413,37 @@ def answer_question(question: str, session_id: str | None, *, store: SessionStor
     t0 = time.perf_counter()
     switch_to = language.pure_switch(asked)
     previous = _answer_by_trace(store, session_id) if switch_to else None
-    cached = None if previous else answer_cache.get(question, prior_turns)
-    if previous is not None:
+    # 'Make that a bar chart' / 'summarise what we found so far': the previous answer redrawn, or the
+    # conversation recapped, by code (presentation/restyle.py) -- no LLM call, no query.
+    restyled, recapped = None, None
+    if previous is None:
+        req = restyle.restyle_request(asked)
+        last = _answer_by_trace(store, session_id) if req else None
+        restyled = restyle.restyle(last["response"], *req) if last else None
+        if restyled is not None:
+            restyle_context = dict(last.get("context") or {})
+        elif restyle.is_recap(asked):
+            recapped = restyle.recap((store.get_session(session_id) or {}).get("messages") or [])
+    cached = None if previous or restyled or recapped else answer_cache.get(question, prior_turns)
+    if restyled is not None or recapped is not None:
+        ms = round((time.perf_counter() - t0) * 1000, 1)
+        if restyled is not None:
+            response, context, kind = restyled, restyle_context, "chart_restyle"
+            response["debug"] = {**(response.get("debug") or {}), "chart_restyle": True, "total_ms": ms}
+        else:
+            response = _build_response(question, {**recapped, "agent": "memory", "trace_id": trace_id, "total_ms": ms})
+            response["debug"]["recap"] = True
+            context, kind = {"domain": "memory"}, "recap"
+        state = {}
+        target, detected = language.resolve(asked, run_pref, None, prior_turns)
+        append_jsonl("questions", {
+            "at": datetime.now(timezone(timedelta(hours=5, minutes=30))).strftime("%Y-%m-%dT%H:%M:%S"),
+            "trace_id": trace_id, "session_id": session_id, "question": question, "kind": kind,
+            "refused": False, "summary": str(response.get("summary") or "")[:500], "total_ms": ms, "llm_calls": 0,
+            "tokens": 0, "execution": {"latency_ms": ms, "ttft_ms": ms, "llm_calls": 0, "input_tokens": 0,
+                                       "output_tokens": 0, "db_queries": 0, "estimated_cost_usd": 0.0,
+                                       "termination": kind.upper()}})
+    elif previous is not None:
         response, context = _switch_language(asked, previous, switch_to, trace_id, session_id, t0)
         state = {}
         target, detected = switch_to, language.resolve(asked, pref, None, prior_turns)[1]
@@ -434,12 +467,35 @@ def answer_question(question: str, session_id: str | None, *, store: SessionStor
         # The cache is keyed on the question text, so the replay may be in another language than
         # this request wants (dropdown / explicit request): translated below, never re-queried.
         target, detected = language.resolve(asked, run_pref, response.get("detected_language"), prior_turns)
+    elif investigations.is_recall(question):
+        # 'Have we investigated X before / has it improved since?': answered from the investigation
+        # store (ops/investigations.py) -- no LLM call; one read-only query only for 'improved since'.
+        got = investigations.recall(question)
+        ms = round((time.perf_counter() - t0) * 1000, 1)
+        state = {"summary": got["summary"], "insights": got["insights"], "tables": got["tables"], "agent": "memory",
+                 "trace_id": trace_id, "total_ms": ms}
+        response = _build_response(question, state)
+        response["related_investigations"] = got["found"]
+        context = {"domain": "memory"}
+        target, detected = language.resolve(asked, run_pref, None, prior_turns)
+        append_jsonl("questions", {
+            "at": datetime.now(timezone(timedelta(hours=5, minutes=30))).strftime("%Y-%m-%dT%H:%M:%S"),
+            "trace_id": trace_id, "session_id": session_id, "question": question, "cached": False,
+            "refused": False, "summary": got["summary"][:500], "total_ms": ms, "llm_calls": 0, "tokens": 0,
+            "execution": {"latency_ms": ms, "ttft_ms": ms, "llm_calls": 0, "input_tokens": 0, "output_tokens": 0,
+                          "tool_calls": 0, "db_queries": 0, "estimated_cost_usd": 0.0, "termination": "MEMORY"}})
     else:
         # run_agent never raises: a failure comes back as an error answer, so the
         # session always gets both the question and its (error) reply.
         state = run_agent(question, prior_questions=prior, prior_turns=prior_turns, trace_id=trace_id,
                           session_id=session_id, emit=emit, response_language=run_pref)
         response = _build_response(question, state)
+        if state.get("investigation"):
+            # Cross-session memory: earlier investigations of a similar question, then this one is stored.
+            response["related_investigations"] = investigations.related(question, exclude=trace_id)
+            investigations.record(trace_id=trace_id, session_id=session_id, question=question,
+                                  investigation=state["investigation"], plan=state.get("plan") or {},
+                                  summary=str(response.get("summary") or ""), insights=response.get("insights") or [])
         context = _turn_context(state, response)
         answer_cache.put(question, prior_turns, state, {"response": copy.deepcopy(response), "context": context})
         # target_language is missing only when the pipeline stopped before triage (AI busy).
@@ -723,6 +779,71 @@ def _paged_sql(sql: str, engine: str, offset: int, size: int) -> str:
     return f"{_without_limit(sql, engine)} OFFSET {int(offset)} LIMIT {int(size)}"
 
 
+def _answer_sql(trace_id: str, table_index: int) -> tuple[str, str, str | None]:
+    """An earlier answer's validated SQL (by trace_id), re-checked by the SQL guard:
+    (normalized sql, engine, athena database). Raises 404 / 422 like the table endpoints."""
+    from gmr_agents.catalog.catalog import get_catalog
+    from gmr_agents.guards import sql_guard
+
+    record = next((r for r in _read_jsonl("questions") if r.get("trace_id") == trace_id), None)
+    sqls = ([record.get("sql")] + list(record.get("extra_sql") or [])) if record else []
+    if not record or table_index < 0 or table_index >= len(sqls) or not sqls[table_index]:
+        raise HTTPException(status_code=404, detail="No table for that answer -- ask the question again.")
+    sql = str(sqls[table_index])
+    catalog = get_catalog("mdm" if "hes_gold." in sql else "wfm")
+    guard = sql_guard.check_sql_safety(sql, catalog)
+    if not guard["ok"]:
+        raise HTTPException(status_code=422, detail="That answer's query can no longer be validated.")
+    base, engine = guard["normalized_sql"], guard["data_engine"]
+    first = next((t for t in catalog.list_tables() if f".{t.table_name}" in base), None)
+    return base, engine, (first.database if first is not None and engine == "athena" else None)
+
+
+class TableExportRequest(BaseModel):
+    trace_id: str
+    table_index: int = 0
+    format: str = "csv"                   # csv | xlsx
+    labels: list[str] | None = None       # the table's on-screen column headers (same order as the SQL)
+    title: str | None = None
+
+
+EXPORT_MAX_ROWS = 100_000
+
+
+@app.post("/api/table-export")
+def table_export(req: TableExportRequest) -> Response:
+    """The full table behind an answer as CSV / Excel: the answer's validated SQL re-checked by the
+    SQL guard and re-run read-only without its display LIMIT (capped at EXPORT_MAX_ROWS). Runs only
+    when the user clicks Download -- no LLM call, nothing on the question path."""
+    import io
+
+    import pandas as pd
+
+    from gmr_agents.execution import executor
+
+    if req.format not in ("csv", "xlsx"):
+        raise HTTPException(status_code=422, detail="format must be csv or xlsx.")
+    base, engine, database = _answer_sql(req.trace_id, req.table_index)
+    try:
+        df = executor.run_sql(f"{_without_limit(base, engine)} LIMIT {EXPORT_MAX_ROWS}", database, engine)
+    except Exception as exc:
+        log.warning("table export %s/%s failed: %s", req.trace_id, req.table_index, exc)
+        raise HTTPException(status_code=503, detail="The table could not be exported -- please try again.") from None
+    if req.labels and len(req.labels) == len(df.columns):
+        df.columns = [str(c) for c in req.labels]
+    safe = "".join(ch if ch.isalnum() or ch in "-_ " else "_" for ch in (req.title or "table")).strip()[:60] or "table"
+    headers = {"Content-Disposition": f'attachment; filename="{safe}.{req.format}"',
+               "X-Row-Count": str(len(df)), "X-Truncated": "1" if len(df) >= EXPORT_MAX_ROWS else "0"}
+    if req.format == "csv":
+        # BOM so Excel opens Hindi / special characters correctly.
+        return Response("﻿" + df.to_csv(index=False), media_type="text/csv; charset=utf-8", headers=headers)
+    buf = io.BytesIO()
+    with pd.ExcelWriter(buf, engine="openpyxl") as xl:
+        df.to_excel(xl, index=False, sheet_name="data")
+    return Response(buf.getvalue(), headers=headers,
+                    media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet")
+
+
 @app.post("/api/table-page")
 def table_page(req: TablePageRequest) -> dict:
     """One page of an earlier answer's table, server-side: the answer's already
@@ -730,26 +851,11 @@ def table_page(req: TablePageRequest) -> dict:
     read-only layer and run with OFFSET / LIMIT -- no LLM call, no new SQL, and
     the rows never enter an LLM prompt."""
     from gmr_agents.llm_pipeline import _cell, raw_cols
-    from gmr_agents.catalog.catalog import get_catalog
     from gmr_agents.execution import executor
-    from gmr_agents.guards import sql_guard
 
     if req.page < 1 or req.page_size not in _PAGE_SIZES:
         raise HTTPException(status_code=422, detail=f"page must be >= 1 and page_size one of {_PAGE_SIZES}.")
-    record = next((r for r in _read_jsonl("questions") if r.get("trace_id") == req.trace_id), None)
-    sqls = ([record.get("sql")] + list(record.get("extra_sql") or [])) if record else []
-    if not record or req.table_index >= len(sqls) or not sqls[req.table_index]:
-        raise HTTPException(status_code=404, detail="No table for that answer -- ask the question again.")
-    sql = str(sqls[req.table_index])
-    domain = "mdm" if "hes_gold." in sql else "wfm"
-    catalog = get_catalog(domain)
-    guard = sql_guard.check_sql_safety(sql, catalog)
-    if not guard["ok"]:
-        raise HTTPException(status_code=422, detail="That answer's query can no longer be validated.")
-    base = guard["normalized_sql"]
-    engine = guard["data_engine"]
-    first = next((t for t in catalog.list_tables() if f".{t.table_name}" in base), None)
-    database = first.database if first is not None and engine == "athena" else None
+    base, engine, database = _answer_sql(req.trace_id, req.table_index)
     key = (req.trace_id, req.table_index)
     try:
         if key not in _TOTALS:
@@ -841,6 +947,25 @@ def current_alerts(hours: float = 24.0) -> dict:
 
     d = alerts.compute(max(1.0, min(hours, 24 * 7)))
     return {k: v for k, v in d.items() if not k.startswith("_")}
+
+
+@app.get("/api/investigations")
+def list_investigations(limit: int = 50, q: str | None = None) -> dict:
+    """Recorded investigations (newest first), or those similar to `q` (cross-session memory)."""
+    if q:
+        return {"items": investigations.related(q, limit=max(1, min(limit, 20)), min_sim=0.2)}
+    return {"items": investigations.recent(max(1, min(limit, 500)))}
+
+
+@app.post("/api/investigations/{inv_id}/recheck")
+def recheck_investigation(inv_id: str) -> dict:
+    """Decision-impact tracking: re-run the investigation's query read-only and compare the lead
+    and the total now with when it was investigated. No LLM call."""
+    got = investigations.recheck(inv_id)
+    if not got.get("ok") and got.get("error") == "investigation not found":
+        raise HTTPException(status_code=404, detail="investigation not found")
+    got.pop("record", None) if got.get("ok") else None
+    return got
 
 
 @app.get("/api/insights/digest")

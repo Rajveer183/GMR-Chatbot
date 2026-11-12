@@ -12,6 +12,7 @@ import { WarningBox } from "./WarningBox";
 import { SourcesNote } from "./SourcesNote";
 import { SuggestedQuestions } from "./SuggestedQuestions";
 import { FeedbackButtons } from "./FeedbackButtons";
+import { InvestigationPanel } from "./InvestigationPanel";
 import type { FeedbackRating } from "../api/client";
 import { resultToPayload } from "../utils/clipboard";
 import { resultToSpeech } from "../utils/speech";
@@ -129,6 +130,8 @@ export const ResultRenderer: React.FC<ResultRendererProps> = ({ result, onFollow
 
       <InsightList title={uiText(lang, "insights")}items={result.insights ?? []} />
 
+      <InvestigationPanel investigation={result.investigation} related={result.related_investigations} />
+
       {followups.length && onFollowUp ? (
         <section
           className="chat-result-section result-stagger"
@@ -156,6 +159,8 @@ export const ResultRenderer: React.FC<ResultRendererProps> = ({ result, onFollow
       ) : null}
 
       <SourcesNote citations={result.citations ?? []} title={uiText(lang, "sources")} />
+
+      {/* Drafts still streaming have no trace yet; the panel renders nothing until the final answer. */}
 
       <ExpandableChartModal
         open={expandedChart !== null}

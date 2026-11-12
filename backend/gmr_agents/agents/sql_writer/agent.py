@@ -392,6 +392,27 @@ def execute_node(state: AgentState, config: RunnableConfig) -> dict[str, Any]:
                           "and place, as the rules and verified examples define the KPI."}
         return {**base, **record, "implausible_retried": True, "has_fallback": True, "last_error": err, "errors": [err]}
 
+    empty = [] if state.get("implausible_retried") else PL._empty_periods(result.get("result"), ctx.plan.get("tables"))
+    if empty and not limits.retries_exhausted(state["attempt"]):
+        ctx.fallback = {"plan": ctx.plan, "result": result, "extras": []}
+        C._step(ps, "implausible", time.perf_counter(), outcome="empty period row -- sent back", values=empty[:3])
+        err = {"kind": "implausible", "sql": ctx.plan["sql"],
+               "message": f"The query ran, but the row(s) for {', '.join(empty)} are all zero / empty although the table "
+                          "holds data for that period: the period filter dropped them (e.g. months taken from another "
+                          "table's list). Filter this table's own period column directly, e.g. data_date IN "
+                          "(DATE '2026-06-01', DATE '2026-07-01') for the months the question names."}
+        return {**base, **record, "implausible_retried": True, "has_fallback": True, "last_error": err, "errors": [err]}
+
+    doubled = [] if state.get("implausible_retried") else PL._double_counted(result.get("result"))
+    if doubled and not limits.retries_exhausted(state["attempt"]):
+        ctx.fallback = {"plan": ctx.plan, "result": result, "extras": []}
+        C._step(ps, "implausible", time.perf_counter(), outcome="double count -- sent back", values=doubled[:1])
+        err = {"kind": "implausible", "sql": ctx.plan["sql"],
+               "message": f"The query ran, but {doubled[0]}: the same items were counted twice (a UNION of the same "
+                          "table, or of two sources holding the same meters). Count each item once, as the rules and "
+                          "verified examples define the KPI; do not add a measure to itself."}
+        return {**base, **record, "implausible_retried": True, "has_fallback": True, "last_error": err, "errors": [err]}
+
     extras, extra_problem = PL._run_extras(ps, ctx.raw_plan, get_catalog("all" if triage.get("cross_domain") else triage["domain"]), ctx.plan.get("planner") or "")
     if extra_problem and not limits.retries_exhausted(state["attempt"]):
         ctx.fallback = {"plan": ctx.plan, "result": result, "extras": extras}

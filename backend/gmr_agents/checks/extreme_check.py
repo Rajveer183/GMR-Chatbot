@@ -45,7 +45,11 @@ def _levels(df: pd.DataFrame) -> pd.Series:
     labels = _label_cols(df)
     if not labels:
         return pd.Series("", index=df.index)
-    return pd.concat([_is_total(df[c]) for c in labels], axis=1).astype(int).astype(str).agg("".join, axis=1)
+    flags = pd.concat([_is_total(df[c]) for c in labels], axis=1)
+    if not flags.to_numpy().any():
+        # No Total row anywhere: one level. (The row-wise join below took seconds on 179k rows.)
+        return pd.Series("0" * len(labels), index=df.index)
+    return flags.astype(int).astype(str).agg("".join, axis=1)
 
 
 def _body(df: pd.DataFrame, period_col: str | None, partial: set[str]) -> pd.DataFrame:
@@ -91,7 +95,15 @@ def wrong_claims(text: str, df: pd.DataFrame | None, period_col: str | None = No
         for col in num_cols:
             vals = pd.to_numeric(body[col], errors="coerce")
             hits = vals[(vals.round(decimals) - value).abs() < 10 ** -decimals / 2 + 1e-9]
+            # One verdict per (category, rollup level): rows of the same scope give the same answer. 12 Nov: a
+            # 179,364-row list with '12 complaints' matched thousands of rows, each re-scanning all rows (38 s
+            # per call, minutes per answer).
+            scopes_seen: set = set()
             for idx in hits.index:
+                key = (body.at[idx, group_col] if group_col is not None else None, level[idx])
+                if key in scopes_seen:
+                    continue
+                scopes_seen.add(key)
                 scope = vals if group_col is None else vals[body[group_col] == body.at[idx, group_col]]
                 scope = scope[level[scope.index] == level[idx]].dropna()
                 if len(scope) < 2:

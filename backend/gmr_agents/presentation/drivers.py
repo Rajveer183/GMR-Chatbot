@@ -177,6 +177,33 @@ def _lines(both: pd.DataFrame, measure: str, group: str, p0: str, p1: str, parti
     return out
 
 
+def pair(question: str, df: pd.DataFrame | None, today: pd.Timestamp | None = None):
+    """(per-group prev/curr frame, measure, group, previous period, current period, partial period) for a
+    result in the long or wide shape breakdown() reads, or None. Used by presentation/investigate.py."""
+    if not isinstance(df, pd.DataFrame) or len(df) < 2:
+        return None
+    today = today or pd.Timestamp.now().normalize()
+    rows, label, dates, nums = _split(df)
+    if dates is not None and label is not None and pd.api.types.is_numeric_dtype(rows[label]):
+        dates = None
+        label = next((c for c in rows.columns if not pd.api.types.is_numeric_dtype(rows[c])), None)
+    if not nums:
+        nums = [c for c in rows.columns if c != label and pd.api.types.is_numeric_dtype(rows[c])]
+    if not nums or not label:
+        return None
+    if dates is not None:
+        return _long_pair(rows, label, dates, nums, today, question)
+    p = _wide_pair(rows, [c for c in rows.columns if c != label and pd.api.types.is_numeric_dtype(rows[c])])
+    if not p:
+        return None
+    both = rows.set_index(rows[label].astype(str))[[p[0], p[1]]]
+    both.columns = ["prev", "curr"]
+    both = both.apply(pd.to_numeric, errors="coerce")
+    both = both.groupby(level=0).sum(min_count=1)
+    measure = re.sub(_PREV_RE, "", str(p[0])).strip("_ ") or str(p[0])
+    return both, measure, label, str(p[0]), str(p[1]), None
+
+
 def breakdown(question: str, df: pd.DataFrame | None, today: pd.Timestamp | None = None) -> str:
     """The DRIVERS block for the answer prompt ('' unless the question asks why and the rows allow it)."""
     if not asked(question) or not isinstance(df, pd.DataFrame) or len(df) < 2:

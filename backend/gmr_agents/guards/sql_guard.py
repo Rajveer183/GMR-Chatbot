@@ -319,6 +319,69 @@ def _check_month_table_window(root: exp.Expression) -> str | None:
     return None
 
 
+def _single_row_ctes(root: exp.Expression) -> set[str]:
+    """CTEs that yield one row: an aggregate without GROUP BY (MAX(month) ...), or a projection read only from
+    such CTEs (DATE_ADD('month', -1, lm) FROM latest_month)."""
+    ctes = {c.alias_or_name.lower(): c.this for c in root.find_all(exp.CTE) if isinstance(c.this, exp.Select)}
+    single: set[str] = set()
+    changed = True
+    while changed:
+        changed = False
+        for name, sel in ctes.items():
+            if name in single or sel.args.get("group"):
+                continue
+            src = [sel.args.get("from_") or sel.args.get("from"), *(sel.args.get("joins") or [])]
+            names = {t.name.lower() for s in src if s is not None for t in s.find_all(exp.Table)}
+            aggregate = any(isinstance(e.unalias(), exp.AggFunc) or e.find(exp.AggFunc) for e in sel.expressions) \
+                and not sel.find(exp.Window)
+            if aggregate or (names and names <= single):
+                single.add(name)
+                changed = True
+    return single
+
+
+def _check_impossible_equalities(root: exp.Expression) -> str | None:
+    """One column required to equal two different single values at once -> never any row. 12 Nov: 'why has the
+    outage frequency increased in Varanasi' joined outage_ranking ON data_date = latest_month.lm AND
+    ON data_date = prev_month.pm (July and June) -> 0 rows, and the answer said outage data does not exist."""
+    single = _single_row_ctes(root)
+    for sel in root.find_all(exp.Select):
+        conds = []
+        if sel.args.get("where") is not None:
+            conds.append(sel.args["where"].this)
+        for j in sel.args.get("joins") or []:
+            if not j.args.get("side") and j.args.get("on") is not None:
+                conds.append(j.args["on"])
+        seen: dict[tuple[str, str], set[str]] = {}
+        # alias -> table / CTE name ('JOIN latest_month lm' -> lm = latest_month)
+        alias = {t.alias_or_name.lower(): t.name.lower()
+                 for s in [sel.args.get("from_") or sel.args.get("from"), *(sel.args.get("joins") or [])]
+                 if s is not None for t in s.find_all(exp.Table)}
+        for cond in conds:
+            for eq in cond.flatten() if isinstance(cond, exp.And) else [cond]:
+                if not isinstance(eq, exp.EQ):
+                    continue
+                for col, other in ((eq.left, eq.right), (eq.right, eq.left)):
+                    if not isinstance(col, exp.Column):
+                        continue
+                    if isinstance(other, exp.Literal):
+                        val = f"literal:{other.this}"
+                    elif isinstance(other, exp.Column) and other.table and \
+                            alias.get(other.table.lower(), other.table.lower()) in single:
+                        val = f"cte:{alias.get(other.table.lower(), other.table.lower())}"
+                    else:
+                        continue
+                    seen.setdefault((col.table.lower(), col.name.lower()), set()).add(val)
+        for (tbl, name), vals in seen.items():
+            if len(vals) >= 2:
+                shown = f"{tbl}.{name}" if tbl else name
+                return (f"{shown} is required to equal {len(vals)} different single values at once "
+                        f"({', '.join(sorted(v.split(':', 1)[1] for v in vals))}) -- no row can match, so the query "
+                        "always returns nothing. To compare two periods / values, use IN (...) or "
+                        f"{name} IN (SELECT ... UNION ALL SELECT ...) and group by {name}.")
+    return None
+
+
 def _check_meter_type_column(root: exp.Expression) -> str | None:
     """Consumer meter type on the installation tables is inventory_meter_type. progress_meter_type (the
     dashboard's narrow map) misses 6 raw codes, so its 4 types fall short of the consumer total (1,012 meters
@@ -708,7 +771,8 @@ def check_sql_safety(sql: str, catalog: AthenaCatalog) -> dict:
         return _fail(f"Unknown or ambiguous column reference: {exc}{_column_hint(str(exc), referenced, schema)}")
     cumulative_reason = (_check_cumulative_sums(root, cte_names) or _check_cross_join_fanout(root)
                          or _check_grouping_level(root) or _check_rollup_level(root)
-                         or _check_month_table_window(root) or _check_meter_type_column(root))
+                         or _check_month_table_window(root) or _check_meter_type_column(root)
+                         or _check_impossible_equalities(root))
     if cumulative_reason:
         return _fail(cumulative_reason)
     return {

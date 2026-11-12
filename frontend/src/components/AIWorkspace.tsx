@@ -1,5 +1,5 @@
 import React, { useEffect, useMemo, useRef, useState } from "react";
-import { Menu, Plus, MessageSquare, Pencil, Trash2, Send, Mic, Search, X, User, Bot, ChevronDown, FileSpreadsheet, Download } from "lucide-react";
+import { Menu, Plus, Pencil, Trash2, Send, Mic, Search, X, User, Bot, Database, Download } from "lucide-react";
 import { apiClient } from "../api/client";
 import type { FeedbackRating } from "../api/client";
 import type { AIQueryResponse, AIStreamEvent, DatasetSummary, FilterRequest, SessionSummary, SessionDetail, SessionMessage, TranslatedAnswer } from "../api/client";
@@ -12,6 +12,7 @@ import { LoadingStatus } from "./LoadingStatus";
 import { TypingIndicator } from "./TypingIndicator";
 import { ConfirmDialog } from "./ConfirmDialog";
 import { EmptyState } from "./EmptyState";
+import { DataSourcesPanel } from "./DataSourcesPanel";
 import gmrLogo from "../assets/gmr_logo.png";
 
 const LOADING_STATUS_MESSAGES = [
@@ -52,6 +53,25 @@ function storeSessionId(sessionId: string | null) {
   }
 }
 
+// Sidebar collapsed to an icon rail (the menu button next to the logo); remembered across reloads.
+const SIDEBAR_KEY = "gmr-chat.sidebarCollapsed";
+
+function readSidebarCollapsed(): boolean {
+  try {
+    return window.localStorage.getItem(SIDEBAR_KEY) === "1";
+  } catch {
+    return false;
+  }
+}
+
+function storeSidebarCollapsed(collapsed: boolean) {
+  try {
+    window.localStorage.setItem(SIDEBAR_KEY, collapsed ? "1" : "0");
+  } catch {
+    // Non-fatal -- the sidebar just opens expanded after a reload.
+  }
+}
+
 function focusWithoutScroll(element: HTMLTextAreaElement | null | undefined) {
   if (!element) return;
   try {
@@ -86,6 +106,12 @@ interface AIWorkspaceProps {
 }
 
 export const AIWorkspace: React.FC<AIWorkspaceProps> = ({ filters }) => {
+  const [sidebarCollapsed, setSidebarCollapsed] = useState<boolean>(readSidebarCollapsed);
+  const toggleSidebar = () =>
+    setSidebarCollapsed((c) => {
+      storeSidebarCollapsed(!c);
+      return !c;
+    });
   const [question, setQuestion] = useState("");
   const [loading, setLoading] = useState(false);
   const [sessions, setSessions] = useState<SessionSummary[]>([]);
@@ -106,7 +132,6 @@ export const AIWorkspace: React.FC<AIWorkspaceProps> = ({ filters }) => {
   });
   const [speechError, setSpeechError] = useState<string | null>(null);
   const [datasets, setDatasets] = useState<DatasetSummary[]>([]);
-  const [filesExpanded, setFilesExpanded] = useState(false);
   const {
     transcript,
     listening: speechActive,
@@ -143,6 +168,8 @@ export const AIWorkspace: React.FC<AIWorkspaceProps> = ({ filters }) => {
   // trace_id -> this session's thumbs vote (loaded with the session; failures just show no vote)
   const [votes, setVotes] = useState<Record<string, FeedbackRating>>({});
   const [exportOpen, setExportOpen] = useState(false);
+  // Insights drawer (observability, alerts, quality, freshness, investigations) -- read-only reports.
+  const [insightsOpen, setInsightsOpen] = useState(false);
   const recordVote = (traceId: string, rating: FeedbackRating) =>
     setVotes((v) => {
       const next = { ...v };
@@ -573,59 +600,31 @@ export const AIWorkspace: React.FC<AIWorkspaceProps> = ({ filters }) => {
   };
 
   return (
-    <div className="chat-app-layout" lang={langTag(uiLang)}>
+    <div className={`chat-app-layout${sidebarCollapsed ? " sidebar-collapsed" : ""}`} lang={langTag(uiLang)}>
       <aside className="chat-sidebar">
         <div className="chat-sidebar-top">
           <img className="chat-brand-logo" src={gmrLogo} alt="GMR" />
-          <button className="chat-icon-btn" type="button">
+          <button
+            className="chat-icon-btn chat-sidebar-toggle"
+            type="button"
+            onClick={toggleSidebar}
+            aria-expanded={!sidebarCollapsed}
+            aria-label={t(sidebarCollapsed ? "showSidebar" : "hideSidebar")}
+            title={t(sidebarCollapsed ? "showSidebar" : "hideSidebar")}
+          >
             <Menu size={14} />
           </button>
         </div>
+        {sidebarCollapsed ? (
+          <button className="chat-icon-btn chat-sidebar-rail-btn" onClick={createNewSession} type="button"
+                  title={t("newChat")} aria-label={t("newChat")}>
+            <Plus size={14} />
+          </button>
+        ) : null}
 
         <button className="chat-new-btn" onClick={createNewSession} type="button">
           <Plus size={14} /> {t("newChat")}
         </button>
-
-        <div className="chat-menu">
-          <button className="chat-menu-item active" type="button">
-            <MessageSquare size={14} /> {t("chat")}
-          </button>
-        </div>
-
-        <div className="chat-files-section">
-          <button
-            className="chat-menu-item chat-files-toggle"
-            type="button"
-            onClick={() => setFilesExpanded((v) => !v)}
-            aria-expanded={filesExpanded}
-          >
-            <FileSpreadsheet size={14} />
-            {t("dataSources")}
-            <span className="chat-files-count">{datasets.length}</span>
-            <ChevronDown size={14} className={`chat-files-chevron ${filesExpanded ? "expanded" : ""}`} />
-          </button>
-          {filesExpanded ? (
-            <div className="chat-files-list">
-              {datasets.length === 0 ? (
-                <div className="chat-files-empty">{t("noFiles")}</div>
-              ) : (
-                datasets.map((ds) => (
-                  <div key={ds.dataset_id} className="chat-files-item">
-                    <FileSpreadsheet size={13} className="chat-files-item-icon" />
-                    <div className="chat-files-item-text">
-                      <div className="chat-files-item-name" title={ds.display_name}>
-                        {ds.display_name}
-                      </div>
-                      <div className="chat-files-item-meta">
-                        {ds.row_count.toLocaleString()} {t("rows")}
-                      </div>
-                    </div>
-                  </div>
-                ))
-              )}
-            </div>
-          ) : null}
-        </div>
 
         <div className="chat-session-search">
           <Search size={13} />
@@ -712,6 +711,15 @@ export const AIWorkspace: React.FC<AIWorkspaceProps> = ({ filters }) => {
           </div>
           <div className="chat-header-controls">
             <span className="chat-active-badge">{t("activeSession")}</span>
+            <button
+              type="button"
+              className="summary-audio-btn"
+              onClick={() => setInsightsOpen(true)}
+              title={`All ${datasets.length} tables the assistant can query`}
+            >
+              <Database size={14} />
+              <span>{t("dataSources")}</span>
+            </button>
             {activeSession?.messages?.length ? (
               <div className="export-menu">
                 <button
@@ -729,9 +737,6 @@ export const AIWorkspace: React.FC<AIWorkspaceProps> = ({ filters }) => {
                     <a role="menuitem" href={apiClient.exportSessionUrl(activeSession.session_id, "html")} onClick={() => setExportOpen(false)}>
                       {t("exportHtml")}
                     </a>
-                    <a role="menuitem" href={apiClient.exportSessionUrl(activeSession.session_id, "md")} onClick={() => setExportOpen(false)}>
-                      {t("exportMd")}
-                    </a>
                   </div>
                 ) : null}
               </div>
@@ -739,6 +744,7 @@ export const AIWorkspace: React.FC<AIWorkspaceProps> = ({ filters }) => {
             <LanguageSelect value={responseLanguage} onChange={changeLanguage} label={t("answerLanguage")} />
           </div>
         </header>
+        <DataSourcesPanel open={insightsOpen} onClose={() => setInsightsOpen(false)} datasets={datasets} />
 
         <div className="chat-messages" ref={chatMessagesRef}>
           <div className="chat-thread chat-thread-enter" key={activeSession?.session_id || "none"}>

@@ -14,7 +14,7 @@ from shared import config
 from gmr_agents.catalog import business_rules, schema_dictionary
 from gmr_agents.retrieval import knowledge
 from gmr_agents.catalog.schema_brief import build as build_schema
-from gmr_agents.presentation import stats as _stats
+from gmr_agents.presentation import investigate as _investigate, stats as _stats
 from gmr_agents.catalog.table_metadata import SCHEMA_RE
 from gmr_agents.execution import executor
 from gmr_agents.ops import context_manager
@@ -114,6 +114,9 @@ def _plan_prompt(triage: dict, catalog, previous: dict | None) -> tuple[str, lis
     if _stats.wanted(question):
         # Statistics are computed by code from the rows (presentation/stats.py): ask for a series.
         sections.append(S("analysis_rows", 1, [_stats.PLAN_HINT], required=True))
+    if _investigate.asked(question):
+        # Investigation: the same measure split along other dimensions, tested by code (presentation/investigate.py).
+        sections.append(S("investigation", 1, [_investigate.PLAN_HINT], required=True))
     sections.append(S("chart_guide", 6, business_rules.chart_guide(question).splitlines(), joiner="\n", min_items=12,
                       header="CHART GUIDE (pick the chart whose 'when' best matches the question and the rows your SQL "
                              "returns; shape the SQL so the chart can be drawn -- e.g. one column per stacked part, or a "
@@ -320,6 +323,33 @@ def _repair_hint(sql: str, problem: str, catalog=None) -> str:
                 lines.append(f"{name}: " + ", ".join(c.column_name for c in t.columns))
         if lines:
             hint += "\nREAL COLUMNS of the tables your SQL uses (use only these):\n" + "\n".join(lines)
+        # The column the question needs may not be in the tables used at all: name the tables that have it, so
+        # the repair switches table instead of resending the same one (a follow-up adapting the previous SQL
+        # keeps its filters, not necessarily its table).
+        sub = re.search(r"Column '(\w+)' could not be resolved for table: '(\w+)'", problem)
+        if sub and not re.search(rf"\b(?:from|join)\s+[\w.\"]*\b{re.escape(sub.group(2))}\b", sql, re.I):
+            # The alias is a subquery / CTE of the SQL itself, not a table: the column was not carried out of it.
+            hint += (f"\n'{sub.group(2)}' is a subquery / CTE in your SQL, not a table: it does not output '{sub.group(1)}'. "
+                     f"Add {sub.group(1)} to the SELECT list (and GROUP BY) of EVERY branch inside '{sub.group(2)}' "
+                     "(each side of a UNION), then use it outside.")
+        missing = re.search(r"(?:Column|column)\s+['\"]?(\w+)['\"]?\s+(?:could not be resolved|does not exist)|Unknown column:?\s*['\"]?(\w+)",
+                            problem)
+        col = (missing.group(1) or missing.group(2) or "").lower() if missing else ""
+        used = {t.lower() for t in _TABLE_REF_RE.findall(sql)}
+        in_used = any(c.column_name.lower() == col for t in used if catalog.get_table(t) is not None
+                      for c in catalog.get_table(t).columns)
+        if col and used and not in_used and hasattr(catalog, "list_tables"):
+            try:
+                schemas = {catalog.get_table(t).database for t in used if catalog.get_table(t) is not None}
+                have = [t.table_name for t in catalog.list_tables()
+                        if t.table_name.lower() not in used and (not schemas or t.database in schemas)
+                        and any(c.column_name.lower() == col for c in t.columns)]
+            except Exception:
+                have = []
+            if have:
+                hint += (f"\nThe table(s) you used have no '{col}' column. Tables that DO have '{col}' (switch to the one "
+                         f"that holds the same measure -- a follow-up keeps the previous filters, not necessarily its "
+                         f"table): {', '.join(have[:8])}")
     return hint
 
 
@@ -342,13 +372,21 @@ def _zero_is_genuine(sql: str) -> bool:
     # A literal compared case-sensitively (plain '=' / IN, no LOWER / UPPER / ILIKE around it) must be stored
     # in that exact case. 10 Nov retest: circle = 'EDC Agra' (stored 'edc agra') -> 0 rows kept as the answer
     # ('no 1PH installs') instead of a repair; the real figure was 536.
+    literals = _filter_literals(sql)
+    # Athena (hes_*) tables keep no sampled values, so 'known exactly' can only come from ANOTHER system's column.
+    # 12 Nov: outage_ranking WHERE cluster = 'kashi' (stored 'Kashi') -> 0 rows accepted because WFM's project
+    # column stores 'kashi'; the answer said Varanasi has no outage data. A case-sensitive text filter on an
+    # Athena table that matched nothing gets the one repair round.
+    if re.search(r"\bhes_\w+\.", sql, re.I) and any(not _case_insensitive(sql, v) for v in literals):
+        return False
     return all(knowledge.known_value(v) and (_case_insensitive(sql, v) or knowledge.known_value(v, exact=True))
-               for v in _filter_literals(sql))
+               for v in literals)
 
 
 def _case_insensitive(sql: str, literal: str) -> bool:
     lit = re.escape(f"'{literal}'")
-    return bool(re.search(r"\b(?:lower|upper)\s*\([^()]*\)\s*(?:=|<>|!=|(?:not\s+)?in\s*\([^)]*?|(?:not\s+)?like\s*)" + lit,
+    # \s* after the operator: 'LOWER(x) = 'v'' (a space after '=') was never seen as case-insensitive.
+    return bool(re.search(r"\b(?:lower|upper)\s*\([^()]*\)\s*(?:=|<>|!=|(?:not\s+)?in\s*\([^)]*?|(?:not\s+)?like)\s*" + lit,
                           sql, re.I) or re.search(r"\bilike\s*" + lit, sql, re.I))
 
 
@@ -399,6 +437,80 @@ def _impossible_shares(df: pd.DataFrame | None) -> list[str]:
         if vals.notna().any() and float(vals.max()) > 100.5:
             out.append(f"{name} = {float(vals.max()):,.2f}")
     return out
+
+
+def _double_counted(df: pd.DataFrame | None) -> list[str]:
+    """A column that is A + B where A and B are identical on every row: the same items counted twice.
+    11 Nov: 'pending SAT by project' UNION-ed the same snapshot twice -> 527,236 eligible pending + 527,236
+    'installed not SAT' = 1,054,472 (the real figure is 527,236)."""
+    if not isinstance(df, pd.DataFrame) or len(df) < 2:
+        return []
+    num = {c: pd.to_numeric(df[c], errors="coerce") for c in df.columns}
+    num = {c: v for c, v in num.items() if v.notna().all() and (v != 0).any()}
+    cols = list(num)
+    for i, a in enumerate(cols):
+        for b in cols[i + 1:]:
+            if not (num[a] == num[b]).all():
+                continue
+            for t in cols:
+                if t not in (a, b) and ((num[a] + num[b] - num[t]).abs() < 0.5).all():
+                    return [f"{t} = {a} + {b}, but {a} and {b} are identical on every row"]
+    return []
+
+
+_MONTHS = {m: i for i, m in enumerate(["jan", "feb", "mar", "apr", "may", "jun", "jul", "aug", "sep", "oct", "nov", "dec"], 1)}
+
+
+def _row_month(row) -> pd.Timestamp | None:
+    """The month a result row is labelled with ('June', 'Jun 2026', 2026-06-01 ...), or None."""
+    for v in row:
+        if isinstance(v, (pd.Timestamp,)) or hasattr(v, "year") and hasattr(v, "month"):
+            try:
+                return pd.Timestamp(year=v.year, month=v.month, day=1)
+            except Exception:
+                continue
+        s = str(v).strip().lower()
+        m = re.fullmatch(r"(jan|feb|mar|apr|may|jun|jul|aug|sep|oct|nov|dec)[a-z]*\.?(?:[\s-]+(\d{4}))?", s)
+        if m:
+            return pd.Timestamp(year=int(m.group(2) or pd.Timestamp.now().year), month=_MONTHS[m.group(1)], day=1)
+        m = re.fullmatch(r"(\d{4})-(\d{2})(?:-\d{2})?", s)
+        if m:
+            return pd.Timestamp(year=int(m.group(1)), month=int(m.group(2)), day=1)
+    return None
+
+
+def _empty_periods(df: pd.DataFrame | None, tables: list[str] | None) -> list[str]:
+    """Period rows whose every measure is 0 / empty although the source table holds that period (data skeleton).
+    12 Nov: 'feeder loss June vs July' picked months from dt_load_profile's 10-day list (no June) -> June = 0
+    feeders, NULL loss, and the answer said June data is missing; feeder_loss holds June."""
+    if not isinstance(df, pd.DataFrame) or df.empty or len(df) > 40 or not tables:
+        return []
+    try:
+        from gmr_agents.presentation.investigate import _table_starts
+        from gmr_agents.retrieval import data_skeleton
+        cards = {c.get("table"): c for c in (data_skeleton.load() or {}).get("tables") or []}
+    except Exception:
+        return []
+    ends = []
+    for t in tables:
+        for col, span in ((cards.get(str(t).split(".")[-1]) or {}).get("dates") or {}).items():
+            if col in ("data_date", "month_date", "period_start"):
+                try:
+                    ends.append(pd.Timestamp(span[1]))
+                except Exception:
+                    pass
+    start = _table_starts(tables)
+    if start is None or not ends:
+        return []
+    out = []
+    for i in range(len(df)):
+        nums = pd.to_numeric(df.iloc[i], errors="coerce").dropna()
+        if len(nums) and (nums != 0).any():
+            continue
+        month = _row_month(df.iloc[i])
+        if month is not None and start.normalize().replace(day=1) <= month <= max(ends):
+            out.append(f"{month:%b %Y}")
+    return out if len(out) < len(df) else []
 
 
 def _run_one_extra(i: int, ex: dict, raw: dict, catalog, model: str) -> dict:

@@ -124,6 +124,104 @@ export interface TablePage {
   };
 }
 
+export interface InvestigationHypothesis {
+  h: string;
+  status: "SUPPORTED" | "NOT SUPPORTED" | "PARTLY" | "CHECK" | "NOT TESTABLE" | string;
+  evidence: string;
+}
+
+export interface InvestigationDimension {
+  by: string;
+  measure: string;
+  periods: [string, string];
+  rate: boolean;
+  groups: number;
+  total_prev?: number;
+  total_curr?: number;
+  change?: number;
+  pct?: number | null;
+  hypotheses: InvestigationHypothesis[];
+}
+
+export interface Investigation {
+  measure: string | null;
+  periods: [string, string] | null;
+  dimensions: InvestigationDimension[];
+  contradictions: string[];
+  confidence: { level: "high" | "medium" | "low"; reasons: string[] };
+  lead: { by: string; name: string; prev?: number; curr?: number; chg?: number; share?: number } | null;
+  premise?: string | null;
+  coverage_gap?: boolean;
+}
+
+export interface RelatedInvestigation {
+  id: string;
+  at: string;
+  question: string;
+  similarity?: number;
+  lead?: Investigation["lead"];
+  confidence?: string | null;
+  action?: string;
+}
+
+/** Insights panel (GET /api/metrics, /api/alerts, /api/insights/quality, /api/data/freshness,
+ * /api/investigations, /api/llm/status) -- all computed from the logs, no LLM call. */
+export interface OpsTarget { target: number; value: number; met: boolean }
+export interface OpsMetrics {
+  window: { hours: number; since: string; questions: number; llm_calls_logged: number };
+  latency_ms: { p50?: number; p95?: number; ttft_p50?: number; ttft_p95?: number };
+  tokens_per_question: { input_p50?: number; output_p50?: number; total_mean?: number; total_p95?: number };
+  work_per_question: { llm_calls_mean?: number; failed_llm_attempts?: number; db_queries_mean?: number };
+  quality: { refusal_rate?: number; busy_rate?: number; error_rate?: number; sql_repair_rate?: number;
+    number_correction_rate?: number; terminations?: Record<string, number> };
+  cache: { answer_cache_hit_rate?: number };
+  cost_usd_per_question?: number;
+  cost_per_success?: { successes?: number; success_rate?: number; tokens?: number; wasted_token_share?: number };
+  llm_failures_by_model?: Record<string, number>;
+  attribution?: { by_pattern?: { key: string; questions: number; token_share: number; success_rate: number; p50_ms: number }[] };
+  targets?: Record<string, OpsTarget>;
+}
+export interface OpsAlert {
+  kind: string;
+  severity: "high" | "medium" | "low" | string;
+  title: string;
+  detail?: string;
+  evidence?: { examples?: string[]; [k: string]: unknown };
+}
+export interface OpsQuality {
+  window: { hours: number; since: string };
+  questions: number;
+  good_answer_rate: number;
+  root_causes: { cause: string; count: number; share: number }[];
+  unanswered: { question: string; count: number; causes: Record<string, number>; last_seen: string; topics?: string[] }[];
+  recurring_failures: { signature: string; count: number; recovered: number; last_seen: string; examples?: string[] }[];
+  feedback: { votes: number; up: number; down: number; satisfaction: number | null; reasons: Record<string, number> };
+  models: { model: string; attempts: number; success_rate: number; p50_ms: number; p95_ms: number; failures?: Record<string, number> }[];
+}
+export interface FreshnessRow { table: string; column: string; latest: string; monthly: boolean; stale: boolean; behind: string; label: string }
+export interface InvestigationRecord {
+  id: string;
+  at: string;
+  question: string;
+  measure?: string | null;
+  periods?: string[] | null;
+  by?: string | null;
+  total_prev?: number | null;
+  total_curr?: number | null;
+  lead?: Investigation["lead"];
+  confidence?: { level?: string; reasons?: string[] } | string | null;
+  contradictions?: string[];
+  action?: string;
+}
+export interface LlmModelStatus { provider: string; model: string; enabled: boolean; cooling_down_seconds?: number | null }
+
+export interface InvestigationRecheck {
+  ok: boolean;
+  summary?: string;
+  error?: string;
+  same_window?: boolean;
+}
+
 export interface AIQueryResponse {
   question: string;
   interpreted_query?: string;
@@ -144,6 +242,10 @@ export interface AIQueryResponse {
    * LLM): the live query + verified pattern/rules for data answers, the cited rule /
    * glossary chunks for explanations. */
   citations?: { id: string; source: string; location: string }[];
+  /** Why-questions: each explanation tested by code on the rows (backend presentation/investigate.py). */
+  investigation?: Investigation | null;
+  /** Earlier investigations of a similar question (backend ops/investigations.py). */
+  related_investigations?: RelatedInvestigation[];
   text_summary?: string;
   display_mode?: "summary_first" | "full";
   spelling_corrections?: { original: string; corrected: string }[];
@@ -156,10 +258,23 @@ export interface AIQueryResponse {
   detected_language?: string | null;
   /** The language the summary / insights are written in. */
   answer_language?: string;
+  /** Server-side counters for this answer (supervisor/run.py). */
+  execution?: {
+    latency_ms?: number;
+    db_queries?: number;
+    llm_calls?: number;
+    input_tokens?: number;
+    output_tokens?: number;
+    [key: string]: unknown;
+  };
   debug?: {
     planner_used?: string;
+    /** "athena" (MDM) | "postgres" (WFM) | null */
+    data_engine?: string | null;
     /** The SQL that produced the answer's data, when one was run. */
     sql?: string | null;
+    /** Supporting queries run alongside the main one (cross-domain, investigation splits). */
+    extra_sql?: string[];
     /** The model's short explanation of how it answered. */
     reasoning?: string | null;
     topics?: string[];
@@ -462,6 +577,45 @@ export const apiClient = {
     return postJSON("/api/table-page", { trace_id, page, page_size, table_index, offset });
   },
 
+  /** The full table behind an answer as CSV / Excel: the backend re-runs the answer's validated
+   * SQL read-only without its display limit (no LLM call). Returns the file and its row count. */
+  tableExport: async (
+    trace_id: string, table_index: number, format: "csv" | "xlsx", labels: string[], title: string
+  ): Promise<{ blob: Blob; filename: string; rows: number; truncated: boolean }> => {
+    const controller = new AbortController();
+    const timer = window.setTimeout(() => controller.abort(), AI_QUERY_TIMEOUT_MS);
+    try {
+      const response = await fetch(`${API_BASE}/api/table-export`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ trace_id, table_index, format, labels, title }),
+        signal: controller.signal,
+      });
+      if (!response.ok) throw new Error(await errorMessage(response));
+      const disp = response.headers.get("Content-Disposition") ?? "";
+      const filename = /filename="([^"]+)"/.exec(disp)?.[1] ?? `table.${format}`;
+      return {
+        blob: await response.blob(),
+        filename,
+        rows: Number(response.headers.get("X-Row-Count") ?? 0),
+        truncated: response.headers.get("X-Truncated") === "1",
+      };
+    } finally {
+      window.clearTimeout(timer);
+    }
+  },
+
+  // Insights panel: read-only reports built from the logs (no LLM call, no question re-run).
+  getMetrics: async (hours = 24): Promise<OpsMetrics> => getJSON(`/api/metrics?hours=${hours}`),
+  getAlerts: async (hours = 24): Promise<{ at: string; alerts: OpsAlert[] }> => getJSON(`/api/alerts?hours=${hours}`),
+  getQuality: async (hours = 168): Promise<OpsQuality> => getJSON(`/api/insights/quality?hours=${hours}`),
+  getFreshness: async (): Promise<{ tables: FreshnessRow[]; stale: number }> => getJSON("/api/data/freshness"),
+  getSchemaChanges: async (): Promise<{ changes: Record<string, unknown>[] }> => getJSON("/api/data/schema-changes"),
+  getInvestigations: async (limit = 50): Promise<{ items: InvestigationRecord[] }> =>
+    getJSON(`/api/investigations?limit=${limit}`),
+  getLlmStatus: async (): Promise<{ models: LlmModelStatus[] }> => getJSON("/api/llm/status"),
+  digestUrl: (hours = 24): string => `${API_BASE}/api/insights/digest?hours=${hours}&format=md`,
+
   /** An earlier answer re-presented in another language: the backend translates the stored
    * answer's text (no SQL re-run, no new chat message, numbers checked unchanged). */
   translate: async (session_id: string, trace_id: string, target_language: LanguagePreference): Promise<TranslatedAnswer> => {
@@ -502,6 +656,11 @@ export const apiClient = {
   getFeedback: async (session_id: string): Promise<Record<string, FeedbackRating>> => {
     const data = (await getJSON(`/api/feedback?session_id=${encodeURIComponent(session_id)}`)) as { votes: Record<string, FeedbackRating> };
     return data.votes ?? {};
+  },
+
+  /** Decision-impact tracking: re-run an earlier investigation's query (read-only, no LLM call). */
+  recheckInvestigation: async (id: string): Promise<InvestigationRecheck> => {
+    return postJSON(`/api/investigations/${encodeURIComponent(id)}/recheck`, {});
   },
 
   /** Download link for the whole conversation (no query re-run, no LLM call). */

@@ -13,13 +13,13 @@ from gmr_agents.catalog import business_rules
 from gmr_agents.ops import answer_cache
 from gmr_agents.resolvers import language
 from gmr_agents.guards import injection
-from gmr_agents.checks import extreme_check, freshness, grounding, number_check, year_check
+from gmr_agents.checks import extreme_check, freshness, grounding, number_check, wording_check, year_check
 import logging
 from gmr_agents.agents.common import _ALL_TIME_LEAD_RE, _ANSWER_ROWS, _PAST_DATE_RE, _PERIOD_RE, _emit, _step, _today
 from gmr_agents.agents.followups import _followup_options, _options_text, _pick_followups
 from gmr_agents.presentation.analyst import _date_window, _partial_periods, _result_facts, _result_preview, _short_weeks
 from gmr_agents.presentation.blocks import _tidy_ts
-from gmr_agents.presentation import drivers as _drivers, stats as _stats
+from gmr_agents.presentation import drivers as _drivers, investigate as _investigate, stats as _stats
 
 log = logging.getLogger("gmr_agents.llm_pipeline")  # same logger name as before the split
 
@@ -104,11 +104,31 @@ def _write_answer(state: dict, triage: dict, plan: dict, result: dict, extras: l
         _step(state, "stats", time.perf_counter(), methods=sorted(_stats.wanted(state["question"] + " " + str(triage["question"]))),
               not_run=_stats.not_run(state["question"]))
     # 'Why did X rise / fall': where the change came from, per group, computed by code (presentation/drivers.py).
+    # Investigation (presentation/investigate.py): the same split along every result's dimension, standard
+    # explanations tested (coverage / localised / broad), splits reconciled, confidence graded. Replaces DRIVERS.
+    inv_text = ""
     try:
-        why = _drivers.breakdown(state["question"] + " || " + str(triage["question"]), result.get("result"))
+        inv_q = state["question"] + " || " + str(triage["question"])
+        splits = [(ex.get("purpose") or "", ex.get("result")) for ex in extras or []]
+        if _investigate.asked(inv_q) and not splits:
+            # The planner wrote no other breakdown: code re-runs the main query split by other dimensions.
+            t_split = time.perf_counter()
+            splits = _investigate.auto_splits(plan)
+            _step(state, "auto_splits", t_split, splits=[p for p, _ in splits])
+        inv_text, inv = _investigate.assess(inv_q, result.get("result"), splits, tables=plan.get("tables"))
+    except Exception:
+        log.warning("answer: investigation failed", exc_info=True)
+        inv = None
+    if inv:
+        state["investigation"] = inv
+        _step(state, "investigate", time.perf_counter(), splits=len(inv["dimensions"]),
+              confidence=inv["confidence"]["level"], contradictions=len(inv["contradictions"]))
+    try:
+        why = "" if inv_text else _drivers.breakdown(state["question"] + " || " + str(triage["question"]), result.get("result"))
     except Exception:
         log.warning("answer: driver breakdown failed", exc_info=True)
         why = ""
+    why = why or inv_text
     if why:
         parts.append(why)
         _step(state, "drivers", time.perf_counter(), lines=why.count("\n"))
@@ -177,7 +197,7 @@ def _write_answer(state: dict, triage: dict, plan: dict, result: dict, extras: l
     # values) are supported. 11 Nov: without them every Monte Carlo / projection figure was 'unsupported' and the
     # code repair cut it -- 'The Monte Carlo simulation of the next 30 days. For a single day ...'.
     given = " ".join([state["question"], triage["question"], triage.get("assumption") or "", notes or "", facts,
-                      analysis or "", lined or "",
+                      analysis or "", lined or "", why or "",
                       *(str(t.get("summary") or "")[:160] for t in memory[-2:])])
     allowed = number_check.allowed_values(frames, given)
     bad = number_check.unsupported(" ".join([summary, *insights]), allowed)
@@ -225,7 +245,7 @@ def _write_answer(state: dict, triage: dict, plan: dict, result: dict, extras: l
     # (406.82) and 3PH (301.12)' -- their TOTAL journey from the previous turn, so the comparison
     # was false (HTCT 87.50, 3PH 82.51 installation-to-SAT). The summary may still quote them.
     own = number_check.allowed_values(frames, " ".join([state["question"], triage["question"], notes or "",
-                                                         analysis or "", lined or ""]))
+                                                         analysis or "", lined or "", why or ""]))
     insights = [i for i in insights if not number_check.unsupported(i, own)]
     # Highest / lowest check: a figure can be IN the result yet not be the max / min it is
     # called ('lowest feeder count (48)' when Feb had 29). Wrong insight = dropped; a wrong
@@ -254,6 +274,25 @@ def _write_answer(state: dict, triage: dict, plan: dict, result: dict, extras: l
         # The English question too: 'ਪਿਛਲੇ ਮਹੀਨੇ' (last month) never matched the English period words.
         rest = _ALL_TIME_LEAD_RE.sub("", summary, count=1)
         summary = rest[:1].upper() + rest[1:]
+    # Pipeline words ('RESULT contains 200 rows ...') rewritten, and causes the answer was never given dropped
+    # (checks/wording_check.py; code only).
+    # A failure here must never cost the answer (12 Nov: a float cell crashed vocabulary() -> 'Something went wrong').
+    cleaned, causes = summary, []
+    try:
+        cleaned = wording_check.leaks(summary)
+        vocab = wording_check.vocabulary(frames, given)
+        causes = wording_check.unsupported_causes(cleaned, vocab)
+        cleaned = wording_check.drop_sentences(cleaned, causes)
+        insights = [wording_check.leaks(i) for i in insights]
+        insights = [i for i in insights if not wording_check.unsupported_causes(i, vocab)]
+    except Exception:
+        log.warning("answer: wording check failed", exc_info=True)
+        cleaned = summary
+    if cleaned != summary:
+        _step(state, "wording_check", time.perf_counter(), dropped_causes=causes[:3])
+        summary = cleaned
+        if state.get("emit") is not None:
+            _emit(state, "summary_replace", text=summary)
     # Sources of a data answer: built by code from what actually ran (never by the LLM).
     # The refresh time is the WFM gold snapshot's -- it says nothing about MDM tables.
     refreshed = answer_cache.current_version().split("|")[0] if state.get("agent") != "mdm" else ""

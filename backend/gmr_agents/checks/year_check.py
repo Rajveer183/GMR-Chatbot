@@ -39,7 +39,9 @@ def _frame_years(frames: list) -> dict[int, set[int]]:
                 if re.search(r"year", str(c), re.I):
                     out[0] |= {int(v) for v in s.dropna() if 1990 <= v <= 2100}
                 continue
-            text = s.astype(str)
+            # pandas 3: astype(str) keeps missing values as NaN (a float), which crashed the regex loops below
+            # (12 Nov, 'geographic heatmap of feeder loss' -> 'Something went wrong').
+            text = s.astype(object).where(s.notna(), "").astype(str)
             for v in text:
                 for y in _YEAR.findall(v):
                     out[0].add(int(y))

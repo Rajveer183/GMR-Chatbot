@@ -9,7 +9,7 @@ import {
   type SortingFn,
   type SortingState,
 } from "@tanstack/react-table";
-import { ArrowDown, ArrowUp, ArrowUpDown, ChevronLeft, ChevronRight } from "lucide-react";
+import { ArrowDown, ArrowUp, ArrowUpDown, ChevronLeft, ChevronRight, Download } from "lucide-react";
 import { apiClient, type AITableSpec } from "../api/client";
 import { formatTableCell, numericValueOf } from "../utils/formatters";
 import { tableToPayload } from "../utils/clipboard";
@@ -51,6 +51,27 @@ interface ResultTableProps {
 
 const PAGE_SIZES = [25, 50, 100];
 
+const saveBlob = (blob: Blob, filename: string) => {
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement("a");
+  a.href = url;
+  a.download = filename;
+  document.body.appendChild(a);
+  a.click();
+  a.remove();
+  window.setTimeout(() => URL.revokeObjectURL(url), 1000);
+};
+
+/** The rows the answer delivered as CSV -- used when the answer has no stored query to re-run. */
+const rowsToCsv = (columns: string[], labels: string[], rows: TableRow[]): Blob => {
+  const esc = (v: unknown) => {
+    const s = v === null || v === undefined ? "" : String(v);
+    return /[",\n\r]/.test(s) ? `"${s.replace(/"/g, '""')}"` : s;
+  };
+  const lines = [labels.map(esc).join(","), ...rows.map((r) => columns.map((c) => esc(r[c])).join(","))];
+  return new Blob(["﻿" + lines.join("\r\n")], { type: "text/csv;charset=utf-8" });
+};
+
 export const ResultTable: React.FC<ResultTableProps> = ({ table, traceId, tableIndex = 0, lang }) => {
   const [sorting, setSorting] = useState<SortingState>([]);
   const [page, setPage] = useState(1);
@@ -58,6 +79,8 @@ export const ResultTable: React.FC<ResultTableProps> = ({ table, traceId, tableI
   const [remoteRows, setRemoteRows] = useState<TableRow[] | null>(null);
   const [loading, setLoading] = useState(false);
   const [pageError, setPageError] = useState<string | null>(null);
+  const [exporting, setExporting] = useState<"csv" | "xlsx" | null>(null);
+  const [exportNote, setExportNote] = useState<string | null>(null);
 
   const columns = useMemo<ColumnDef<TableRow>[]>(
     () =>
@@ -159,6 +182,27 @@ export const ResultTable: React.FC<ResultTableProps> = ({ table, traceId, tableI
 
   const rows = instance.getRowModel().rows;
 
+  // Download: the full table (every row, not just this page) -- the backend re-runs the answer's
+  // validated SQL read-only (no LLM call). Falls back to the delivered rows when there is no query.
+  const labels = table.columns.map((name) => table.column_labels?.[name] || name.replace(/_/g, " "));
+  const baseName = (table.display_title || table.title || "table").replace(/[^\w\- ]+/g, "_").slice(0, 60) || "table";
+  const download = async (format: "csv" | "xlsx") => {
+    setExporting(format);
+    setExportNote(null);
+    try {
+      if (!traceId) throw new Error("no trace");
+      const got = await apiClient.tableExport(traceId, tableIndex, format, labels, baseName);
+      saveBlob(got.blob, got.filename);
+      if (got.truncated) setExportNote(`Downloaded the first ${got.rows.toLocaleString()} rows (export limit).`);
+    } catch {
+      const all = totalRow ? [...delivered, totalRow] : delivered;
+      saveBlob(rowsToCsv(table.columns, labels, all), `${baseName}.csv`);
+      if (all.length < totalCount) setExportNote(`Downloaded the ${all.length.toLocaleString()} rows shown in the answer.`);
+    } finally {
+      setExporting(null);
+    }
+  };
+
   return (
     <div className="table-card">
       <div className="table-card-toolbar">
@@ -174,13 +218,26 @@ export const ResultTable: React.FC<ResultTableProps> = ({ table, traceId, tableI
               : uiText(lang, "totalRows", { total: totalCount.toLocaleString() })}
           </p>
         </div>
-        <CopyButton
-          getPayload={() => tableToPayload(table)}
-          label={uiText(lang, "copyTable")}
-          title={uiText(lang, "copyTableTitle")}
-          copiedLabel={uiText(lang, "copied")}
-        />
+        <div className="table-card-actions">
+          <CopyButton
+            getPayload={() => tableToPayload(table)}
+            label={uiText(lang, "copyTable")}
+            title={uiText(lang, "copyTableTitle")}
+            copiedLabel={uiText(lang, "copied")}
+          />
+          <div className="table-download">
+            <button type="button" className="table-download-btn" onClick={() => void download("csv")} disabled={!!exporting}
+                    title="Download every row as CSV">
+              <Download size={13} /> {exporting === "csv" ? "…" : "CSV"}
+            </button>
+            <button type="button" className="table-download-btn" onClick={() => void download("xlsx")} disabled={!!exporting}
+                    title="Download every row as an Excel file">
+              <Download size={13} /> {exporting === "xlsx" ? "…" : "Excel"}
+            </button>
+          </div>
+        </div>
       </div>
+      {exportNote ? <div className="table-page-status">{exportNote}</div> : null}
       <div className="table-container">
         <table className="data-table">
           <thead>

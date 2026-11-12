@@ -110,6 +110,8 @@ const en = {
   exportChat: "Export",
   exportHtml: "Report (HTML / print to PDF)",
   exportMd: "Markdown",
+  hideSidebar: "Hide sidebar",
+  showSidebar: "Show sidebar",
   exportTitle: "Download this whole conversation",
 };
 
