@@ -8,6 +8,7 @@ import { DASHBOARD_CARDS } from "./charts/dashboardPalette";
 import { ExpandableChartModal } from "./ExpandableChartModal";
 import { ResultTable } from "./ResultTable";
 import { InsightList } from "./InsightList";
+import { FeederComparePanel } from "./FeederComparePanel";
 import { WarningBox } from "./WarningBox";
 import { SourcesNote } from "./SourcesNote";
 import { SuggestedQuestions } from "./SuggestedQuestions";
@@ -56,8 +57,10 @@ export const ResultRenderer = memo(function ResultRenderer({
   // to mention reconciliation -- the frontend overriding which figures the
   // backend had decided the answer should contain. backend/agent/shape.py owns
   // that decision.
-  const displayKpis = result.kpis ?? [];
-  const charts = result.charts ?? [];
+  // A consumer's feeder comparison is drawn by its own panel: no KPI cards / plain chart, tables folded below it.
+  const feederCompare = result.feeder_compare ?? null;
+  const displayKpis = feederCompare ? [] : result.kpis ?? [];
+  const charts = feederCompare ? [] : result.charts ?? [];
   const tables = result.tables ?? [];
   // Section headings follow the language the answer is written in.
   const lang = result.answer_language;
@@ -122,6 +125,34 @@ export const ResultRenderer = memo(function ResultRenderer({
         </section>
       ) : null}
 
+      {feederCompare ? (
+        <section className="chat-result-section result-stagger" style={{ "--stagger": 1 } as React.CSSProperties}>
+          <FeederComparePanel data={feederCompare} onAsk={onFollowUp ? (q) => onFollowUp(q) : undefined} />
+        </section>
+      ) : null}
+
+      {feederCompare && tables.length ? (
+        <details className="chat-result-section fcp-data">
+          <summary>Data tables &amp; downloads ({tables.length})</summary>
+          {tables.map((table, index) => (
+        <section
+          key={table.id}
+          className="chat-result-section result-stagger"
+          style={{ "--stagger": 2 + index } as React.CSSProperties}
+        >
+          <h4 className="chat-section-heading">
+            {table.display_heading || table.heading || (index === 0 ? uiText(lang, "resultPreview") : table.display_title || table.title)}
+          </h4>
+          <ResultTable table={table} traceId={table.trace_id ?? result.debug?.trace_id}
+            tableIndex={table.table_index ?? index} lang={lang} />
+        </section>
+      ))}
+
+        </details>
+      ) : null}
+
+      {!feederCompare ? (
+        <>
       {tables.map((table, index) => (
         <section
           key={table.id}
@@ -136,7 +167,10 @@ export const ResultRenderer = memo(function ResultRenderer({
         </section>
       ))}
 
-      <InsightList title={uiText(lang, "insights")}items={result.insights ?? []} />
+        </>
+      ) : null}
+
+      {!feederCompare ? <InsightList title={uiText(lang, "insights")} items={result.insights ?? []} /> : null}
 
       {result.report?.trace_id ? (
         <section className="chat-result-section">

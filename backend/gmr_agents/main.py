@@ -63,6 +63,7 @@ from shared.session_store import SessionStore
 from gmr_agents.ops import answer_cache, investigations, prewarm
 from gmr_agents.presentation import restyle
 from gmr_agents.presentation import report
+from gmr_agents.presentation import feeder_compare
 from gmr_agents.resolvers import language, multi_question
 from gmr_agents.llm_pipeline import run_agent
 from gmr_agents.catalog import business_rules
@@ -444,6 +445,43 @@ def _report_answer(question: str, trace_id: str, session_id: str, t0: float, emi
     return response, context
 
 
+def _feeder_compare_answer(question: str, req: dict, trace_id: str, session_id: str, t0: float,
+                           emit=None) -> tuple[dict, dict] | None:
+    """One consumer vs every feeder of its substation (presentation/feeder_compare.py), built by code, logged like
+    any answer (sql / extra_sql = its tables' queries, so paging / download re-run them). None when it could not be
+    built -- the question then goes through the normal pipeline."""
+    if emit is not None:
+        emit({"type": "status", "message": "Comparing the substation's feeders"})
+    try:
+        built = feeder_compare.build(req)
+    except Exception:
+        log.exception("[%s] feeder comparison failed -- answering through the pipeline", trace_id)
+        return None
+    ms = round((time.perf_counter() - t0) * 1000, 1)
+    state = {"summary": built["summary"], "insights": built["insights"], "kpis": built["kpis"],
+             "tables": built["tables"], "charts": built["charts"], "agent": "mdm", "trace_id": trace_id,
+             "total_ms": ms, "plan": {"sql": built["sql"], "extra_sql": built["extra_sql"], "data_engine": "athena",
+                                      "planner": "feeder_compare"}}
+    response = _build_response(question, state)
+    if built.get("panel"):
+        response["feeder_compare"] = built["panel"]   # drawn by the frontend's FeederComparePanel
+    meter = built.get("meter")
+    context = {"domain": "mdm", "answer_kind": "feeder_compare", "topics": ["mdm_autoindexing"],
+               "filters": [f"meter_no = '{meter}'"] if meter else [], "meter_no": meter,
+               "kpis": [f"{k['label']}: {k['formatted_value']}" for k in built["kpis"]]}
+    append_jsonl("questions", {
+        "at": datetime.now(timezone(timedelta(hours=5, minutes=30))).strftime("%Y-%m-%dT%H:%M:%S"),
+        "trace_id": trace_id, "session_id": session_id, "question": question, "kind": "feeder_compare",
+        "domain": "mdm", "sql": built["sql"], "extra_sql": built["extra_sql"],
+        "rows": sum(len(t["rows"]) for t in built["tables"]), "refused": False, "summary": built["summary"][:500],
+        "total_ms": ms, "llm_calls": 0, "tokens": 0,
+        "execution": {"latency_ms": ms, "ttft_ms": ms, "llm_calls": 0, "input_tokens": 0, "output_tokens": 0,
+                      "db_queries": 1 + len(built["extra_sql"]) + (1 if built.get("sql") else 0),
+                      "estimated_cost_usd": 0.0, "termination": "FEEDER_COMPARE"}})
+    log.info("[%s] FEEDER COMPARE %s in %.0fms", trace_id, built["title"], ms)
+    return response, context
+
+
 def answer_question(question: str, session_id: str | None, *, store: SessionStore | None = None,
                     prior_questions: list[str] | None = None, via_followup: bool = False, emit=None,
                     response_language: str | None = None, canonical_question: str | None = None) -> dict:
@@ -493,6 +531,14 @@ def answer_question(question: str, session_id: str | None, *, store: SessionStor
     if not (previous or restyled or recapped) and report.is_report(question):
         reported = _report_answer(question, trace_id, session_id, t0, emit)
         cached = None  # a report always reads today's figures
+    elif not (previous or restyled or recapped):
+        # 'Mapping of meter AL1157377' / 'which feeder is consumer X on': the consumer against every feeder of its
+        # substation on the audit's outage evidence (presentation/feeder_compare.py) -- no LLM call.
+        compare_req = feeder_compare.request(question, prior_turns)
+        if compare_req is not None:
+            reported = _feeder_compare_answer(question, compare_req, trace_id, session_id, t0, emit)
+            if reported is not None:
+                cached = None
     if restyled is not None or recapped is not None:
         ms = round((time.perf_counter() - t0) * 1000, 1)
         if restyled is not None:

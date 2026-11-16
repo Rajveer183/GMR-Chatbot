@@ -466,6 +466,13 @@ def _meter_reading_problems(question: str, sql_texts: list[str]) -> list[str]:
                 and "dim_meter_replaced" not in low and not _SILVER_READINGS.search(low):
             problems.append("one meter's master row: dim_meter UNION ALL dim_meter_replaced (a replaced meter is only in "
                             "hes_gold.dim_meter_replaced) -- say which one it was found in")
+        # Live 16 Nov: 'which feeder is consumer AL1157049 on' filtered consumer_id = 'AL1157049' -> 0 rows, "not
+        # present". consumer_id holds digits only; a letters+digits value is a meter serial whatever word precedes it.
+        serial = re.search(r"\bconsumer_id\b[^;\n]{0,90}?'\s*([a-z]{1,4}\d{6,10})\s*'", low)
+        if serial:
+            problems.append(f"'{serial.group(1).upper()}' is a meter serial, not a consumer number (consumer_id holds "
+                            f"digits only): filter meter_no = '{serial.group(1).upper()}' even when the question calls it "
+                            "a consumer")
         if re.search(r"\bhes_gold\.dim_meter_(?:energy|asof_\w+)\b", low):
             problems.append("use hes_gold.dim_meter (current) + dim_meter_replaced; dim_meter_energy is retired and "
                             "dim_meter_asof_* is a frozen 8 Sep copy")

@@ -143,6 +143,29 @@ export interface InvestigationDimension {
   hypotheses: InvestigationHypothesis[];
 }
 
+export interface FeederCompareSide { code: string; name: string | null; dark: number; seen: number }
+export interface FeederCompareFeeder {
+  rank: number | null; code: string; name: string | null; role: string;
+  seen: number; dark: number; powered: number; match_pct: number | null; net: number | null; mi: number | null;
+  declared: boolean; recommended: boolean; best: boolean; other_substation: string | null;
+}
+export interface FeederCompareOutage {
+  feeder: string; no: number; start: string | null; end: string | null;
+  start_label: string; end_label: string; half_hours: number; dark: boolean;
+}
+export interface FeederCompare {
+  meter: string; category: string; sub_station: string; zone: string | null; project: string | null;
+  month: string; month_label: string; verdict: "CONFIRMED" | "REASSIGN" | "REVIEW" | "NO DATA" | string;
+  verdict_text: string;
+  declared: FeederCompareSide | null; recommended: FeederCompareSide | null; strongest: FeederCompareSide | null;
+  cross_substation: boolean; tied: boolean;
+  feeders: FeederCompareFeeder[]; feeders_in_substation: number; outages: FeederCompareOutage[];
+  months: { month: string; label: string; verdict: string }[];
+  /** The half-hours the consumer itself had no supply, merged into windows (IST). */
+  consumer_dark?: { start: string; end: string }[];
+  action: string | null; notes: string[];
+}
+
 export interface Investigation {
   measure: string | null;
   periods: [string, string] | null;
@@ -248,6 +271,9 @@ export interface AIQueryResponse {
   related_investigations?: RelatedInvestigation[];
   /** A daily / weekly / monthly report built by code (backend presentation/report.py): whole-report download. */
   report?: { title: string; period: string; trace_id: string } | null;
+  /** One consumer vs every feeder of its substation on the mapping audit's outage evidence
+   * (backend presentation/feeder_compare.py), drawn by FeederComparePanel. */
+  feeder_compare?: FeederCompare | null;
   text_summary?: string;
   display_mode?: "summary_first" | "full";
   spelling_corrections?: { original: string; corrected: string }[];
