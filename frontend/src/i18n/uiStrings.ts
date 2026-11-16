@@ -84,9 +84,9 @@ const en = {
   starter1: "Give me installed so far, SAT percentage and remaining stock in one go.",
   starter2: "Which project installed the most meters in the last 30 days?",
   starter3: "Describe the installation trend over the last 12 months.",
-  es_card1Title: "Ask your way",
-  es_card2Title: "Follow up naturally",
-  es_card3Title: "Verify & export",
+  es_card1Title: "Multilingual Chat",
+  es_card2Title: "Follow-ups",
+  es_card3Title: "Verify & Export",
   // feedback + export
   helpful: "Helpful",
   notHelpful: "Not helpful",
@@ -166,9 +166,9 @@ const hinglish: Strings = {
   starter1: "Abhi tak installed meters, SAT percentage aur bacha hua stock ek saath batao.",
   starter2: "Pichhle 30 din mein kis project ne sabse zyada meters install kiye?",
   starter3: "Pichhle 12 mahino ka installation trend batao.",
-  es_card1Title: "Apne tareeke se poochho",
-  es_card2Title: "Aaram se follow-up karo",
-  es_card3Title: "Verify aur export karo",
+  es_card1Title: "Multilingual Chat",
+  es_card2Title: "Follow-ups",
+  es_card3Title: "Verify & Export",
 };
 
 const hi: Strings = {
@@ -201,9 +201,9 @@ const hi: Strings = {
   starter1: "अब तक इंस्टॉल हुए मीटर, SAT प्रतिशत और बचा हुआ स्टॉक एक साथ बताइए।",
   starter2: "पिछले 30 दिनों में किस प्रोजेक्ट ने सबसे ज़्यादा मीटर इंस्टॉल किए?",
   starter3: "पिछले 12 महीनों का इंस्टॉलेशन ट्रेंड बताइए।",
-  es_card1Title: "अपने तरीके से पूछें",
-  es_card2Title: "सहज रूप से आगे पूछें",
-  es_card3Title: "जाँचें और एक्सपोर्ट करें",
+  es_card1Title: "बहुभाषी चैट",
+  es_card2Title: "आगे के प्रश्न",
+  es_card3Title: "जाँचें व एक्सपोर्ट",
 };
 
 const mr: Strings = {
@@ -233,9 +233,9 @@ const mr: Strings = {
   starter1: "आतापर्यंत बसवलेले मीटर, SAT टक्केवारी आणि उरलेला स्टॉक एकत्र सांगा.",
   starter2: "मागील 30 दिवसांत कोणत्या प्रकल्पाने सर्वाधिक मीटर बसवले?",
   starter3: "मागील 12 महिन्यांचा इन्स्टॉलेशन ट्रेंड सांगा.",
-  es_card1Title: "तुमच्या पद्धतीने विचारा",
-  es_card2Title: "सहजपणे पुढे विचारा",
-  es_card3Title: "पडताळा आणि एक्सपोर्ट करा",
+  es_card1Title: "बहुभाषिक चॅट",
+  es_card2Title: "पुढील प्रश्न",
+  es_card3Title: "पडताळा व एक्सपोर्ट",
 };
 
 const bn: Strings = {
@@ -265,9 +265,9 @@ const bn: Strings = {
   starter1: "এখন পর্যন্ত ইনস্টল হওয়া মিটার, SAT শতাংশ ও বাকি স্টক একসাথে দিন।",
   starter2: "গত 30 দিনে কোন প্রজেক্ট সবচেয়ে বেশি মিটার ইনস্টল করেছে?",
   starter3: "গত 12 মাসের ইনস্টলেশন প্রবণতা বর্ণনা করুন।",
-  es_card1Title: "নিজের মতো করে জিজ্ঞাসা করুন",
-  es_card2Title: "স্বাভাবিকভাবে পরের প্রশ্ন করুন",
-  es_card3Title: "যাচাই ও এক্সপোর্ট করুন",
+  es_card1Title: "বহুভাষিক চ্যাট",
+  es_card2Title: "পরের প্রশ্ন",
+  es_card3Title: "যাচাই ও এক্সপোর্ট",
 };
 
 const ta: Strings = {
@@ -297,9 +297,9 @@ const ta: Strings = {
   starter1: "இதுவரை பொருத்தப்பட்ட மீட்டர்கள், SAT சதவீதம், மீதமுள்ள இருப்பு ஆகியவற்றை ஒரே நேரத்தில் தாருங்கள்.",
   starter2: "கடந்த 30 நாட்களில் எந்தத் திட்டம் அதிக மீட்டர்களைப் பொருத்தியது?",
   starter3: "கடந்த 12 மாதங்களின் நிறுவல் போக்கை விவரியுங்கள்.",
-  es_card1Title: "உங்கள் வழியில் கேளுங்கள்",
-  es_card2Title: "இயல்பாகத் தொடர்ந்து கேளுங்கள்",
-  es_card3Title: "சரிபார்த்து ஏற்றுமதி செய்யுங்கள்",
+  es_card1Title: "பன்மொழி அரட்டை",
+  es_card2Title: "தொடர் கேள்விகள்",
+  es_card3Title: "சரிபார் & ஏற்றுமதி",
 };
 
 const te: Strings = {
@@ -329,9 +329,9 @@ const te: Strings = {
   starter1: "ఇప్పటివరకు అమర్చిన మీటర్లు, SAT శాతం, మిగిలిన స్టాక్ ఒకేసారి ఇవ్వండి.",
   starter2: "గత 30 రోజుల్లో ఏ ప్రాజెక్ట్ ఎక్కువ మీటర్లు అమర్చింది?",
   starter3: "గత 12 నెలల ఇన్‌స్టాలేషన్ ధోరణిని వివరించండి.",
-  es_card1Title: "మీకు నచ్చినట్లు అడగండి",
-  es_card2Title: "సహజంగా తదుపరి ప్రశ్న అడగండి",
-  es_card3Title: "ధృవీకరించి ఎగుమతి చేయండి",
+  es_card1Title: "బహుభాషా చాట్",
+  es_card2Title: "తదుపరి ప్రశ్నలు",
+  es_card3Title: "ధృవీకరణ & ఎగుమతి",
 };
 
 const gu: Strings = {
@@ -361,9 +361,9 @@ const gu: Strings = {
   starter1: "અત્યાર સુધી લાગેલા મીટર, SAT ટકાવારી અને બાકી સ્ટોક એકસાથે જણાવો.",
   starter2: "છેલ્લા 30 દિવસમાં કયા પ્રોજેક્ટે સૌથી વધુ મીટર લગાવ્યા?",
   starter3: "છેલ્લા 12 મહિનાનો ઇન્સ્ટોલેશન ટ્રેન્ડ વર્ણવો.",
-  es_card1Title: "તમારી રીતે પૂછો",
-  es_card2Title: "સહજ રીતે આગળ પૂછો",
-  es_card3Title: "ચકાસો અને એક્સપોર્ટ કરો",
+  es_card1Title: "બહુભાષી ચેટ",
+  es_card2Title: "આગળના પ્રશ્નો",
+  es_card3Title: "ચકાસો અને એક્સપોર્ટ",
 };
 
 const pa: Strings = {
@@ -393,9 +393,9 @@ const pa: Strings = {
   starter1: "ਹੁਣ ਤੱਕ ਲੱਗੇ ਮੀਟਰ, SAT ਪ੍ਰਤੀਸ਼ਤ ਅਤੇ ਬਾਕੀ ਸਟਾਕ ਇਕੱਠੇ ਦੱਸੋ।",
   starter2: "ਪਿਛਲੇ 30 ਦਿਨਾਂ ਵਿੱਚ ਕਿਸ ਪ੍ਰੋਜੈਕਟ ਨੇ ਸਭ ਤੋਂ ਵੱਧ ਮੀਟਰ ਲਗਾਏ?",
   starter3: "ਪਿਛਲੇ 12 ਮਹੀਨਿਆਂ ਦਾ ਇੰਸਟਾਲੇਸ਼ਨ ਰੁਝਾਨ ਦੱਸੋ।",
-  es_card1Title: "ਆਪਣੇ ਢੰਗ ਨਾਲ ਪੁੱਛੋ",
-  es_card2Title: "ਸਹਿਜ ਢੰਗ ਨਾਲ ਅੱਗੇ ਪੁੱਛੋ",
-  es_card3Title: "ਜਾਂਚੋ ਅਤੇ ਐਕਸਪੋਰਟ ਕਰੋ",
+  es_card1Title: "ਬਹੁ-ਭਾਸ਼ੀ ਚੈਟ",
+  es_card2Title: "ਅਗਲੇ ਸਵਾਲ",
+  es_card3Title: "ਜਾਂਚੋ ਅਤੇ ਐਕਸਪੋਰਟ",
 };
 
 const kn: Strings = {
@@ -425,9 +425,9 @@ const kn: Strings = {
   starter1: "ಇದುವರೆಗೆ ಅಳವಡಿಸಿದ ಮೀಟರ್‌ಗಳು, SAT ಶೇಕಡಾವಾರು ಮತ್ತು ಉಳಿದ ಸ್ಟಾಕ್ ಅನ್ನು ಒಟ್ಟಿಗೆ ತಿಳಿಸಿ.",
   starter2: "ಕಳೆದ 30 ದಿನಗಳಲ್ಲಿ ಯಾವ ಯೋಜನೆ ಹೆಚ್ಚು ಮೀಟರ್‌ಗಳನ್ನು ಅಳವಡಿಸಿದೆ?",
   starter3: "ಕಳೆದ 12 ತಿಂಗಳ ಅಳವಡಿಕೆ ಪ್ರವೃತ್ತಿಯನ್ನು ವಿವರಿಸಿ.",
-  es_card1Title: "ನಿಮ್ಮ ರೀತಿಯಲ್ಲಿ ಕೇಳಿ",
-  es_card2Title: "ಸಹಜವಾಗಿ ಮುಂದೆ ಕೇಳಿ",
-  es_card3Title: "ಪರಿಶೀಲಿಸಿ ಮತ್ತು ರಫ್ತು ಮಾಡಿ",
+  es_card1Title: "ಬಹುಭಾಷಾ ಚಾಟ್",
+  es_card2Title: "ಮುಂದಿನ ಪ್ರಶ್ನೆಗಳು",
+  es_card3Title: "ಪರಿಶೀಲನೆ & ರಫ್ತು",
 };
 
 const ml: Strings = {
@@ -457,9 +457,9 @@ const ml: Strings = {
   starter1: "ഇതുവരെ സ്ഥാപിച്ച മീറ്ററുകൾ, SAT ശതമാനം, ബാക്കിയുള്ള സ്റ്റോക്ക് എന്നിവ ഒരുമിച്ച് നൽകൂ.",
   starter2: "കഴിഞ്ഞ 30 ദിവസത്തിൽ ഏത് പ്രോജക്റ്റാണ് ഏറ്റവും കൂടുതൽ മീറ്ററുകൾ സ്ഥാപിച്ചത്?",
   starter3: "കഴിഞ്ഞ 12 മാസത്തെ ഇൻസ്റ്റലേഷൻ പ്രവണത വിവരിക്കൂ.",
-  es_card1Title: "നിങ്ങളുടെ രീതിയിൽ ചോദിക്കൂ",
-  es_card2Title: "സ്വാഭാവികമായി തുടർന്ന് ചോദിക്കൂ",
-  es_card3Title: "പരിശോധിച്ച് എക്സ്പോർട്ട് ചെയ്യൂ",
+  es_card1Title: "ബഹുഭാഷാ ചാറ്റ്",
+  es_card2Title: "തുടർചോദ്യങ്ങൾ",
+  es_card3Title: "പരിശോധന & എക്സ്പോർട്ട്",
 };
 
 // A tooltip with no translation of its own reads its short label instead of falling back to English.
