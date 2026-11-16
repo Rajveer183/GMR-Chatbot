@@ -1,6 +1,5 @@
 import React from "react";
-import { FileSpreadsheet, Languages, MessagesSquare, Sparkles } from "lucide-react";
-import { SuggestedQuestions } from "./SuggestedQuestions";
+import { ArrowUpRight, FileSpreadsheet, Gauge, Languages, MessagesSquare, Sparkles, TrendingUp, Trophy } from "lucide-react";
 import gmrLogo from "../assets/gmr_logo.png";
 import { uiText } from "../i18n/languages";
 
@@ -18,9 +17,13 @@ interface EmptyStateProps {
 /* Starters verified against the live backend (WFM KPI tables + MDM feeder
  * auto-indexing): each one returns a correct answer with KPI tiles or a chart,
  * and together they cover headline stats, project ranking (a drillable bar
- * chart), monthly trend, the supply-to-collection funnel and auto-indexing.
+ * chart) and the monthly trend.
  * Re-check with backend/eval/question_bank/run_bank.py before changing them. */
-const STARTER_KEYS = ["starter1", "starter2", "starter3", "starter4", "starter5"] as const;
+const STARTERS = [
+  { key: "starter1", icon: Gauge },
+  { key: "starter2", icon: Trophy },
+  { key: "starter3", icon: TrendingUp },
+] as const;
 
 // Each card gets its own accent (drawn from the same brand chart palette as
 // ChartVisualization -- frontend/src/components/chartOptions.ts) so this
@@ -57,7 +60,7 @@ export const EmptyState: React.FC<EmptyStateProps> = ({
   lang = "en",
 }) => {
   // Starters verified in English: shown in the screen language, a click runs the English one.
-  const starters = STARTER_KEYS.map((key) => ({ shown: uiText(lang, key), verified: uiText("en", key) }));
+  const starters = STARTERS.map(({ key, icon }) => ({ icon, shown: uiText(lang, key), verified: uiText("en", key) }));
   return (
     <div className="empty-state">
       <div className="empty-state-glow" aria-hidden="true" />
@@ -72,10 +75,22 @@ export const EmptyState: React.FC<EmptyStateProps> = ({
           <div className="empty-state-starters-label">
             <Sparkles size={11} /> {uiText(lang, "tryAsking")}
           </div>
-          <SuggestedQuestions
-            questions={starters.map((s) => s.shown)}
-            onPick={(q, i) => onSuggestedQuestion(q, q !== starters[i].verified ? starters[i].verified : undefined)}
-          />
+          <div className="empty-state-starter-grid">
+            {starters.map(({ icon: Icon, shown, verified }) => (
+              <button
+                key={verified}
+                type="button"
+                className="empty-state-starter"
+                onClick={() => onSuggestedQuestion(shown, shown !== verified ? verified : undefined)}
+              >
+                <span className="empty-state-starter-icon">
+                  <Icon size={16} />
+                </span>
+                <span className="empty-state-starter-text">{shown}</span>
+                <ArrowUpRight size={16} className="empty-state-starter-arrow" />
+              </button>
+            ))}
+          </div>
         </div>
       ) : null}
 
@@ -87,7 +102,7 @@ export const EmptyState: React.FC<EmptyStateProps> = ({
             style={{ "--cap-accent": accent } as React.CSSProperties}
           >
             <div className="empty-state-capability-icon" style={{ color: accent, background: accentBg }}>
-              <Icon size={16} />
+              <Icon size={19} />
             </div>
             <div className="empty-state-capability-title">{uiText(lang, cardTitle)}</div>
           </div>
