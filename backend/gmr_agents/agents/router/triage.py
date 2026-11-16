@@ -144,7 +144,7 @@ def _parse_triage(d: dict, state: dict, model: str) -> dict:
     elif kind == "data" and _CONCEPT_DIFF_RE.search(state["question"]):
         kind = "explain"  # see _CONCEPT_DIFF_RE
     elif kind == "chitchat" and _CHART_ASK_RE.search(state["question"]) \
-            and not _DASHBOARD_UI_RE.search(state["question"]):
+            and not _DASHBOARD_UI_RE.search(state["question"]) and not _CHART_NOT_ASK_RE.search(state["question"]):
         kind = "data"     # see _CHART_ASK_RE
     # Technical dashboard cards (power quality / DT load / load violation) are MDM whatever the model
     # says -- before 6 Nov the triage prompt called voltage and load out_of_scope. Checked before the
@@ -223,9 +223,14 @@ _WHY_DATA_RE = re.compile(
 # A chart / graph of data is a data answer (every data answer carries one). Live 16 Nov: 'also show mw graphs fro the
 # same' was triaged chitchat ("I can't draw charts", no query) -- the prompt listed 'switch a chart type' as a UI action.
 # The dashboard page itself (its filters / cards / screen) stays with the UI rule.
-_CHART_ASK_RE = re.compile(r"\b(?:graphs?|charts?|plot\w*|visuals?|visuali[sz]\w*|diagrams?)\b", re.I)
-_DASHBOARD_UI_RE = re.compile(r"\b(?:dashboard|my (?:page|screen)|on (?:the|my) (?:page|screen)|filters?|reset|"
+_CHART_ASK_RE = re.compile(r"\b(?:graphs?|charts?|plot\w*|visuals?|visuali[sz]\w*|diagrams?)\b|ग्राफ|चार्ट|प्लॉट", re.I)
+# Only the dashboard's own filters: 'show graph with filter Kashi' is a data ask (a chart of Kashi).
+_DASHBOARD_UI_RE = re.compile(r"\b(?:dashboard|my (?:page|screen)|on (?:the|my) (?:page|screen)|"
+                              r"(?:my|the|these|those|page|applied) filters?|filters? (?:on|in|applied)|reset|"
                               r"what am i looking at|tab)\b", re.I)
+# Chart words that are not asks to see data: reading a chart ('what does this graph mean') and land plots.
+_CHART_NOT_ASK_RE = re.compile(r"\b(?:mean\w*|explain\w*|understand|interpret\w*|how (?:do|to) (?:i )?read)\b|"
+                               r"\bplot (?:no|number|#)", re.I)
 
 # 'What is the difference between % DT loading and % DT peak loading?' is a definition question; triage called it
 # data on 10 Nov and the SQL mixed two cards' columns. Only the bare form: no digits (arithmetic on given numbers is
@@ -908,13 +913,15 @@ _USER_PERIOD_RE = re.compile(
     r"\d|\b(?:today|yesterday|tomorrow|day|days|daily|week\w*|month\w*|year\w*|quarter|since|from|till|until|upto|"
     r"before|after|ago|last|this|past|previous|next|recent\w*|latest|so far|till date|jan\w*|feb\w*|mar\w*|apr\w*|"
     r"may|jun\w*|jul\w*|aug\w*|sep\w*|oct\w*|nov\w*|dec\w*|kal|aaj|parso|din|dino|hafte|hafta|mahine|mahina|saal|"
-    r"varsh|pichh\w*|abhi|tak|trend\w*)\b|कल|आज|दिन|हफ्त|सप्ताह|महीन|माह|साल|वर्ष|पिछल|इस", re.I)
+    r"varsh|pichh\w*|abhi|tak|trend\w*|yday|ytd|mtd|wtd|qtd|fytd|lw|lm|tdy)\b|कल|आज|दिन|हफ्त|सप्ताह|महीन|माह|साल|वर्ष|पिछल|इस", re.I)
 _INVENTED_PERIOD_RE = re.compile(
     r",?\s*\b(?:on |for |in )?(?:yesterday|today|this (?:week|month|year)|last (?:week|month|year)|"
     r"(?:in |over |during )?the (?:last|past) \d+ (?:days?|weeks?|months?)|last \d+ (?:days?|weeks?|months?))\b", re.I)
 
 
 _PERIOD_KEYWORDS = ("yesterday", "today", "week", "month", "year", "last", "past", "days", "this")
+# Real words that sit within the fuzzy floor of a period word: 'least' ~ 'last' is 0.89 ('zone with least installs').
+_NOT_PERIOD_WORDS = {"least", "lest", "lost", "list", "fast", "vast", "mast", "paste", "pasta", "thin", "thus", "ways"}
 
 
 def _misspelled_period(asked: str, resolved: str) -> bool:
@@ -922,7 +929,7 @@ def _misspelled_period(asked: str, resolved: str) -> bool:
     triage 'How many meters were installed yesterday?' -> 'yesterday' stripped as invented -> all-time 4,350,767."""
     inserted = {w.lower() for m in _INVENTED_PERIOD_RE.finditer(resolved) for w in re.findall(r"[a-z]+", m.group(0), re.I)}
     keys = [k for k in _PERIOD_KEYWORDS if k in inserted]
-    tokens = [t.lower() for t in re.findall(r"[a-z]{3,}", asked, re.I)]
+    tokens = [t.lower() for t in re.findall(r"[a-z]{3,}", asked, re.I) if t.lower() not in _NOT_PERIOD_WORDS]
     for key in keys:
         floor = 0.7 if len(key) >= 6 else 0.75 if len(key) == 5 else 0.85   # short words: 'list'/'lost' != 'last'
         if any(difflib.SequenceMatcher(None, key, t).ratio() >= floor for t in tokens):

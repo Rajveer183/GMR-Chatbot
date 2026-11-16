@@ -121,6 +121,26 @@ class ShowChartAgainTest(unittest.TestCase):
         got = main._last_charted_answer(Store(), "s")
         self.assertEqual(got["response"]["debug"]["trace_id"], "abc")
 
+    def test_failed_data_turn_in_between_stops(self):
+        # Q1 charted, Q2 a data question that came back empty -> 'show graph for the same' means Q2, not Q1's chart
+        from gmr_agents import main
+        for between in ({"summary": "No rows", "debug": {"trace_id": "z", "sql": "SELECT 1"}},
+                        {"summary": "Can't answer", "refused": True, "debug": {"trace_id": "z"}}):
+            class Store:
+                def get_session(self, _sid, b=between):
+                    return {"messages": [{"role": "assistant", "content": "Kashi ...", "response": PREV},
+                                         {"role": "assistant", "content": "...", "response": b}]}
+            self.assertIsNone(main._last_charted_answer(Store(), "s"))
+
+    def test_units_without_reference_are_new_questions(self):
+        self.assertIsNone(restyle.restyle_request("show MW graphs"))
+        self.assertIsNone(restyle.restyle_request("show kwh chart"))
+        self.assertEqual(restyle.restyle_request("also show mw graphs fro the same"), (None, None))
+
+    def test_hindi_chart_asks_match(self):
+        for q in ("ग्राफ दिखाओ", "इसका ग्राफ भी दिखाओ", "चार्ट बना दो", "chart dikha sakte ho?"):
+            self.assertEqual(restyle.restyle_request(q), (None, None), q)
+
 
 class TriageChartAskTest(unittest.TestCase):
     def _kind(self, q, kind="chitchat"):
@@ -137,6 +157,15 @@ class TriageChartAskTest(unittest.TestCase):
         self.assertEqual(self._kind("change the chart type on my dashboard"), "chitchat")
         self.assertEqual(self._kind("hello"), "chitchat")
         self.assertEqual(self._kind("plot the weather chart", kind="out_of_scope"), "out_of_scope")
+        self.assertEqual(self._kind("what filters are applied on my page"), "chitchat")
+
+    def test_filter_value_chart_is_data(self):
+        self.assertEqual(self._kind("show graph with filter Kashi"), "data")
+        self.assertEqual(self._kind("ग्राफ दिखाओ"), "data")
+
+    def test_reading_a_chart_is_not_a_data_ask(self):
+        self.assertEqual(self._kind("what does this graph mean"), "chitchat")
+        self.assertEqual(self._kind("plot no 23 consumer"), "chitchat")
 
 
 if __name__ == "__main__":

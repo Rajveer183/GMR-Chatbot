@@ -44,20 +44,30 @@ _RECAP_SCOPE = re.compile(r"so far|conversation|chat|session|discussion|we (?:ha
 # ("I can't draw charts"). One optional filler word between tokens absorbs typos ('mw', 'fro').
 _CHART_WORD = r"(?:graphs?|charts?|plots?|visuals?|visuali[sz]ations?|diagrams?|graphics?)"
 _REF = r"(?:the same|same|it|that|this|them|these|those|above|the above|this data|that data|the data|these numbers|those numbers)"
+_FILLER = r"\w{1,3}"
+# 'show MW graphs' (no 'the same / it') asks for megawatt load -- a new query, not the last chart again.
+_UNIT_RE = re.compile(r"\b(?:mw|kw|kwh|mwh|mva|kva|kv|pf)\b", re.I)
+_REF_RE = re.compile(r"\b(?:same|it|that|this|them|these|those|above)\b|इसका|इसके|उसका|यही|इसी", re.I)
+_HI_VERB = r"(?:dikhao|dikha do|dikhaiye|dikha sakte ho|dikha sakte hain|dikha sakta hai|bana do|banao|banaiye|chahiye|do)"
+_DEV_CHART = r"(?:ग्राफ़?|चार्ट|प्लॉट)"
+_DEV_VERB = r"(?:दिखाओ|दिखा दो|दिखाइए|दिखाएं|दिखाएँ|दिखा सकते हो|बनाओ|बना दो|बनाइए|चाहिए)"
 SHOW_CHART_RE = re.compile(
     r"^\s*(?:also\s+|please\s+|pls\s+|can you\s+|could you\s+|now\s+|ok\s+|okay\s+|and\s+)*"
-    r"(?:(?:show|give|draw|display|make|plot|create|generate|share)(?:\s+\w{1,3})?(?:\s+(?:me|us))?(?:\s+(?:the|a|some))?"
-    rf"\s+{_CHART_WORD}(?:\s+(?:(?:for|of|on|from|\w{{1,3}})\s+)?{_REF})?(?:\s+(?:also|too|as well|please))?"
+    rf"(?:(?:show|give|draw|display|make|plot|create|generate|share)(?:\s+{_FILLER})?(?:\s+(?:me|us))?(?:\s+(?:the|a|some))?"
+    rf"\s+{_CHART_WORD}(?:\s+(?:(?:for|of|on|from|{_FILLER})\s+)?{_REF})?(?:\s+(?:also|too|as well|please))?"
     rf"|plot\s+{_REF}"
-    rf"|{_CHART_WORD}\s+(?:bhi\s+)?(?:dikhao|dikha do|dikhaiye|bana do|banao|banaiye|chahiye|do)"
-    rf"|{_REF}\s+(?:ka|ki|ke)\s+{_CHART_WORD}\s+(?:bhi\s+)?(?:dikhao|dikha do|dikhaiye|bana do|banao|banaiye|chahiye|do))"
-    r"\s*[.!?]*\s*$", re.I)
+    rf"|{_CHART_WORD}\s+(?:bhi\s+)?{_HI_VERB}"
+    rf"|{_REF}\s+(?:ka|ki|ke)\s+{_CHART_WORD}\s+(?:bhi\s+)?{_HI_VERB}"
+    rf"|(?:(?:इसका|इसके|उसका|यही|इसी का)\s+)?{_DEV_CHART}\s+(?:भी\s+)?{_DEV_VERB})"
+    r"\s*[.!?।]*\s*$", re.I)
 
 
 def restyle_request(question: str) -> tuple[str | None, str | None] | None:
     """(chart type, 'desc' / 'asc' / None) when the message only asks to redraw the last chart;
     (None, None) to show it again as it was."""
     if SHOW_CHART_RE.match(question or ""):
+        if _UNIT_RE.search(question) and not _REF_RE.search(question):
+            return None
         return None, None
     m = RESTYLE_RE.match(question or "")
     if not m:

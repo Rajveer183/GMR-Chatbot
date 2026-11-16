@@ -71,6 +71,19 @@ def test_misspelled_user_periods_are_kept():
     assert _period("total installed meters", "How many meters were installed today?")[0]
 
 
+def test_period_abbreviations_are_kept():
+    assert not _period("yday installs", "How many meters were installed yesterday?")[0]
+    assert not _period("ytd installs", "How many meters were installed this year?")[0]
+    assert not _period("mtd SAT done", "How many SATs were done this month?")[0]
+    assert not _period("installs lw", "How many meters were installed last week?")[0]
+
+
+def test_least_is_not_last():
+    # 'least' ~ 'last' is 0.89: an invented 'last month' must still be dropped
+    assert _period("zone with least installs", "Which zone had the least installs last month?") == \
+        (True, "Which zone had the least installs?")
+
+
 # ---- SQL checks ----------------------------------------------------------------------------------------------- #
 
 def test_installs_without_period_are_all_time():

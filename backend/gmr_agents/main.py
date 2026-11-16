@@ -360,6 +360,10 @@ def _last_charted_answer(store: SessionStore, session_id: str | None, lookback: 
         r = m["response"]
         if r.get("charts") or r.get("tables"):
             return _answer_by_trace(store, session_id, (r.get("debug") or {}).get("trace_id")) or m
+        if r.get("refused") or r.get("error") or (r.get("debug") or {}).get("sql"):
+            # A data turn that came back empty / failed / refused: 'the same' means IT, never an older chart
+            # shown as if it were this data. None -> the question runs through the pipeline.
+            return None
     return None
 
 
