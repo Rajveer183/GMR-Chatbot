@@ -43,9 +43,36 @@ _TOPIC_RE = re.compile(r"\b(?:feeder|loss|theft|pf|power factor|voltage|outage|d
                        r"warehouse|oem|defect|mapping|journey|receivable|invoice|cable|escalation|hhu|reading|risk)\w*", re.I)
 
 
+# 'three risks and three actions', 'top 5 risks', 'risks and mitigations': a programme-level ask for the watchlist
+# (business_rules.yaml dashboard_stats). 16 Nov: 'Write a CXO weekly summary with three risks and three actions.'
+# hit 'risk' in _TOPIC_RE, went to the LLM, and came back with four red flags, no actions and an invented week
+# ('02 Nov 2026 to 30 Nov 2026'). The report builds them by code now.
+_COUNT = r"(?:\d{1,2}|one|two|three|four|five|six|seven)"
+_NUMS = {"one": 1, "two": 2, "three": 3, "four": 4, "five": 5, "six": 6, "seven": 7}
+_RISKS_RE = re.compile(rf"\b(?:(?:top|key|main|major|biggest|{_COUNT})\s+)*(?:risks|red flags|concerns)\b", re.I)
+_ACTIONS_RE = re.compile(rf"\b(?:(?:top|key|main|recommended|{_COUNT})\s+)*(?:actions|next steps|mitigations|recommendations)\b", re.I)
+_RISK_ACTION_RE = re.compile(rf"{_RISKS_RE.pattern}.{{0,40}}{_ACTIONS_RE.pattern}", re.I)
+
+
+def _count(m: re.Match | None, default: int = 3) -> int | None:
+    if not m:
+        return None
+    n = re.search(_COUNT, m.group(0), re.I)
+    v = (int(n.group(0)) if n.group(0).isdigit() else _NUMS[n.group(0).lower()]) if n else default
+    return max(1, min(v, 7))
+
+
+def risk_ask(question: str) -> tuple[int | None, int | None]:
+    """(risks wanted, actions wanted) -- None when not asked; 3 when asked without a number."""
+    q = str(question or "")
+    return _count(_RISKS_RE.search(q)), _count(_ACTIONS_RE.search(q))
+
+
 def is_report(question: str) -> bool:
     q = str(question or "")
-    return bool(_REPORT_RE.search(q)) and not _TOPIC_RE.search(q)
+    # The risks / actions wording is the report's own section, not a KPI topic ('theft risk' still is one).
+    rest = _ACTIONS_RE.sub(" ", _RISKS_RE.sub(" ", q))
+    return bool(_REPORT_RE.search(q) or _RISK_ACTION_RE.search(q)) and not _TOPIC_RE.search(rest)
 
 
 # --------------------------------------------------------------------------- #
@@ -111,8 +138,10 @@ def request(question: str, today: date | None = None) -> dict:
         prev_start = prev_end - timedelta(days=6)
         label = f"{start.strftime('%d %b')} - {end.strftime('%d %b %Y')}"
         prev_label = f"{prev_start.strftime('%d %b')} - {prev_end.strftime('%d %b %Y')}"
+    risks, actions = risk_ask(question)
     return {"period": period, "start": start, "end": end, "prev_start": prev_start, "prev_end": prev_end,
-            "label": label, "prev_label": prev_label, "project": project, "assumed": assumed}
+            "label": label, "prev_label": prev_label, "project": project, "assumed": assumed,
+            "risks": risks, "actions": actions, "cxo": bool(re.search(r"\b(?:cxo|ceo|cfo|coo|executive|leadership)\b", q))}
 
 
 # --------------------------------------------------------------------------- #
@@ -192,7 +221,37 @@ def _sqls(r: dict) -> dict[str, str]:
             f"FROM public.gold_mi_installation_day_agg WHERE {_MI}{pf} "
             f"AND period_start BETWEEN {_d(min(r['start'], r['end'] - timedelta(days=13)))} AND {ce} "
             f"GROUP BY 1 ORDER BY 1"),
+        # Watchlist inputs per project (business_rules.yaml dashboard_stats 'Watchlist'), only when risks / actions
+        # were asked; scored in _watchlist. 'today' = the day after the last complete day (the DB session is UTC).
+        **({"watch": _watch_sql(r["end"] + timedelta(days=1), pf)} if r.get("risks") or r.get("actions") else {}),
     }
+
+
+def _watch_sql(today: date, pf: str) -> str:
+    t = _d(today)
+    age_60 = "age_key = 'age_60_plus'"
+    age_90 = "age_key IN ('age_91_120', 'age_120_plus')"
+
+    def per(expr: str, table: str, where: str = "TRUE") -> str:
+        return f"(SELECT {expr} FROM public.{table} x WHERE LOWER(x.project) = p.project AND {where})"
+
+    return (
+        f"SELECT p.project, "
+        f"{per('SUM(ticket_count)', 'gold_om_open_ageing_snapshot')} AS open_tickets, "
+        f"{per('SUM(ticket_count)', 'gold_om_open_ageing_snapshot', age_60)} AS open_over_60_days, "
+        f"{per('SUM(meter_count)', 'gold_mi_sat_invoice_snapshot')} AS installed_meters, "
+        f"{per('SUM(meter_count)', 'gold_mi_sat_invoice_snapshot', 'sat_stage IS NOT NULL')} AS sat_meters, "
+        f"{per('SUM(meter_count)', 'gold_non_sat_ageing_snapshot', age_90)} AS waiting_sat_over_90_days, "
+        f"{per('MAX(sat_date)', 'milestone_config')} AS last_sat_batch, "
+        f"{per('SUM(outstanding_count)', 'gold_revenue_ageing_snapshot', f'{t} - sat_date > 60')} AS not_realised_over_60_days, "
+        f"{per('SUM(defect_rate_numerator_count)', 'gold_meter_defect_event_day_agg')} AS defective_meters, "
+        f"{per('SUM(meter_count)', 'gold_mi_installation_month_agg', 'NOT is_replacement AND has_meter_serial AND oem IS NOT NULL')} AS defect_base_meters, "
+        f"l.lumpsum_invoiced, l.lumpsum_realised "
+        f"FROM (SELECT DISTINCT LOWER(project) AS project FROM public.gold_mi_sat_invoice_snapshot WHERE TRUE{pf}) p "
+        f"LEFT JOIN (SELECT LOWER(project) AS project, lumpsum_invoiced, lumpsum_realised, "
+        f"ROW_NUMBER() OVER (PARTITION BY project ORDER BY created_at DESC, id DESC) AS rn "
+        f"FROM public.revenue_receivables) l ON l.project = p.project AND l.rn = 1 "
+        f"ORDER BY p.project")
 
 
 def _run_all(sqls: dict[str, str]) -> dict[str, pd.DataFrame]:
@@ -295,6 +354,128 @@ def _exceptions(r: dict, f: dict[str, pd.DataFrame]) -> tuple[list[dict], list[s
     return rows, actions[:3]
 
 
+def _name(x) -> str:
+    """'VARANASI II' -> 'Varanasi II' (title case, Roman numerals kept)."""
+    return re.sub(r"\b(?:Ii|Iii|Iv|Vi|Vii)\b", lambda m: m.group(0).upper(), str(x).title())
+
+
+def _sev(value: float, threshold: float, worse_low: bool = False) -> float:
+    """Severity = value / threshold - 1 (threshold / value - 1 when lower is worse), between -1 and 3."""
+    s = (threshold / value - 1 if value else 3.0) if worse_low else value / threshold - 1
+    return round(max(-1.0, min(s, 3.0)), 2)
+
+
+def _watchlist(r: dict, f: dict[str, pd.DataFrame], partial_day: bool) -> list[dict]:
+    """Every watchlist check (business_rules.yaml dashboard_stats), worst first:
+    {'risk', 'value', 'threshold', 'severity', 'status', 'evidence', 'action'} -- each action names where to start."""
+    w = f["watch"].copy()
+    for c in w.columns[1:]:
+        if c != "last_sat_batch":
+            w[c] = pd.to_numeric(w[c], errors="coerce").fillna(0.0)
+    w["project"] = w["project"].map(_name)
+    today = r["end"] + timedelta(days=1)
+    period = {"daily": "the day before", "weekly": "the week before", "monthly": "the month before"}[r["period"]]
+    place = "zone" if r["project"] else "project"
+    checks: list[dict] = []
+    # One project in scope: name it plainly; across projects: say which to start with.
+    lead, first = ("for", "") if r["project"] else ("starting with", " first")
+
+    def add(risk: str, value: float, threshold: float, shown: str, limit: str, evidence: str, action: str,
+            worse_low: bool = False, sev: float | None = None):
+        sev = _sev(value, threshold, worse_low) if sev is None else sev
+        checks.append({"risk": risk, "value": shown, "threshold": limit, "severity": sev,
+                       "status": "Red flag" if sev > 0 else "Within threshold", "evidence": evidence, "action": action})
+
+    # SAT backlog: meters waiting > 90 days (% of installed, 3%) and the gap since the last SAT batch (30 days) are
+    # one risk -- the same backlog seen twice -- scored by the worse of the two.
+    installed, waiting = w["installed_meters"].sum(), w["waiting_sat_over_90_days"].sum()
+    dates = pd.to_datetime(w["last_sat_batch"], errors="coerce")
+    if installed:
+        pct = waiting * 100 / installed
+        last = dates.max()
+        gap = (today - last.date()).days if pd.notna(last) else None
+        sev = max(_sev(pct, 3.0), _sev(gap, 30.0) if gap is not None else -1.0)
+        top = w.loc[w["waiting_sat_over_90_days"].idxmax()]
+        top_last = pd.to_datetime(top["last_sat_batch"], errors="coerce")
+        add("SAT backlog", pct, 3.0, f"{pct:.1f}% of installed" + (f"; {gap} days since last batch" if gap is not None else ""),
+            "3% of installed; 30 days",
+            f"{_n(waiting)} meters ({pct:.1f}% of installed) have waited over 90 days for SAT"
+            + (f"; the last SAT batch was dated {last.strftime('%d %b %Y')}, {gap} days ago" if gap is not None else ""),
+            f"Get the next SAT batch scheduled with the DISCOM{'' if r['project'] else ','} {lead} {top['project']}: {_n(top['waiting_sat_over_90_days'])} "
+            f"of its meters have waited over 90 days"
+            + (f" and its last batch was dated {top_last.strftime('%d %b %Y')}." if pd.notna(top_last) else "."), sev=sev)
+
+    open_t, open_60 = w["open_tickets"].sum(), w["open_over_60_days"].sum()
+    if open_t:
+        pct = open_60 * 100 / open_t
+        om = f["om_by_place"]
+        om = om[om.iloc[:, 0] != "UNMAPPED"]
+        where = ""
+        if len(om):
+            t = om.sort_values("open_over_60_days", ascending=False).iloc[0]
+            where = (f" in {_name(t.iloc[0])} first: {_n(t['open_over_60_days'])} of its {_n(t['open_now'])} open tickets "
+                     "are older than 60 days")
+        add("O&M ticket backlog", pct, 20.0, f"{pct:.1f}% of open", "20% of open",
+            f"{_n(open_60)} of {_n(open_t)} open O&M tickets ({pct:.1f}%) are older than 60 days",
+            f"Clear the 60+ day O&M backlog{where}." if where else "Clear the 60+ day O&M backlog, oldest tickets first.")
+
+    inv, real = w["lumpsum_invoiced"].sum(), w["lumpsum_realised"].sum()
+    if inv:
+        pct = (inv - real) * 100 / inv
+        w["_due"] = w["lumpsum_invoiced"] - w["lumpsum_realised"]
+        top = w.loc[w["_due"].idxmax()]
+        add("Lumpsum collections", pct, 20.0, f"{pct:.1f}% outstanding", "20% of invoiced",
+            f"Rs {inv - real:,.1f} crore of Rs {inv:,.1f} crore lumpsum invoiced ({pct:.1f}%) is not yet realised",
+            f"Escalate lumpsum collection in {top['project']}{first}: Rs {top['_due']:,.1f} crore of its Rs "
+            f"{top['lumpsum_invoiced']:,.1f} crore invoiced is still unpaid.")
+
+    sat, late = w["sat_meters"].sum(), w["not_realised_over_60_days"].sum()
+    if sat:
+        pct = late * 100 / sat
+        top = w.loc[w["not_realised_over_60_days"].idxmax()]
+        add("Revenue realisation lag", pct, 5.0, f"{pct:.1f}% of SAT meters", "5% of SAT meters",
+            f"{_n(late)} SAT-accepted meters ({pct:.1f}%) are unpaid more than 60 days after SAT",
+            f"Chase payment for SAT-accepted meters in {top['project']}{first}: {_n(top['not_realised_over_60_days'])} are unpaid "
+            "more than 60 days after SAT.")
+
+    k = f["kpis"].set_index("kpi").loc["Meters installed"]
+    this, prev = float(k["this_period"]), float(k["previous_period"])
+    if prev:
+        drop = (1 - this / prev) * 100
+        bp = f["by_place"]
+        bp = bp[bp.iloc[:, 0] != "UNMAPPED"]
+        worst = bp.sort_values("change").iloc[0] if len(bp) else None
+        load = (f"; {r['end'].strftime('%d %b')} may not be fully loaded yet" if partial_day else "")
+        act = (f"Restore the installation pace in {_name(worst.iloc[0])} ({_n(worst['installed_this_period'])} vs "
+               f"{_n(worst['installed_previous_period'])} {period}): check technician attendance and stock at its sites."
+               if worst is not None and worst["change"] < 0 else "Restore the installation pace: check technician attendance and stock.")
+        if partial_day:
+            act = f"Confirm {r['end'].strftime('%d %b')} is fully loaded, then " + act[0].lower() + act[1:]
+        add("Installation pace", drop, 20.0, f"{drop:.1f}% drop" if drop > 0 else f"{-drop:.1f}% rise", "20% drop",
+            f"{_n(this)} meters installed vs {_n(prev)} {period} ({'-' if drop > 0 else '+'}{abs(drop):.1f}%){load}", act)
+
+    pos = f["position"].iloc[0]
+    days = (r["end"] - r["start"]).days + 1
+    pace = this / days if days else 0
+    if pace > 0 and pd.notna(pos["remaining_stock"]):
+        cover = float(pos["remaining_stock"]) / pace
+        add("Meter stock cover", cover, 30.0, f"{cover:.0f} days", "30 days",
+            f"{_n(pos['remaining_stock'])} meters in stock cover about {cover:.0f} days at {_n(pace)} installs a day",
+            f"Raise meter supply: remaining stock of {_n(pos['remaining_stock'])} meters lasts about {cover:.0f} days "
+            f"at {_n(pace)} installs a day.", worse_low=True)
+
+    base, bad = w["defect_base_meters"].sum(), w["defective_meters"].sum()
+    if base:
+        pct = bad * 100 / base
+        w["_rate"] = w["defective_meters"] * 100 / w["defect_base_meters"].where(w["defect_base_meters"] > 0)
+        top = w.loc[w["_rate"].fillna(-1).idxmax()]
+        add("Meter defects", pct, 1.5, f"{pct:.2f}%", "1.5%",
+            f"{_n(bad)} defective meters, {pct:.2f}% of installed",
+            f"Take up defective meters with the OEMs, {lead} {top['project']} ({top['_rate']:.2f}% defective).")
+
+    return sorted(checks, key=lambda c: -c["severity"])
+
+
 def build(question: str, today: date | None = None) -> dict:
     """The report as an answer: summary, insights (actions), kpis, tables, charts, and the SQL behind each table
     (sql = table 0, extra_sql = tables 1..) so the table download / paging endpoints can re-run them."""
@@ -304,7 +485,7 @@ def build(question: str, today: date | None = None) -> dict:
     k = f["kpis"].set_index("kpi")
     pos = f["position"].iloc[0]
     scope = r["project"].title() if r["project"] else "all projects"
-    title = {"daily": "Daily", "weekly": "Weekly", "monthly": "Monthly"}[r["period"]] + " report"
+    title = {"daily": "Daily", "weekly": "Weekly", "monthly": "Monthly"}[r["period"]] + (" CXO summary" if r["cxo"] else " report")
     inst = k.loc["Meters installed"]
     days = (r["end"] - r["start"]).days + 1
     exc, actions = _exceptions(r, f)
@@ -331,16 +512,35 @@ def build(question: str, today: date | None = None) -> dict:
         f"{_n(pos['remaining_stock'])} meters in stock, {_n(pos['open_tickets'])} open O&M tickets "
         f"({_n(pos['open_over_60_days'])} older than 60 days), Rs {pos['overdue_cr']} crore overdue.",
     ]
-    high = [e for e in exc if e["severity"] in ("High", "Medium")]
-    lines.append(f"{len(high)} exception(s) need attention" + (f" -- top: {high[0]['area']}, {high[0]['check'].lower()} ({high[0]['value']})." if high else "."))
+    watch = []
+    if r["risks"] or r["actions"]:
+        n_risks = r["risks"] or r["actions"]
+        n_actions = r["actions"] or n_risks
+    else:
+        high = [e for e in exc if e["severity"] in ("High", "Medium")]
+        lines.append(f"{len(high)} exception(s) need attention" + (f" -- top: {high[0]['area']}, {high[0]['check'].lower()} ({high[0]['value']})." if high else "."))
     # The last day often lands in pieces (refresh mid-day): a day far below the days before it is flagged, not read
     # as a collapse. 16 Nov: 15 Nov showed 376 installs against ~2,500 a day the week before.
     d = f["daily"]
+    partial_day = False
     if len(d) >= 4:
         last, before = float(d["meters_installed"].iloc[-1]), float(d["meters_installed"].iloc[-8:-1].mean())
         if pd.Timestamp(d["install_date"].iloc[-1]).date() == r["end"] and before and last < 0.3 * before:
+            partial_day = True
             lines.append(f"Note: {r['end'].strftime('%d %b')} shows only {_n(last)} installs against {_n(before)} a day "
                          "before it -- that day may not be fully loaded yet, so this period's figures may rise at the next refresh.")
+    if r["risks"] or r["actions"]:
+        # Exactly the number asked, ranked by severity; when fewer checks cross their threshold, the closest ones
+        # fill the list and are labelled as within threshold -- never a red flag that is not one.
+        watch = _watchlist(r, f, partial_day)
+        red = sum(c["severity"] > 0 for c in watch)
+        if r["risks"]:
+            lines.append(f"\n**Top {n_risks} risks** ({red} of {len(watch)} watchlist checks are past their threshold):")
+            lines += [f"{i}. **{c['risk']}** -- {c['evidence']}." + ("" if c["severity"] > 0 else " (Within threshold; on watch.)")
+                      for i, c in enumerate(watch[:n_risks], 1)]
+        lines.append(f"\n**{n_actions} actions:**")
+        lines += [f"{i}. {c['action']}" for i, c in enumerate(watch[:n_actions], 1)]
+        actions = []  # the actions are in the summary; insights would repeat them
     if r["assumed"]:
         lines.insert(1, r["assumed"])
     summary = "\n".join(lines)
@@ -380,13 +580,18 @@ def build(question: str, today: date | None = None) -> dict:
                                                                            "value": "-", "severity": "-"}]),
               {"area": "Area", "check": "Check (threshold)", "value": "Evidence", "severity": "Severity"}),
     ]
+    if watch:
+        tables.append(table("report_watchlist", "Watchlist: every check vs its threshold",
+                            pd.DataFrame(watch)[["risk", "value", "threshold", "severity", "status", "action"]],
+                            {"risk": "Risk", "value": "Value", "threshold": "Threshold", "severity": "Severity",
+                             "status": "Status", "action": "Action"}))
     daily = f["daily"]
     charts = []
     if len(daily) >= 2:
         charts.append({"id": "report_daily", "type": "bar", "title": "Meters installed per day",
                        "x": [pd.Timestamp(d).strftime("%d %b") for d in daily["install_date"]],
                        "y": [float(v) for v in daily["meters_installed"]]})
-    insights = actions or ["No exception crossed its threshold this period."]
+    insights = actions if (actions or watch) else ["No exception crossed its threshold this period."]
     order = ["kpis", "position", "by_place", "om_by_place"]
     return {"summary": summary, "insights": insights, "kpis": kpis, "tables": tables, "charts": charts,
             "sql": sqls[order[0]], "extra_sql": [sqls[x] for x in order[1:]], "request": r,

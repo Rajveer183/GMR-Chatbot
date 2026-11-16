@@ -25,6 +25,38 @@ class ReportDetectionTest(unittest.TestCase):
                   "How many meters were installed yesterday?", "Give me a downloadable report of division-wise installations"]:
             self.assertFalse(report.is_report(q), q)
 
+    def test_risks_and_actions(self):
+        # 16 Nov: went to the LLM ('risk' is a topic word) -> four red flags, no actions, an invented week.
+        q = "Write a CXO weekly summary with three risks and three actions."
+        self.assertTrue(report.is_report(q))
+        self.assertEqual(report.risk_ask(q), (3, 3))
+        self.assertTrue(report.is_report("Give me the top 2 risks and 4 actions for Kashi"))
+        self.assertEqual(report.risk_ask("top 2 risks and 4 actions"), (2, 4))
+        self.assertEqual(report.risk_ask("weekly summary with key risks"), (3, None))
+        self.assertEqual(report.risk_ask("Generate the weekly report"), (None, None))
+        self.assertFalse(report.is_report("weekly theft risk summary"))
+        self.assertFalse(report.is_report("What are the risks of feeder losses and actions to reduce them?"))
+        r = report.request(q, date(2026, 11, 16))
+        self.assertEqual((r["period"], r["start"], r["end"], r["cxo"]), ("weekly", date(2026, 11, 9), date(2026, 11, 15), True))
+
+    def test_watchlist_ranking(self):
+        r = report.request("weekly summary with three risks and three actions", date(2026, 11, 16))
+        f = {
+            "watch": pd.DataFrame([{"project": "agra", "open_tickets": 100, "open_over_60_days": 50, "installed_meters": 1000,
+                                    "sat_meters": 900, "waiting_sat_over_90_days": 10, "last_sat_batch": "2026-11-01",
+                                    "not_realised_over_60_days": 0, "defective_meters": 1, "defect_base_meters": 1000,
+                                    "lumpsum_invoiced": 10.0, "lumpsum_realised": 9.5}]),
+            "om_by_place": pd.DataFrame([{"project": "AGRA", "open_now": 100, "open_over_60_days": 50}]),
+            "by_place": pd.DataFrame([{"project": "AGRA", "installed_this_period": 700, "installed_previous_period": 700, "change": 0}]),
+            "kpis": pd.DataFrame([{"kpi": "Meters installed", "this_period": 700, "previous_period": 700}]),
+            "position": pd.DataFrame([{"remaining_stock": 100000}]),
+        }
+        w = report._watchlist(r, f, False)
+        self.assertEqual(len(w), 7)
+        self.assertEqual(w[0]["risk"], "O&M ticket backlog")           # 50% vs 20% -> the only red flag
+        self.assertEqual(sum(c["severity"] > 0 for c in w), 1)
+        self.assertEqual([c["severity"] for c in w], sorted((c["severity"] for c in w), reverse=True))
+
     def test_periods(self):
         t = date(2026, 11, 16)
         r = report.request("Generate a daily report for yesterday", t)
