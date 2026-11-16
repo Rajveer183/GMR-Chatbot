@@ -665,7 +665,7 @@ button {
   /* Bottom clearance for the fixed composer -- sized to its current compact
      pill shell (~94px) plus headroom, not the taller boxed composer this
      value was originally tuned for. */
-  padding: var(--space-3) 0 120px;
+  padding: var(--space-3) 0 92px;
   font-size: 14px;
   line-height: 1.55;
   scroll-behavior: smooth;
@@ -872,6 +872,38 @@ button {
   font-size: 14px;
 }
 
+.chat-messages.is-empty {
+  /* No fixed composer to clear -- it sits inside the welcome card. */
+  padding-bottom: var(--space-4);
+}
+
+/* Composer rendered inside the welcome card instead of the fixed bottom bar. */
+.chat-input-bar.inline {
+  position: static;
+  left: auto;
+  right: auto;
+  background: none;
+  padding: 0;
+}
+
+.chat-input-bar.inline .chat-input-inner {
+  width: 100%;
+  max-width: none;
+  padding: 0;
+}
+
+.chat-input-bar.inline .chat-input-shell {
+  box-shadow: var(--shadow-md);
+}
+
+.empty-state-composer {
+  position: relative;
+  width: 100%;
+  max-width: 900px;
+  margin-top: 20px;
+  text-align: left;
+}
+
 .chat-speech-error {
   color: #b91c1c;
   font-size: 13px;
@@ -888,7 +920,7 @@ button {
   flex-direction: column;
   align-items: center;
   justify-content: space-evenly;
-  padding: 20px 28px;
+  padding: 20px 28px 12px;
   width: 100%;
   max-width: 100%;
   background: var(--card-bg);

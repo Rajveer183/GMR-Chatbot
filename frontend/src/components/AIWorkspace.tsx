@@ -560,6 +560,22 @@ export const AIWorkspace: React.FC<AIWorkspaceProps> = ({ filters }) => {
     });
   }, [sessions, sessionSearch]);
 
+  // On a fresh chat the question box sits inside the welcome card; once the
+  // conversation starts it moves back to the fixed bar at the bottom.
+  const isEmptyChat = !loading && !pendingQuery && (!activeSession?.messages || activeSession.messages.length === 0);
+  const composer = (inline: boolean) => (
+    <ChatInput
+      ref={chatInputRef}
+      inline={inline}
+      loading={loading}
+      onSubmit={onSubmitQuestion}
+      placeholder={t("askPlaceholder")}
+      micOnLabel={t("micOn")}
+      micOffLabel={t("micOff")}
+      speechLocale={speechLocale(responseLanguage)}
+    />
+  );
+
   return (
     <div className={`chat-app-layout${sidebarCollapsed ? " sidebar-collapsed" : ""}`} lang={langTag(uiLang)}>
       <aside className="chat-sidebar">
@@ -707,7 +723,7 @@ export const AIWorkspace: React.FC<AIWorkspaceProps> = ({ filters }) => {
         </header>
         <DataSourcesPanel open={insightsOpen} onClose={() => setInsightsOpen(false)} datasets={datasets} />
 
-        <div className="chat-messages" ref={chatMessagesRef}>
+        <div className={`chat-messages${isEmptyChat ? " is-empty" : ""}`} ref={chatMessagesRef}>
           <div className="chat-thread chat-thread-enter" key={activeSession?.session_id || "none"}>
             {(() => {
               const assistantMessages = (activeSession?.messages || []).filter((m) => m.role === "assistant");
@@ -841,12 +857,13 @@ export const AIWorkspace: React.FC<AIWorkspaceProps> = ({ filters }) => {
               </div>
             ) : null}
 
-            {!loading && !pendingQuery && (!activeSession?.messages || activeSession.messages.length === 0) ? (
+            {isEmptyChat ? (
               <div className="chat-msg-row empty">
                 <EmptyState
                   title="GMR AI Intelligence"
                   lang={uiLang}
                   onSuggestedQuestion={(q, canonical) => runQuery(q, 1, ALL_ROWS, true, canonical)}
+                  composer={composer(true)}
                 />
               </div>
             ) : null}
@@ -859,15 +876,7 @@ export const AIWorkspace: React.FC<AIWorkspaceProps> = ({ filters }) => {
           </div>
         </div>
 
-        <ChatInput
-          ref={chatInputRef}
-          loading={loading}
-          onSubmit={onSubmitQuestion}
-          placeholder={t("askPlaceholder")}
-          micOnLabel={t("micOn")}
-          micOffLabel={t("micOff")}
-          speechLocale={speechLocale(responseLanguage)}
-        />
+        {isEmptyChat ? null : composer(false)}
         <ConfirmDialog
           open={confirmDelete.open}
           title={t("confirmDelete")}

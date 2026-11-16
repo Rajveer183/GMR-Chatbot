@@ -12,6 +12,8 @@ interface EmptyStateProps {
   onSuggestedQuestion?: (question: string, canonical?: string) => void;
   /** Screen language: the cards, the intro and the starter questions follow it. */
   lang?: string;
+  /** The question box, shown inside the card under the intro line. */
+  composer?: React.ReactNode;
 }
 
 /* Starters verified against the live backend (WFM KPI tables + MDM feeder
@@ -58,6 +60,7 @@ export const EmptyState: React.FC<EmptyStateProps> = ({
   message,
   onSuggestedQuestion,
   lang = "en",
+  composer,
 }) => {
   // Starters verified in English: shown in the screen language, a click runs the English one.
   const starters = STARTERS.map(({ key, icon }) => ({ icon, shown: uiText(lang, key), verified: uiText("en", key) }));
@@ -108,6 +111,8 @@ export const EmptyState: React.FC<EmptyStateProps> = ({
           </div>
         ))}
       </div>
+
+      {composer ? <div className="empty-state-composer">{composer}</div> : null}
     </div>
   );
 };

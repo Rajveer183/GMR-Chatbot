@@ -21,10 +21,12 @@ interface ChatInputProps {
   micOffLabel: string;
   /** BCP-47 locale for speech recognition. */
   speechLocale: string;
+  /** Render in the page flow (inside the welcome card) instead of the fixed bottom bar. */
+  inline?: boolean;
 }
 
 export const ChatInput = forwardRef<ChatInputHandle, ChatInputProps>(
-  ({ loading, onSubmit, placeholder, micOnLabel, micOffLabel, speechLocale }, ref) => {
+  ({ loading, onSubmit, placeholder, micOnLabel, micOffLabel, speechLocale, inline = false }, ref) => {
     const [question, setQuestion] = useState("");
     const [speechError, setSpeechError] = useState<string | null>(null);
     const inputRef = useRef<HTMLTextAreaElement>(null);
@@ -84,7 +86,7 @@ export const ChatInput = forwardRef<ChatInputHandle, ChatInputProps>(
     };
 
     return (
-      <div className="chat-input-bar">
+      <div className={`chat-input-bar${inline ? " inline" : ""}`}>
         <div className="chat-input-inner">
           <div className="chat-input-shell">
             <textarea
