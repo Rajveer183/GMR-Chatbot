@@ -5,6 +5,7 @@ Moved from gmr_agents/llm_pipeline.py unchanged.
 """
 
 from __future__ import annotations
+import difflib
 import re
 import time
 from shared import config, llm_gateway
@@ -902,9 +903,26 @@ _INVENTED_PERIOD_RE = re.compile(
     r"(?:in |over |during )?the (?:last|past) \d+ (?:days?|weeks?|months?)|last \d+ (?:days?|weeks?|months?))\b", re.I)
 
 
+_PERIOD_KEYWORDS = ("yesterday", "today", "week", "month", "year", "last", "past", "days", "this")
+
+
+def _misspelled_period(asked: str, resolved: str) -> bool:
+    """The user typed the period with a typo that triage read correctly. 16 Nov: 'instaleed metars yestardey' ->
+    triage 'How many meters were installed yesterday?' -> 'yesterday' stripped as invented -> all-time 4,350,767."""
+    inserted = {w.lower() for m in _INVENTED_PERIOD_RE.finditer(resolved) for w in re.findall(r"[a-z]+", m.group(0), re.I)}
+    keys = [k for k in _PERIOD_KEYWORDS if k in inserted]
+    tokens = [t.lower() for t in re.findall(r"[a-z]{3,}", asked, re.I)]
+    for key in keys:
+        floor = 0.7 if len(key) >= 6 else 0.75 if len(key) == 5 else 0.85   # short words: 'list'/'lost' != 'last'
+        if any(difflib.SequenceMatcher(None, key, t).ratio() >= floor for t in tokens):
+            return True
+    return False
+
+
 def drop_invented_period(state: dict, triage: dict, prior_turns: list[dict] | None) -> bool:
     if triage["kind"] != "data" or triage.get("followup") or _USER_PERIOD_RE.search(state["question"]) \
-            or re.search(r"\bsince\b", triage["question"], re.I):   # 'load rise since last month' = a card's definition
+            or re.search(r"\bsince\b", triage["question"], re.I) \
+            or _misspelled_period(state["question"], triage["question"]):   # 'since' = a card's definition
         return False
     fixed = _INVENTED_PERIOD_RE.sub("", triage["question"])
     if fixed == triage["question"]:

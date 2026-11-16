@@ -59,6 +59,18 @@ def test_user_periods_are_kept():
     assert not _period("DTs by load change band", "Show DTs by load change band (DT load rise since last month)")[0]
 
 
+def test_misspelled_user_periods_are_kept():
+    # 16 Nov: 'instaleed metars yestardey' lost 'yesterday' and answered all time (4,350,767)
+    assert _period("instaleed metars yestardey", "How many meters were installed yesterday?") == \
+        (False, "How many meters were installed yesterday?")
+    assert not _period("meters installed yesterdy", "How many meters were installed yesterday?")[0]
+    assert not _period("installs tody", "How many meters were installed today?")[0]
+    assert not _period("installs lst mnth", "How many meters were installed last month?")[0]
+    # look-alike words are not periods
+    assert _period("list installed meters", "How many meters were installed last month?")[0]
+    assert _period("total installed meters", "How many meters were installed today?")[0]
+
+
 # ---- SQL checks ----------------------------------------------------------------------------------------------- #
 
 def test_installs_without_period_are_all_time():
