@@ -1039,9 +1039,13 @@ button {
   position: relative;
   display: grid;
   grid-template-columns: repeat(3, minmax(0, 1fr));
-  gap: 12px;
-  width: 100%;
+  gap: 8px;
+  /* Spans from the centre of the first starter card to the centre of the
+     third: full width minus one starter column ((100% - 2 x 12px gap) / 3). */
+  width: calc(100% - (100% - 24px) / 3);
   max-width: 100%;
+  margin-left: auto;
+  margin-right: auto;
   margin-top: 12px;
   text-align: left;
 }
@@ -1050,8 +1054,8 @@ button {
   position: relative;
   display: flex;
   align-items: center;
-  gap: 12px;
-  padding: 16px 20px;
+  gap: 10px;
+  padding: 14px 14px 14px 16px;
   border: 1px solid var(--border-light);
   border-radius: var(--radius-md);
   background: var(--card-bg);
@@ -1089,6 +1093,10 @@ button {
   font-size: 15px;
   font-weight: 650;
   color: var(--bhel-navy);
+  min-width: 0;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
 }
 
 /* ==========================================================================
@@ -2211,6 +2219,7 @@ button {
   .empty-state-starter-grid,
   .empty-state-capabilities {
     grid-template-columns: 1fr;
+    width: 100%;
   }
 
   .chat-input-bar {
