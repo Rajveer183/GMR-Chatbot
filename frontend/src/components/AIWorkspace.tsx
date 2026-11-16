@@ -1,18 +1,19 @@
-import React, { useEffect, useMemo, useRef, useState } from "react";
-import { Menu, Plus, Pencil, Trash2, Send, Mic, Search, X, User, Bot, Database, Download } from "lucide-react";
+import React, { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { Menu, Plus, Pencil, Trash2, Search, X, User, Bot, Database, Download } from "lucide-react";
 import { apiClient } from "../api/client";
 import type { FeedbackRating } from "../api/client";
 import type { AIQueryResponse, AIStreamEvent, DatasetSummary, FilterRequest, SessionSummary, SessionDetail, SessionMessage, TranslatedAnswer } from "../api/client";
 import { LanguageSelect } from "./LanguageSelect";
 import { langTag, readStoredLanguage, screenLanguage, speechLocale, statusText, storeLanguage, uiText } from "../i18n/languages";
 import type { LanguagePreference } from "../i18n/languages";
-import SpeechRecognition, { useSpeechRecognition } from "react-speech-recognition";
 import { ResultRenderer } from "./ResultRenderer";
 import { LoadingStatus } from "./LoadingStatus";
 import { TypingIndicator } from "./TypingIndicator";
 import { ConfirmDialog } from "./ConfirmDialog";
 import { EmptyState } from "./EmptyState";
 import { DataSourcesPanel } from "./DataSourcesPanel";
+import { ChatInput } from "./ChatInput";
+import type { ChatInputHandle } from "./ChatInput";
 import gmrLogo from "../assets/gmr_logo.png";
 
 const LOADING_STATUS_MESSAGES = [
@@ -72,15 +73,6 @@ function storeSidebarCollapsed(collapsed: boolean) {
   }
 }
 
-function focusWithoutScroll(element: HTMLTextAreaElement | null | undefined) {
-  if (!element) return;
-  try {
-    element.focus({ preventScroll: true });
-  } catch {
-    element.focus();
-  }
-}
-
 function scrollToElementStart(element: HTMLElement | null | undefined) {
   element?.scrollIntoView({ behavior: "smooth", block: "start" });
 }
@@ -112,7 +104,6 @@ export const AIWorkspace: React.FC<AIWorkspaceProps> = ({ filters }) => {
       storeSidebarCollapsed(!c);
       return !c;
     });
-  const [question, setQuestion] = useState("");
   const [loading, setLoading] = useState(false);
   const [sessions, setSessions] = useState<SessionSummary[]>([]);
   const [activeSession, setActiveSession] = useState<SessionDetail | null>(null);
@@ -130,14 +121,7 @@ export const AIWorkspace: React.FC<AIWorkspaceProps> = ({ filters }) => {
     sessionId: null,
     sessionName: null,
   });
-  const [speechError, setSpeechError] = useState<string | null>(null);
   const [datasets, setDatasets] = useState<DatasetSummary[]>([]);
-  const {
-    transcript,
-    listening: speechActive,
-    resetTranscript,
-    browserSupportsSpeechRecognition,
-  } = useSpeechRecognition();
   const [sessionSearch, setSessionSearch] = useState("");
   const chatMessagesRef = useRef<HTMLDivElement>(null);
   const assistantResponseRefs = useRef<Map<string, HTMLDivElement>>(new Map());
@@ -146,7 +130,7 @@ export const AIWorkspace: React.FC<AIWorkspaceProps> = ({ filters }) => {
   const loadingPlaceholderRef = useRef<HTMLDivElement>(null);
   const errorMessageRef = useRef<HTMLDivElement>(null);
   const scrollIntentRef = useRef<ScrollIntent>("none");
-  const inputRef = useRef<HTMLTextAreaElement>(null);
+  const chatInputRef = useRef<ChatInputHandle>(null);
   const prevLoadingRef = useRef(false);
   const [enteringMessageId, setEnteringMessageId] = useState<string | null>(null);
   // Answer language (header dropdown). New questions are answered in it; changing it
@@ -170,13 +154,16 @@ export const AIWorkspace: React.FC<AIWorkspaceProps> = ({ filters }) => {
   const [exportOpen, setExportOpen] = useState(false);
   // Insights drawer (observability, alerts, quality, freshness, investigations) -- read-only reports.
   const [insightsOpen, setInsightsOpen] = useState(false);
-  const recordVote = (traceId: string, rating: FeedbackRating) =>
-    setVotes((v) => {
-      const next = { ...v };
-      if (rating === "clear") delete next[traceId];
-      else next[traceId] = rating;
-      return next;
-    });
+  const recordVote = useCallback(
+    (traceId: string, rating: FeedbackRating) =>
+      setVotes((v) => {
+        const next = { ...v };
+        if (rating === "clear") delete next[traceId];
+        else next[traceId] = rating;
+        return next;
+      }),
+    []
+  );
 
   const openSession = async (sessionId: string, scrollToLatest = true) => {
     if (scrollToLatest) {
@@ -190,9 +177,9 @@ export const AIWorkspace: React.FC<AIWorkspaceProps> = ({ filters }) => {
     const created = await apiClient.createSession("New Session");
     await loadSessions();
     setActiveSession(created);
-    setQuestion("");
+    chatInputRef.current?.clear();
     scrollIntentRef.current = "none";
-    window.setTimeout(() => focusWithoutScroll(inputRef.current), 0);
+    window.setTimeout(() => chatInputRef.current?.focus(), 0);
   };
 
   const refreshDatasets = async () => {
@@ -298,21 +285,6 @@ export const AIWorkspace: React.FC<AIWorkspaceProps> = ({ filters }) => {
       }
     }
   }, [loading, activeSession?.messages]);
-
-  // react-speech-recognition keeps the live transcript in its own internal
-  // state; mirror it into the question box as it updates so typing/voice
-  // input share the same field the same way the previous implementation did.
-  useEffect(() => {
-    if (speechActive) {
-      setQuestion(transcript);
-    }
-  }, [transcript, speechActive]);
-
-  useEffect(() => {
-    return () => {
-      SpeechRecognition.stopListening();
-    };
-  }, []);
 
   useEffect(() => {
     const init = async () => {
@@ -480,7 +452,7 @@ export const AIWorkspace: React.FC<AIWorkspaceProps> = ({ filters }) => {
       setStreamStatus(null);
       setLoading(false);
       console.log("%c[ui] rendered response optimistically from ai-query", "color:#5e35b1");
-      setQuestion("");
+      chatInputRef.current?.clear();
       // Reconcile with the backend's own persisted version in the
       // background -- picks up real message ids/session name/etc. without
       // making the user wait for it.
@@ -497,9 +469,18 @@ export const AIWorkspace: React.FC<AIWorkspaceProps> = ({ filters }) => {
       setStreamStatus(null);
       setLoading(false);
     } finally {
-      focusWithoutScroll(inputRef.current);
+      chatInputRef.current?.focus();
     }
   };
+  // Stable handles for the (memoized) answer cards, so re-rendering the
+  // workspace does not force every past answer's charts and tables to redraw.
+  const runQueryRef = useRef(runQuery);
+  runQueryRef.current = runQuery;
+  const onFollowUp = useCallback(
+    (q: string, canonical?: string) => runQueryRef.current(q, 1, ALL_ROWS, true, canonical),
+    []
+  );
+  const onSubmitQuestion = useCallback((text: string) => runQueryRef.current(text), []);
 
   const beginRename = (s: SessionSummary) => {
     setRenamingSessionId(s.session_id);
@@ -577,27 +558,6 @@ export const AIWorkspace: React.FC<AIWorkspaceProps> = ({ filters }) => {
       return name.includes(q) || lastQuestion.includes(q);
     });
   }, [sessions, sessionSearch]);
-
-  // Voice input runs on react-speech-recognition, a wrapper around the
-  // browser's built-in Web Speech API (SpeechRecognition).
-  const toggleSpeech = () => {
-    if (!browserSupportsSpeechRecognition) {
-      setSpeechError("Speech recognition is not supported in this browser.");
-      return;
-    }
-
-    if (speechActive) {
-      SpeechRecognition.stopListening();
-      return;
-    }
-
-    setSpeechError(null);
-    resetTranscript();
-    setQuestion("");
-    SpeechRecognition.startListening({ continuous: true, language: speechLocale(responseLanguage) }).catch(() => {
-      setSpeechError("Unable to start speech recognition.");
-    });
-  };
 
   return (
     <div className={`chat-app-layout${sidebarCollapsed ? " sidebar-collapsed" : ""}`} lang={langTag(uiLang)}>
@@ -809,13 +769,11 @@ export const AIWorkspace: React.FC<AIWorkspaceProps> = ({ filters }) => {
                         {shown ? (
                           <ResultRenderer
                             result={shown.result}
-                            onFollowUp={(q, canonical) => runQuery(q, 1, ALL_ROWS, true, canonical)}
+                            onFollowUp={onFollowUp}
                             showFollowups={msg.id === lastAssistantId}
-                            feedback={{
-                              sessionId: activeSession?.session_id,
-                              rating: votes[msg.response?.debug?.trace_id ?? ""],
-                              onChange: recordVote,
-                            }}
+                            feedbackSessionId={activeSession?.session_id}
+                            feedbackRating={votes[msg.response?.debug?.trace_id ?? ""]}
+                            onFeedbackChange={recordVote}
                           />
                         ) : (
                           <div className="chat-summary-text">{msg.content}</div>
@@ -895,38 +853,15 @@ export const AIWorkspace: React.FC<AIWorkspaceProps> = ({ filters }) => {
           </div>
         </div>
 
-        <div className="chat-input-bar">
-          <div className="chat-input-inner">
-            <div className="chat-input-shell">
-              <textarea
-                ref={inputRef}
-                className="chat-textarea"
-                value={question}
-                disabled={loading}
-                placeholder={t("askPlaceholder")}
-                onChange={(e) => setQuestion(e.target.value)}
-                onKeyDown={(e) => {
-                  if (e.key === "Enter" && !e.shiftKey) {
-                    e.preventDefault();
-                    runQuery(question);
-                  }
-                }}
-              />
-              <button
-                className={`chat-icon-btn mic-btn ${speechActive ? "active" : ""}`}
-                type="button"
-                onClick={toggleSpeech}
-                title={speechActive ? t("micOff") : t("micOn")}
-              >
-                <Mic size={18} />
-              </button>
-              <button className="chat-send-btn" type="button" onClick={() => runQuery(question)} disabled={loading || speechActive}>
-                {loading ? <TypingIndicator /> : <Send size={14} />}
-              </button>
-            </div>
-          </div>
-          {speechError ? <div className="chat-speech-error">{speechError}</div> : null}
-        </div>
+        <ChatInput
+          ref={chatInputRef}
+          loading={loading}
+          onSubmit={onSubmitQuestion}
+          placeholder={t("askPlaceholder")}
+          micOnLabel={t("micOn")}
+          micOffLabel={t("micOff")}
+          speechLocale={speechLocale(responseLanguage)}
+        />
         <ConfirmDialog
           open={confirmDelete.open}
           title={t("confirmDelete")}

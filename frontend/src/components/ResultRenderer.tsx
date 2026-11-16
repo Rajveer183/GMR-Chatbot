@@ -1,4 +1,4 @@
-import React, { useState } from "react";
+import React, { memo, useMemo, useState } from "react";
 import type { AIChartSpec, AIQueryResponse } from "../api/client";
 import { SummaryCard } from "./SummaryCard";
 import { MetricCard } from "./MetricCard";
@@ -25,8 +25,11 @@ interface ResultRendererProps {
    * a translated chip, when there is one. */
   onFollowUp?: (question: string, canonical?: string) => void;
   showFollowups?: boolean;
-  /** Thumbs up / down under the summary; omitted for drafts still streaming. */
-  feedback?: { sessionId?: string; rating?: FeedbackRating; onChange?: (traceId: string, rating: FeedbackRating) => void };
+  /** Thumbs up / down under the summary; shown when onFeedbackChange is given (omitted for drafts
+   * still streaming). Flat props rather than one object so React.memo can skip unchanged answers. */
+  feedbackSessionId?: string;
+  feedbackRating?: FeedbackRating;
+  onFeedbackChange?: (traceId: string, rating: FeedbackRating) => void;
 }
 
 // The backend now decides what to show per-answer (backend/ai/response_shape.py):
@@ -35,7 +38,12 @@ interface ResultRendererProps {
 // "compact" rendering mode any more -- an answer with empty arrays already
 // renders identically to the old summary-first view, just from real data
 // instead of a UI-side toggle.
-export const ResultRenderer: React.FC<ResultRendererProps> = ({ result, onFollowUp, showFollowups, feedback }) => {
+// Memoized: past answers (charts + full tables) must not re-render when unrelated workspace
+// state changes, e.g. the streaming status line of a new question.
+export const ResultRenderer = memo(function ResultRenderer({
+  result, onFollowUp, showFollowups, feedbackSessionId, feedbackRating, onFeedbackChange,
+}: ResultRendererProps) {
+  const speechText = useMemo(() => resultToSpeech(result), [result]);
   const [expandedChart, setExpandedChart] = useState<AIChartSpec | null>(null);
   const followups = result.suggested_followups?.length && showFollowups ? result.suggested_followups : [];
   // Shown in the answer's language when the backend translated them; a click still runs the
@@ -69,7 +77,7 @@ export const ResultRenderer: React.FC<ResultRendererProps> = ({ result, onFollow
         interpretedIntent={result.interpreted_intent}
         interpretedQuery={result.interpreted_query}
         getFullCopyPayload={() => resultToPayload(result)}
-        speechText={resultToSpeech(result)}
+        speechText={speechText}
         lang={lang}
       />
 
@@ -148,13 +156,13 @@ export const ResultRenderer: React.FC<ResultRendererProps> = ({ result, onFollow
       <WarningBox warnings={result.warnings ?? []} title={uiText(lang, "warnings")} />
 
       {/* Below the follow-ups, right above Sources. */}
-      {feedback && result.debug?.trace_id ? (
+      {onFeedbackChange && result.debug?.trace_id ? (
         <FeedbackButtons
           traceId={result.debug.trace_id}
-          sessionId={feedback.sessionId}
-          initial={feedback.rating}
+          sessionId={feedbackSessionId}
+          initial={feedbackRating}
           lang={lang}
-          onChange={feedback.onChange}
+          onChange={onFeedbackChange}
         />
       ) : null}
 
@@ -174,4 +182,4 @@ export const ResultRenderer: React.FC<ResultRendererProps> = ({ result, onFollow
       </ExpandableChartModal>
     </div>
   );
-};
+});
