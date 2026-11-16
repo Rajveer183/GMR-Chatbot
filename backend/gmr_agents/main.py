@@ -349,6 +349,20 @@ def _answer_by_trace(store: SessionStore, session_id: str | None, trace_id: str 
     return next((m for m in messages if trace_of(m) == wanted), None if trace_id else messages[-1])
 
 
+def _last_charted_answer(store: SessionStore, session_id: str | None, lookback: int = 3) -> dict | None:
+    """The latest of the last `lookback` assistant answers that has a chart or table -- a text-only turn in
+    between ('explain this simply') must not hide it. Live 16 Nov: 'show graphs for the same' came right
+    after such a turn. The first message carrying that answer, as _answer_by_trace returns it."""
+    session = store.get_session(session_id) if session_id else None
+    messages = [m for m in (session or {}).get("messages") or []
+                if m.get("role") == "assistant" and isinstance(m.get("response"), dict)]
+    for m in reversed(messages[-lookback:]):
+        r = m["response"]
+        if r.get("charts") or r.get("tables"):
+            return _answer_by_trace(store, session_id, (r.get("debug") or {}).get("trace_id")) or m
+    return None
+
+
 def _in_language(response: dict, target: str) -> dict:
     """The answer in its target language. The text is usually written there already by the
     pipeline; the translation layer then only adds the labels and follow-up questions in that
@@ -418,7 +432,7 @@ def answer_question(question: str, session_id: str | None, *, store: SessionStor
     restyled, recapped = None, None
     if previous is None:
         req = restyle.restyle_request(asked)
-        last = _answer_by_trace(store, session_id) if req else None
+        last = _last_charted_answer(store, session_id) if req else None
         restyled = restyle.restyle(last["response"], *req) if last else None
         if restyled is not None:
             restyle_context = dict(last.get("context") or {})

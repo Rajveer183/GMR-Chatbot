@@ -39,8 +39,26 @@ RECAP_RE = re.compile(
 _RECAP_SCOPE = re.compile(r"so far|conversation|chat|session|discussion|we (?:have )?(?:found|discussed|covered|looked|seen)|until now|till now|what have we", re.I)
 
 
-def restyle_request(question: str) -> tuple[str, str | None] | None:
-    """(chart type, 'desc' / 'asc' / None) when the message only asks to redraw the last chart."""
+# 'also show me graphs for the same' / 'plot it' / 'graph dikhao': the last chart again, no type named. Live 16 Nov:
+# 'also show mw graphs fro the same' after an installs-by-project answer was triaged chitchat and refused
+# ("I can't draw charts"). One optional filler word between tokens absorbs typos ('mw', 'fro').
+_CHART_WORD = r"(?:graphs?|charts?|plots?|visuals?|visuali[sz]ations?|diagrams?|graphics?)"
+_REF = r"(?:the same|same|it|that|this|them|these|those|above|the above|this data|that data|the data|these numbers|those numbers)"
+SHOW_CHART_RE = re.compile(
+    r"^\s*(?:also\s+|please\s+|pls\s+|can you\s+|could you\s+|now\s+|ok\s+|okay\s+|and\s+)*"
+    r"(?:(?:show|give|draw|display|make|plot|create|generate|share)(?:\s+\w{1,3})?(?:\s+(?:me|us))?(?:\s+(?:the|a|some))?"
+    rf"\s+{_CHART_WORD}(?:\s+(?:(?:for|of|on|from|\w{{1,3}})\s+)?{_REF})?(?:\s+(?:also|too|as well|please))?"
+    rf"|plot\s+{_REF}"
+    rf"|{_CHART_WORD}\s+(?:bhi\s+)?(?:dikhao|dikha do|dikhaiye|bana do|banao|banaiye|chahiye|do)"
+    rf"|{_REF}\s+(?:ka|ki|ke)\s+{_CHART_WORD}\s+(?:bhi\s+)?(?:dikhao|dikha do|dikhaiye|bana do|banao|banaiye|chahiye|do))"
+    r"\s*[.!?]*\s*$", re.I)
+
+
+def restyle_request(question: str) -> tuple[str | None, str | None] | None:
+    """(chart type, 'desc' / 'asc' / None) when the message only asks to redraw the last chart;
+    (None, None) to show it again as it was."""
+    if SHOW_CHART_RE.match(question or ""):
+        return None, None
     m = RESTYLE_RE.match(question or "")
     if not m:
         return None
@@ -61,10 +79,17 @@ _LABELS = {"horizontal_bar": "horizontal bar chart", "stacked_bar": "stacked bar
            "table": "table"}
 
 
-def restyle(previous: dict, ctype: str, sort: str | None) -> dict | None:
-    """The previous response with its primary chart redrawn (None when it had no chart or table)."""
+def restyle(previous: dict, ctype: str | None, sort: str | None) -> dict | None:
+    """The previous response with its primary chart redrawn (None when it had no chart or table).
+    ctype None: the chart again as it was drawn."""
     resp = copy.deepcopy(previous)
     charts = resp.get("charts") or []
+    if ctype is None:
+        if not charts:
+            return None
+        resp["summary"] = "Here is the chart for the same data."
+        resp["suggested_followups"] = previous.get("suggested_followups") or []
+        return resp
     if ctype == "table":
         if not resp.get("tables"):
             return None

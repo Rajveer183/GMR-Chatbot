@@ -86,5 +86,58 @@ class RecapTest(unittest.TestCase):
         self.assertIn("75,066", got["summary"])
 
 
+class ShowChartAgainTest(unittest.TestCase):
+    """16 Nov: 'also show mw graphs fro the same' was triaged chitchat ("I can't draw charts") and got no chart."""
+
+    def test_bare_chart_asks_match(self):
+        for q in ("also show mw graphs fro the same", "show me the graph", "show graphs for the same",
+                  "give me a chart for this", "plot it", "can you show the chart too", "graph dikhao",
+                  "graph bhi dikhao", "same ka graph dikhao", "show me graphs of it"):
+            self.assertEqual(restyle.restyle_request(q), (None, None), q)
+
+    def test_new_chart_questions_do_not_match(self):
+        for q in ("show graphs of installations in Agra", "Show monthly installations as a bar chart",
+                  "show me a chart of pending SAT by project", "Make a pie chart of defective meters by defect type"):
+            self.assertNotEqual(restyle.restyle_request(q), (None, None), q)
+
+    def test_same_chart_again(self):
+        r = restyle.restyle(PREV, None, None)
+        self.assertEqual(r["charts"], PREV["charts"])
+        self.assertEqual(r["tables"], PREV["tables"])
+        self.assertIn("chart", r["summary"])
+        self.assertIsNone(restyle.restyle({**PREV, "charts": []}, None, None))
+
+    def test_text_only_turn_in_between_is_skipped(self):
+        from gmr_agents import main
+
+        class Store:
+            def get_session(self, _sid):
+                return {"messages": [
+                    {"role": "user", "content": "Which project installed the most meters in the last 30 days?"},
+                    {"role": "assistant", "content": "Kashi ...", "response": PREV},
+                    {"role": "user", "content": "explain this simply"},
+                    {"role": "assistant", "content": "Sure ...", "response": {"summary": "Sure", "debug": {"trace_id": "z"}}}]}
+
+        got = main._last_charted_answer(Store(), "s")
+        self.assertEqual(got["response"]["debug"]["trace_id"], "abc")
+
+
+class TriageChartAskTest(unittest.TestCase):
+    def _kind(self, q, kind="chitchat"):
+        from gmr_agents.agents.router import triage as T
+        return T._parse_triage({"kind": kind, "question": q, "domain": "wfm", "topics": ["installation"],
+                                "tables": ["gold_mi_installation_day_agg"], "reply": "I can't draw charts"},
+                               {"question": q}, "m")["kind"]
+
+    def test_chart_ask_is_data(self):
+        self.assertEqual(self._kind("also show mw graphs fro the same"), "data")
+        self.assertEqual(self._kind("plot installations by project for last 30 days"), "data")
+
+    def test_dashboard_ui_stays_chitchat(self):
+        self.assertEqual(self._kind("change the chart type on my dashboard"), "chitchat")
+        self.assertEqual(self._kind("hello"), "chitchat")
+        self.assertEqual(self._kind("plot the weather chart", kind="out_of_scope"), "out_of_scope")
+
+
 if __name__ == "__main__":
     unittest.main()

@@ -57,7 +57,8 @@ Guardrails (never break them):
 - Blaming a named person -> data about the unit's productivity drivers, never a verdict on a person.
 - 'Which filter shows X?' / 'where can I see X?' is a DATA request too: kind=data -- answer with X's data and name the filter values (project, OEM, defect type ...) that produce it.
 - 'Open / show / download / export the X queue, list, table or data' is a DATA request: kind=data and return that data (it can be downloaded as CSV) -- never refuse it as a UI action.
-- Controlling the dashboard UI (change a filter/duration, switch a chart type, what filters are on my page, reset filters): the chatbot cannot see or change the dashboard page. If equivalent data can be shown (e.g. monthly productivity, SAT by stage as a line), kind=data for that; else chitchat saying so ('reset filters' = acknowledge: the next question starts fresh)."""
+- Asking to SEE a chart / graph / plot / visual of data ('show graphs for the same', 'plot it', 'graph dikhao') is kind=data -- every data answer is shown with a chart in this chat. Never reply that you cannot draw or show charts.
+- Controlling the dashboard UI (change a filter/duration on the dashboard page, what filters are on my page, reset filters): the chatbot cannot see or change the dashboard page. If equivalent data can be shown (e.g. monthly productivity, SAT by stage as a line), kind=data for that; else chitchat saying so ('reset filters' = acknowledge: the next question starts fresh)."""
 
 
 def _table_menu() -> str:
@@ -142,6 +143,9 @@ def _parse_triage(d: dict, state: dict, model: str) -> dict:
         kind = "data"
     elif kind == "data" and _CONCEPT_DIFF_RE.search(state["question"]):
         kind = "explain"  # see _CONCEPT_DIFF_RE
+    elif kind == "chitchat" and _CHART_ASK_RE.search(state["question"]) \
+            and not _DASHBOARD_UI_RE.search(state["question"]):
+        kind = "data"     # see _CHART_ASK_RE
     # Technical dashboard cards (power quality / DT load / load violation) are MDM whatever the model
     # says -- before 6 Nov the triage prompt called voltage and load out_of_scope. Checked before the
     # mapping words: '% consumers with load violation by feeder' also reads as a mapping question.
@@ -215,6 +219,13 @@ _WHY_DATA_RE = re.compile(
     r"^\s*(?:why|kyu|kyon|kyun)\b.*\b(?:higher|lower|more|less|fall|fell|falling|drop\w*|dip\w*|sag\w*|rise|rose|rising|"
     r"increas\w*|decreas\w*|worst|best|worse|better|slow\w*|fast\w*|jump\w*|spike\w*|differ\w*|than|so many|so few|"
     r"behind|lag\w*|ahead|zyada|kam)\b", re.I)
+
+# A chart / graph of data is a data answer (every data answer carries one). Live 16 Nov: 'also show mw graphs fro the
+# same' was triaged chitchat ("I can't draw charts", no query) -- the prompt listed 'switch a chart type' as a UI action.
+# The dashboard page itself (its filters / cards / screen) stays with the UI rule.
+_CHART_ASK_RE = re.compile(r"\b(?:graphs?|charts?|plot\w*|visuals?|visuali[sz]\w*|diagrams?)\b", re.I)
+_DASHBOARD_UI_RE = re.compile(r"\b(?:dashboard|my (?:page|screen)|on (?:the|my) (?:page|screen)|filters?|reset|"
+                              r"what am i looking at|tab)\b", re.I)
 
 # 'What is the difference between % DT loading and % DT peak loading?' is a definition question; triage called it
 # data on 10 Nov and the SQL mixed two cards' columns. Only the bare form: no digits (arithmetic on given numbers is
