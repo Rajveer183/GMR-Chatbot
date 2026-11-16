@@ -30,6 +30,14 @@ export const ChatInput = forwardRef<ChatInputHandle, ChatInputProps>(
     const inputRef = useRef<HTMLTextAreaElement>(null);
     const { transcript, listening: speechActive, resetTranscript, browserSupportsSpeechRecognition } = useSpeechRecognition();
 
+    // Start at one line and grow with the text (up to the CSS max-height).
+    useEffect(() => {
+      const el = inputRef.current;
+      if (!el) return;
+      el.style.height = "auto";
+      el.style.height = `${el.scrollHeight}px`;
+    }, [question]);
+
     useImperativeHandle(ref, () => ({
       clear: () => setQuestion(""),
       focus: () => {
@@ -82,6 +90,7 @@ export const ChatInput = forwardRef<ChatInputHandle, ChatInputProps>(
             <textarea
               ref={inputRef}
               className="chat-textarea"
+              rows={1}
               value={question}
               disabled={loading}
               placeholder={placeholder}

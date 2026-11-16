@@ -86,12 +86,9 @@ const en = {
   starter3: "Describe the installation trend over the last 12 months.",
   starter4: "Build the full funnel from supply to collection with conversion at each stage.",
   starter5: "What share of auto-indexing is complete?",
-  es_card1Title: "Ask in your language",
-  es_card1Text: "Type it the way you'd ask a colleague -- \"Kal kitne meter lage?\" works too, and the answer comes back in your language (or pick one top right). Follow-ups like \"only in Kashi\" keep the context.",
-  es_card2Title: "Click to drill down",
-  es_card2Text: "Click a project, OEM or division bar in a chart to get its full breakdown.",
-  es_card3Title: "KPIs, charts & data",
-  es_card3Text: "Answers come with a plain-language summary, KPI tiles or a dashboard-style chart, and the underlying table to verify it.",
+  es_card1Title: "Ask your way",
+  es_card2Title: "Follow up naturally",
+  es_card3Title: "Verify & export",
   // feedback + export
   helpful: "Helpful",
   notHelpful: "Not helpful",
@@ -173,12 +170,9 @@ const hinglish: Strings = {
   starter3: "Pichhle 12 mahino ka installation trend batao.",
   starter4: "Supply se collection tak poora funnel har stage ke conversion ke saath banao.",
   starter5: "Auto-indexing ka kitna hissa complete ho chuka hai?",
-  es_card1Title: "Apni bhasha mein poochho",
-  es_card1Text: "Jaise colleague se poochhte ho waise likho — \"Kal kitne meter lage?\" bhi chalega, aur jawab aapki bhasha mein aayega (ya upar right mein bhasha chuno). \"sirf Kashi mein\" jaise follow-ups context yaad rakhte hain.",
-  es_card2Title: "Click karke detail dekho",
-  es_card2Text: "Chart mein kisi project, OEM ya division ke bar par click karo aur uska poora breakdown pao.",
-  es_card3Title: "KPIs, charts aur data",
-  es_card3Text: "Har jawab ke saath aasaan bhasha mein summary, KPI tiles ya dashboard jaisa chart, aur verify karne ke liye asli table milti hai.",
+  es_card1Title: "Apne tareeke se poochho",
+  es_card2Title: "Aaram se follow-up karo",
+  es_card3Title: "Verify aur export karo",
 };
 
 const hi: Strings = {
@@ -213,12 +207,9 @@ const hi: Strings = {
   starter3: "पिछले 12 महीनों का इंस्टॉलेशन ट्रेंड बताइए।",
   starter4: "सप्लाई से कलेक्शन तक पूरा फ़नल हर चरण के कन्वर्ज़न के साथ बनाइए।",
   starter5: "ऑटो-इंडेक्सिंग का कितना हिस्सा पूरा हो चुका है?",
-  es_card1Title: "अपनी भाषा में पूछें",
-  es_card1Text: "जैसे किसी सहकर्मी से पूछते हैं वैसे लिखें — \"कल कितने मीटर लगे?\" भी चलेगा, और उत्तर आपकी भाषा में आएगा (या ऊपर दाईं ओर भाषा चुनें)। \"सिर्फ़ काशी में\" जैसे अगले प्रश्न संदर्भ बनाए रखते हैं।",
-  es_card2Title: "क्लिक करके विस्तार देखें",
-  es_card2Text: "किसी चार्ट में प्रोजेक्ट, OEM या डिवीज़न के बार पर क्लिक करें और उसका पूरा ब्रेकडाउन पाएँ।",
-  es_card3Title: "KPI, चार्ट और डेटा",
-  es_card3Text: "हर उत्तर के साथ आसान भाषा में सारांश, KPI टाइल या डैशबोर्ड जैसा चार्ट, और जाँच के लिए मूल टेबल मिलती है।",
+  es_card1Title: "अपने तरीके से पूछें",
+  es_card2Title: "सहज रूप से आगे पूछें",
+  es_card3Title: "जाँचें और एक्सपोर्ट करें",
 };
 
 const mr: Strings = {
@@ -250,12 +241,9 @@ const mr: Strings = {
   starter3: "मागील 12 महिन्यांचा इन्स्टॉलेशन ट्रेंड सांगा.",
   starter4: "पुरवठ्यापासून वसुलीपर्यंत संपूर्ण फनेल प्रत्येक टप्प्याच्या रूपांतरणासह तयार करा.",
   starter5: "ऑटो-इंडेक्सिंगचा किती भाग पूर्ण झाला आहे?",
-  es_card1Title: "तुमच्या भाषेत विचारा",
-  es_card1Text: "सहकाऱ्याला विचारता तसे लिहा — \"काल किती मीटर बसवले?\" सुद्धा चालेल, आणि उत्तर तुमच्या भाषेत येईल (किंवा वर उजवीकडे भाषा निवडा). \"फक्त काशीमध्ये\" सारखे पुढील प्रश्न संदर्भ कायम ठेवतात.",
-  es_card2Title: "तपशीलासाठी क्लिक करा",
-  es_card2Text: "चार्टमधील प्रकल्प, OEM किंवा विभागाच्या बारवर क्लिक करा आणि त्याचा पूर्ण तपशील मिळवा.",
-  es_card3Title: "KPI, चार्ट आणि डेटा",
-  es_card3Text: "प्रत्येक उत्तरासोबत सोप्या भाषेतील सारांश, KPI टाइल किंवा डॅशबोर्डसारखा चार्ट आणि पडताळणीसाठी मूळ टेबल मिळतो.",
+  es_card1Title: "तुमच्या पद्धतीने विचारा",
+  es_card2Title: "सहजपणे पुढे विचारा",
+  es_card3Title: "पडताळा आणि एक्सपोर्ट करा",
 };
 
 const bn: Strings = {
@@ -287,12 +275,9 @@ const bn: Strings = {
   starter3: "গত 12 মাসের ইনস্টলেশন প্রবণতা বর্ণনা করুন।",
   starter4: "সাপ্লাই থেকে কালেকশন পর্যন্ত পুরো ফানেল প্রতিটি ধাপের রূপান্তরসহ তৈরি করুন।",
   starter5: "অটো-ইনডেক্সিংয়ের কত অংশ সম্পূর্ণ হয়েছে?",
-  es_card1Title: "আপনার ভাষায় জিজ্ঞাসা করুন",
-  es_card1Text: "সহকর্মীকে যেভাবে জিজ্ঞাসা করেন সেভাবে লিখুন — \"গতকাল কতগুলি মিটার বসানো হয়েছে?\" লিখলেও চলবে, উত্তর আসবে আপনার ভাষায় (অথবা উপরে ডানদিকে ভাষা বেছে নিন)। \"শুধু কাশীতে\"-এর মতো পরের প্রশ্ন প্রসঙ্গ ধরে রাখে।",
-  es_card2Title: "বিস্তারিত দেখতে ক্লিক করুন",
-  es_card2Text: "চার্টে কোনো প্রজেক্ট, OEM বা ডিভিশনের বারে ক্লিক করে তার সম্পূর্ণ বিভাজন দেখুন।",
-  es_card3Title: "KPI, চার্ট ও ডেটা",
-  es_card3Text: "প্রতিটি উত্তরের সঙ্গে সহজ ভাষায় সারাংশ, KPI টাইল বা ড্যাশবোর্ডের মতো চার্ট, এবং যাচাইয়ের জন্য মূল টেবিল থাকে।",
+  es_card1Title: "নিজের মতো করে জিজ্ঞাসা করুন",
+  es_card2Title: "স্বাভাবিকভাবে পরের প্রশ্ন করুন",
+  es_card3Title: "যাচাই ও এক্সপোর্ট করুন",
 };
 
 const ta: Strings = {
@@ -324,12 +309,9 @@ const ta: Strings = {
   starter3: "கடந்த 12 மாதங்களின் நிறுவல் போக்கை விவரியுங்கள்.",
   starter4: "விநியோகம் முதல் வசூல் வரை ஒவ்வொரு கட்டத்தின் மாற்று விகிதத்துடன் முழு புனலை உருவாக்குங்கள்.",
   starter5: "ஆட்டோ-இண்டெக்சிங்கில் எவ்வளவு பங்கு முடிந்துள்ளது?",
-  es_card1Title: "உங்கள் மொழியில் கேளுங்கள்",
-  es_card1Text: "சக ஊழியரிடம் கேட்பது போல எழுதுங்கள் — \"நேற்று எத்தனை மீட்டர்கள் பொருத்தப்பட்டன?\" என்றும் கேட்கலாம்; பதில் உங்கள் மொழியிலேயே வரும் (அல்லது மேலே வலதுபுறம் மொழியைத் தேர்வுசெய்யுங்கள்). \"காசியில் மட்டும்\" போன்ற தொடர் கேள்விகள் சூழலைத் தக்கவைக்கும்.",
-  es_card2Title: "விவரங்களுக்கு கிளிக் செய்யுங்கள்",
-  es_card2Text: "விளக்கப்படத்தில் ஒரு திட்டம், OEM அல்லது பிரிவின் பட்டையைக் கிளிக் செய்து அதன் முழு விவரத்தைப் பெறுங்கள்.",
-  es_card3Title: "KPI, விளக்கப்படங்கள் & தரவு",
-  es_card3Text: "ஒவ்வொரு பதிலுடனும் எளிய மொழிச் சுருக்கம், KPI அட்டைகள் அல்லது டாஷ்போர்டு போன்ற விளக்கப்படம், சரிபார்க்க அடிப்படை அட்டவணை ஆகியவை வரும்.",
+  es_card1Title: "உங்கள் வழியில் கேளுங்கள்",
+  es_card2Title: "இயல்பாகத் தொடர்ந்து கேளுங்கள்",
+  es_card3Title: "சரிபார்த்து ஏற்றுமதி செய்யுங்கள்",
 };
 
 const te: Strings = {
@@ -361,12 +343,9 @@ const te: Strings = {
   starter3: "గత 12 నెలల ఇన్‌స్టాలేషన్ ధోరణిని వివరించండి.",
   starter4: "సరఫరా నుండి వసూలు వరకు ప్రతి దశ మార్పిడితో పూర్తి ఫన్నెల్‌ను రూపొందించండి.",
   starter5: "ఆటో-ఇండెక్సింగ్‌లో ఎంత భాగం పూర్తయింది?",
-  es_card1Title: "మీ భాషలో అడగండి",
-  es_card1Text: "సహోద్యోగిని అడిగినట్లే రాయండి — \"నిన్న ఎన్ని మీటర్లు అమర్చారు?\" అని అడిగినా సరిపోతుంది, సమాధానం మీ భాషలోనే వస్తుంది (లేదా పై కుడివైపున భాషను ఎంచుకోండి). \"కాశీలో మాత్రమే\" వంటి తదుపరి ప్రశ్నలు సందర్భాన్ని కొనసాగిస్తాయి.",
-  es_card2Title: "వివరాల కోసం క్లిక్ చేయండి",
-  es_card2Text: "చార్ట్‌లో ప్రాజెక్ట్, OEM లేదా డివిజన్ బార్‌పై క్లిక్ చేసి దాని పూర్తి వివరాలు పొందండి.",
-  es_card3Title: "KPIలు, చార్ట్‌లు & డేటా",
-  es_card3Text: "ప్రతి సమాధానంతో సులభమైన భాషలో సారాంశం, KPI టైల్స్ లేదా డాష్‌బోర్డ్ లాంటి చార్ట్, ధృవీకరణకు మూల పట్టిక వస్తాయి.",
+  es_card1Title: "మీకు నచ్చినట్లు అడగండి",
+  es_card2Title: "సహజంగా తదుపరి ప్రశ్న అడగండి",
+  es_card3Title: "ధృవీకరించి ఎగుమతి చేయండి",
 };
 
 const gu: Strings = {
@@ -398,12 +377,9 @@ const gu: Strings = {
   starter3: "છેલ્લા 12 મહિનાનો ઇન્સ્ટોલેશન ટ્રેન્ડ વર્ણવો.",
   starter4: "સપ્લાયથી કલેક્શન સુધીનું આખું ફનલ દરેક તબક્કાના રૂપાંતર સાથે બનાવો.",
   starter5: "ઑટો-ઇન્ડેક્સિંગનો કેટલો ભાગ પૂર્ણ થયો છે?",
-  es_card1Title: "તમારી ભાષામાં પૂછો",
-  es_card1Text: "સહકર્મીને પૂછતા હો તેમ લખો — \"ગઈકાલે કેટલા મીટર લાગ્યા?\" પણ ચાલશે, અને જવાબ તમારી ભાષામાં આવશે (અથવા ઉપર જમણી બાજુ ભાષા પસંદ કરો). \"ફક્ત કાશીમાં\" જેવા આગળના પ્રશ્નો સંદર્ભ જાળવી રાખે છે.",
-  es_card2Title: "વિગત જોવા ક્લિક કરો",
-  es_card2Text: "ચાર્ટમાં કોઈ પ્રોજેક્ટ, OEM અથવા ડિવિઝનના બાર પર ક્લિક કરીને તેનું પૂરું વિભાજન મેળવો.",
-  es_card3Title: "KPI, ચાર્ટ અને ડેટા",
-  es_card3Text: "દરેક જવાબ સાથે સરળ ભાષામાં સારાંશ, KPI ટાઇલ અથવા ડેશબોર્ડ જેવો ચાર્ટ, અને ચકાસણી માટે મૂળ ટેબલ મળે છે.",
+  es_card1Title: "તમારી રીતે પૂછો",
+  es_card2Title: "સહજ રીતે આગળ પૂછો",
+  es_card3Title: "ચકાસો અને એક્સપોર્ટ કરો",
 };
 
 const pa: Strings = {
@@ -435,12 +411,9 @@ const pa: Strings = {
   starter3: "ਪਿਛਲੇ 12 ਮਹੀਨਿਆਂ ਦਾ ਇੰਸਟਾਲੇਸ਼ਨ ਰੁਝਾਨ ਦੱਸੋ।",
   starter4: "ਸਪਲਾਈ ਤੋਂ ਕਲੈਕਸ਼ਨ ਤੱਕ ਪੂਰਾ ਫਨਲ ਹਰ ਪੜਾਅ ਦੇ ਰੂਪਾਂਤਰਣ ਨਾਲ ਬਣਾਓ।",
   starter5: "ਆਟੋ-ਇੰਡੈਕਸਿੰਗ ਦਾ ਕਿੰਨਾ ਹਿੱਸਾ ਪੂਰਾ ਹੋ ਗਿਆ ਹੈ?",
-  es_card1Title: "ਆਪਣੀ ਭਾਸ਼ਾ ਵਿੱਚ ਪੁੱਛੋ",
-  es_card1Text: "ਜਿਵੇਂ ਕਿਸੇ ਸਾਥੀ ਨੂੰ ਪੁੱਛਦੇ ਹੋ ਉਵੇਂ ਲਿਖੋ — \"ਕੱਲ੍ਹ ਕਿੰਨੇ ਮੀਟਰ ਲੱਗੇ?\" ਵੀ ਚੱਲੇਗਾ, ਅਤੇ ਜਵਾਬ ਤੁਹਾਡੀ ਭਾਸ਼ਾ ਵਿੱਚ ਆਵੇਗਾ (ਜਾਂ ਉੱਪਰ ਸੱਜੇ ਪਾਸੇ ਭਾਸ਼ਾ ਚੁਣੋ)। \"ਸਿਰਫ਼ ਕਾਸ਼ੀ ਵਿੱਚ\" ਵਰਗੇ ਅਗਲੇ ਸਵਾਲ ਪ੍ਰਸੰਗ ਕਾਇਮ ਰੱਖਦੇ ਹਨ।",
-  es_card2Title: "ਵੇਰਵੇ ਲਈ ਕਲਿੱਕ ਕਰੋ",
-  es_card2Text: "ਚਾਰਟ ਵਿੱਚ ਕਿਸੇ ਪ੍ਰੋਜੈਕਟ, OEM ਜਾਂ ਡਿਵੀਜ਼ਨ ਦੀ ਬਾਰ 'ਤੇ ਕਲਿੱਕ ਕਰਕੇ ਉਸਦਾ ਪੂਰਾ ਵੇਰਵਾ ਲਵੋ।",
-  es_card3Title: "KPI, ਚਾਰਟ ਅਤੇ ਡਾਟਾ",
-  es_card3Text: "ਹਰ ਜਵਾਬ ਨਾਲ ਸੌਖੀ ਭਾਸ਼ਾ ਵਿੱਚ ਸਾਰ, KPI ਟਾਈਲਾਂ ਜਾਂ ਡੈਸ਼ਬੋਰਡ ਵਰਗਾ ਚਾਰਟ, ਅਤੇ ਜਾਂਚ ਲਈ ਮੂਲ ਟੇਬਲ ਮਿਲਦਾ ਹੈ।",
+  es_card1Title: "ਆਪਣੇ ਢੰਗ ਨਾਲ ਪੁੱਛੋ",
+  es_card2Title: "ਸਹਿਜ ਢੰਗ ਨਾਲ ਅੱਗੇ ਪੁੱਛੋ",
+  es_card3Title: "ਜਾਂਚੋ ਅਤੇ ਐਕਸਪੋਰਟ ਕਰੋ",
 };
 
 const kn: Strings = {
@@ -472,12 +445,9 @@ const kn: Strings = {
   starter3: "ಕಳೆದ 12 ತಿಂಗಳ ಅಳವಡಿಕೆ ಪ್ರವೃತ್ತಿಯನ್ನು ವಿವರಿಸಿ.",
   starter4: "ಪೂರೈಕೆಯಿಂದ ಸಂಗ್ರಹದವರೆಗೆ ಪ್ರತಿ ಹಂತದ ಪರಿವರ್ತನೆಯೊಂದಿಗೆ ಪೂರ್ಣ ಫನಲ್ ರಚಿಸಿ.",
   starter5: "ಆಟೋ-ಇಂಡೆಕ್ಸಿಂಗ್‌ನ ಎಷ್ಟು ಭಾಗ ಪೂರ್ಣಗೊಂಡಿದೆ?",
-  es_card1Title: "ನಿಮ್ಮ ಭಾಷೆಯಲ್ಲಿ ಕೇಳಿ",
-  es_card1Text: "ಸಹೋದ್ಯೋಗಿಯನ್ನು ಕೇಳುವಂತೆ ಬರೆಯಿರಿ — \"ನಿನ್ನೆ ಎಷ್ಟು ಮೀಟರ್ ಅಳವಡಿಸಲಾಯಿತು?\" ಎಂದರೂ ಸಾಕು, ಉತ್ತರ ನಿಮ್ಮ ಭಾಷೆಯಲ್ಲೇ ಬರುತ್ತದೆ (ಅಥವಾ ಮೇಲೆ ಬಲಭಾಗದಲ್ಲಿ ಭಾಷೆ ಆಯ್ಕೆಮಾಡಿ). \"ಕಾಶಿಯಲ್ಲಿ ಮಾತ್ರ\" ರೀತಿಯ ಮುಂದಿನ ಪ್ರಶ್ನೆಗಳು ಸಂದರ್ಭವನ್ನು ಉಳಿಸಿಕೊಳ್ಳುತ್ತವೆ.",
-  es_card2Title: "ವಿವರಕ್ಕಾಗಿ ಕ್ಲಿಕ್ ಮಾಡಿ",
-  es_card2Text: "ಚಾರ್ಟ್‌ನಲ್ಲಿ ಯೋಜನೆ, OEM ಅಥವಾ ವಿಭಾಗದ ಬಾರ್ ಮೇಲೆ ಕ್ಲಿಕ್ ಮಾಡಿ ಅದರ ಪೂರ್ಣ ವಿವರ ಪಡೆಯಿರಿ.",
-  es_card3Title: "KPI, ಚಾರ್ಟ್‌ಗಳು ಮತ್ತು ಡೇಟಾ",
-  es_card3Text: "ಪ್ರತಿಯೊಂದು ಉತ್ತರದೊಂದಿಗೆ ಸರಳ ಭಾಷೆಯ ಸಾರಾಂಶ, KPI ಟೈಲ್‌ಗಳು ಅಥವಾ ಡ್ಯಾಶ್‌ಬೋರ್ಡ್ ರೀತಿಯ ಚಾರ್ಟ್, ಮತ್ತು ಪರಿಶೀಲನೆಗೆ ಮೂಲ ಕೋಷ್ಟಕ ಬರುತ್ತದೆ.",
+  es_card1Title: "ನಿಮ್ಮ ರೀತಿಯಲ್ಲಿ ಕೇಳಿ",
+  es_card2Title: "ಸಹಜವಾಗಿ ಮುಂದೆ ಕೇಳಿ",
+  es_card3Title: "ಪರಿಶೀಲಿಸಿ ಮತ್ತು ರಫ್ತು ಮಾಡಿ",
 };
 
 const ml: Strings = {
@@ -509,12 +479,9 @@ const ml: Strings = {
   starter3: "കഴിഞ്ഞ 12 മാസത്തെ ഇൻസ്റ്റലേഷൻ പ്രവണത വിവരിക്കൂ.",
   starter4: "സപ്ലൈ മുതൽ കളക്ഷൻ വരെ ഓരോ ഘട്ടത്തിലെയും പരിവർത്തനത്തോടെ പൂർണ്ണ ഫണൽ തയ്യാറാക്കൂ.",
   starter5: "ഓട്ടോ-ഇൻഡെക്സിങ്ങിന്റെ എത്ര ഭാഗം പൂർത്തിയായി?",
-  es_card1Title: "നിങ്ങളുടെ ഭാഷയിൽ ചോദിക്കൂ",
-  es_card1Text: "ഒരു സഹപ്രവർത്തകനോട് ചോദിക്കുന്നതുപോലെ എഴുതൂ — \"ഇന്നലെ എത്ര മീറ്ററുകൾ സ്ഥാപിച്ചു?\" എന്ന് ചോദിച്ചാലും മതി, ഉത്തരം നിങ്ങളുടെ ഭാഷയിൽ തന്നെ വരും (അല്ലെങ്കിൽ മുകളിൽ വലതുവശത്ത് ഭാഷ തിരഞ്ഞെടുക്കൂ). \"കാശിയിൽ മാത്രം\" പോലുള്ള തുടർചോദ്യങ്ങൾ സന്ദർഭം നിലനിർത്തും.",
-  es_card2Title: "വിശദാംശങ്ങൾക്ക് ക്ലിക്ക് ചെയ്യൂ",
-  es_card2Text: "ചാർട്ടിൽ ഒരു പ്രോജക്റ്റിന്റെയോ OEM-ന്റെയോ ഡിവിഷന്റെയോ ബാറിൽ ക്ലിക്ക് ചെയ്ത് അതിന്റെ പൂർണ്ണ വിഭജനം കാണൂ.",
-  es_card3Title: "KPI-കൾ, ചാർട്ടുകൾ & ഡാറ്റ",
-  es_card3Text: "ഓരോ ഉത്തരത്തിനൊപ്പവും ലളിതമായ ഭാഷയിലുള്ള സംഗ്രഹം, KPI ടൈലുകൾ അല്ലെങ്കിൽ ഡാഷ്ബോർഡ് പോലുള്ള ചാർട്ട്, പരിശോധനയ്ക്കായി അടിസ്ഥാന പട്ടിക എന്നിവ ലഭിക്കും.",
+  es_card1Title: "നിങ്ങളുടെ രീതിയിൽ ചോദിക്കൂ",
+  es_card2Title: "സ്വാഭാവികമായി തുടർന്ന് ചോദിക്കൂ",
+  es_card3Title: "പരിശോധിച്ച് എക്സ്പോർട്ട് ചെയ്യൂ",
 };
 
 // A tooltip with no translation of its own reads its short label instead of falling back to English.

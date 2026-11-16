@@ -1,5 +1,5 @@
 import React from "react";
-import { BarChart3, Languages, MousePointerClick, Sparkles } from "lucide-react";
+import { FileSpreadsheet, Languages, MessagesSquare, Sparkles } from "lucide-react";
 import { SuggestedQuestions } from "./SuggestedQuestions";
 import gmrLogo from "../assets/gmr_logo.png";
 import { uiText } from "../i18n/languages";
@@ -26,25 +26,25 @@ const STARTER_KEYS = ["starter1", "starter2", "starter3", "starter4", "starter5"
 // ChartVisualization -- frontend/src/components/chartOptions.ts) so this
 // first screen reads as three distinct capabilities, not one flat block, and
 // still stays on-brand rather than reaching for arbitrary new colours.
+// Every card describes something the chat UI really does: mic input + read-aloud
+// (ChatInput / play button), context-carrying follow-ups + "Interpreted as",
+// and CSV/Excel table download + whole-chat export (ResultTable / export menu).
 const CAPABILITY_CARDS = [
   {
     icon: Languages,
     title: "es_card1Title",
-    text: "es_card1Text",
     accent: "#0b3c6d",
     accentBg: "rgba(11, 60, 109, 0.1)",
   },
   {
-    icon: MousePointerClick,
+    icon: MessagesSquare,
     title: "es_card2Title",
-    text: "es_card2Text",
-    accent: "#1baf7a",
-    accentBg: "rgba(27, 175, 122, 0.1)",
+    accent: "#c27c0e",
+    accentBg: "rgba(194, 124, 14, 0.12)",
   },
   {
-    icon: BarChart3,
+    icon: FileSpreadsheet,
     title: "es_card3Title",
-    text: "es_card3Text",
     accent: "#4a3aa7",
     accentBg: "rgba(74, 58, 167, 0.1)",
   },
@@ -80,15 +80,16 @@ export const EmptyState: React.FC<EmptyStateProps> = ({
       ) : null}
 
       <div className="empty-state-capabilities">
-        {CAPABILITY_CARDS.map(({ icon: Icon, title: cardTitle, text, accent, accentBg }) => (
-          <div className="empty-state-capability-card" key={cardTitle}>
+        {CAPABILITY_CARDS.map(({ icon: Icon, title: cardTitle, accent, accentBg }) => (
+          <div
+            className="empty-state-capability-card"
+            key={cardTitle}
+            style={{ "--cap-accent": accent } as React.CSSProperties}
+          >
             <div className="empty-state-capability-icon" style={{ color: accent, background: accentBg }}>
-              <Icon size={14} />
+              <Icon size={16} />
             </div>
-            <div>
-              <div className="empty-state-capability-title">{uiText(lang, cardTitle)}</div>
-              <div className="empty-state-capability-text">{uiText(lang, text)}</div>
-            </div>
+            <div className="empty-state-capability-title">{uiText(lang, cardTitle)}</div>
           </div>
         ))}
       </div>
