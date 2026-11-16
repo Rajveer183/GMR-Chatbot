@@ -60,7 +60,7 @@ const en = {
   you: "You",
   assistant: "Assistant",
   queryError: "Query Error:",
-  askPlaceholder: "Ask anything about your data... (e.g., 'Which areas have the highest theft risk?')",
+  askPlaceholder: "Ask anything about your data... (e.g., 'What percentage of supplied meters has been installed?')",
   micOn: "Turn mic on",
   micOff: "Turn mic off",
   confirmDelete: "Confirm Delete",
