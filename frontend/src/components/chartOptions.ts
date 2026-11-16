@@ -454,7 +454,8 @@ export function buildChartOptions(
       // The value shown on hover is the backend's number with the unit the
       // backend detected -- and no unit at all when it detected none.
       shared: seriesCount > 1 && !horizontal,
-      intersect: false,
+      // Same fix as the dashboard bars: hit-test the segment on horizontal multi-series bars.
+      intersect: isBar && horizontal && seriesCount > 1,
       y: { formatter: (val: number) => fullNumber(val, layout.percent ? undefined : unit) },
       ...axisTooltipX(categories, horizontal),
     },
@@ -703,7 +704,9 @@ function dashboardOptions(
     },
     tooltip: {
       shared: series.length > 1 && !horizontal,
-      intersect: false,
+      // Horizontal multi-series bars can't share a tooltip; without hit-testing the
+      // segment, ApexCharts reports series 0 for every segment of the row.
+      intersect: horizontal && series.length > 1,
       y: {
         formatter: (val: number, opts: any) => {
           const i = opts?.dataPointIndex ?? 0;
