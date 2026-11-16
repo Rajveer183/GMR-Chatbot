@@ -224,9 +224,11 @@ export const ResultRenderer = memo(function ResultRenderer({
         subtitle={expandedChart?.display_description || expandedChart?.description}
         onClose={() => setExpandedChart(null)}
       >
-        {expandedChart ? (
-          <ChartVisualization chart={expandedChart} height={680} onPointClick={drilldownHandler(expandedChart)} />
-        ) : null}
+        {(available: number) =>
+          expandedChart ? (
+            <ChartVisualization chart={expandedChart} height={available} onPointClick={drilldownHandler(expandedChart)} />
+          ) : null
+        }
       </ExpandableChartModal>
     </div>
   );

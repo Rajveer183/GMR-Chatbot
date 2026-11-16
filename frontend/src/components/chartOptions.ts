@@ -347,6 +347,9 @@ export function buildChartOptions(
     strokeDashArray: 4,
     xaxis: { lines: { show: horizontal && !layout.funnel } },
     yaxis: { lines: { show: !horizontal } },
+    // Room for the value label past the longest bar (ranked) / above the tallest
+    // column, which otherwise gets clipped at the plot edge.
+    padding: { right: horizontal && !layout.funnel ? 48 : 12, top: horizontal ? 0 : 14 },
   };
   const rotate = !horizontal && (categories.length > 6 || categories.some((c) => c.length > 12));
 
@@ -701,6 +704,7 @@ function dashboardOptions(
       strokeDashArray: 3,
       xaxis: { lines: { show: horizontal } },
       yaxis: { lines: { show: !horizontal } },
+      padding: { right: horizontal ? 48 : 12, top: horizontal ? 0 : 14 },
     },
     tooltip: {
       shared: series.length > 1 && !horizontal,

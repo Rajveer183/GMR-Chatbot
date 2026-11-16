@@ -1,4 +1,4 @@
-import React, { useEffect, useRef } from "react";
+import React, { useEffect, useLayoutEffect, useRef, useState } from "react";
 import { createPortal } from "react-dom";
 import { X } from "lucide-react";
 
@@ -7,7 +7,10 @@ interface ExpandableChartModalProps {
   title: string;
   subtitle?: string;
   onClose: () => void;
-  children: React.ReactNode;
+  /** A render function receives the pixel height actually available inside the
+   * modal body, so the chart is drawn to fit instead of at a fixed height that
+   * the modal (capped to the viewport) would clip. */
+  children: React.ReactNode | ((availableHeight: number) => React.ReactNode);
 }
 
 export const ExpandableChartModal: React.FC<ExpandableChartModalProps> = ({
@@ -18,6 +21,25 @@ export const ExpandableChartModal: React.FC<ExpandableChartModalProps> = ({
   children,
 }) => {
   const savedScrollTopRef = useRef<number | null>(null);
+  const bodyRef = useRef<HTMLDivElement | null>(null);
+  const [bodyHeight, setBodyHeight] = useState(0);
+
+  // Track the body's inner height (minus padding) so the chart always fits the
+  // modal, whatever the window size, and re-fits when the window is resized.
+  useLayoutEffect(() => {
+    if (!open) return;
+    const el = bodyRef.current;
+    if (!el) return;
+    const measure = () => {
+      const cs = window.getComputedStyle(el);
+      const inner = el.clientHeight - parseFloat(cs.paddingTop) - parseFloat(cs.paddingBottom);
+      setBodyHeight(Math.max(240, Math.floor(inner)));
+    };
+    measure();
+    const ro = new ResizeObserver(measure);
+    ro.observe(el);
+    return () => ro.disconnect();
+  }, [open]);
 
   useEffect(() => {
     if (!open) return;
@@ -59,7 +81,9 @@ export const ExpandableChartModal: React.FC<ExpandableChartModalProps> = ({
             <X size={18} />
           </button>
         </div>
-        <div className="chart-modal-body">{children}</div>
+        <div className="chart-modal-body" ref={bodyRef}>
+          {typeof children === "function" ? (bodyHeight ? children(bodyHeight) : null) : children}
+        </div>
       </div>
     </div>,
     document.body
