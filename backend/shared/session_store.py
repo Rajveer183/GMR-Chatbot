@@ -317,6 +317,25 @@ class SessionStore:
         self._mirror_to_redis(session_id, payload)
         return message
 
+    def truncate_messages(self, session_id: str, keep: int) -> dict | None:
+        """Keep the first `keep` messages, drop the rest (Regenerate / Edit-and-resubmit in the UI).
+        The session as get_session returns it, or None when it does not exist."""
+        with self._lock:
+            data = self._read()
+            for session in data["sessions"]:
+                if session.get("session_id") == session_id:
+                    messages = session.setdefault("messages", [])
+                    if keep < len(messages):
+                        del messages[max(keep, 0):]
+                        session["updated_at"] = _now()
+                        self._write(data, session_id)
+                    payload = self._mirror_payload(session)
+                    break
+            else:
+                return None
+        self._mirror_to_redis(session_id, payload)
+        return self.get_session(session_id)
+
     def recent_questions(self, session_id: str, limit: int = 6) -> list[str]:
         """Prior user questions, oldest first -- context for resolving
         follow-ups like "and for the previous year?". A question that was

@@ -90,6 +90,8 @@ class AIQueryRequest(BaseModel):
     # saw (stored, and sets the answer language); this is the verified English question it
     # stands for, which is what runs. Ignored unless it is one of the verified suggestions.
     canonical_question: str | None = None
+    # Stop button: a client-made id the UI can cancel with POST /api/ai-query/cancel (stream only).
+    request_id: str | None = None
 
 
 class SessionCreateRequest(BaseModel):
@@ -98,6 +100,35 @@ class SessionCreateRequest(BaseModel):
 
 class SessionPatchRequest(BaseModel):
     session_name: str | None = None
+
+
+class SessionTruncateRequest(BaseModel):
+    keep: int
+
+
+class CancelRequest(BaseModel):
+    request_id: str
+
+
+# --------------------------------------------------------------------------- #
+# Stop button: cancelling a streamed answer
+# --------------------------------------------------------------------------- #
+
+class QueryCancelled(BaseException):
+    """Raised inside a cancelled stream's worker thread (from its emit callback, or just before the
+    answer is stored). A BaseException so the pipeline's `except Exception` fallbacks don't turn it
+    into an answer: the run unwinds, nothing is stored in the chat, no further LLM calls are made."""
+
+
+_running: dict[str, threading.Event] = {}  # request_id -> cancel flag, while its stream runs
+_running_lock = threading.Lock()
+_cancel_flag = threading.local()  # the current worker thread's flag (read by answer_question)
+
+
+def _check_cancelled() -> None:
+    flag = getattr(_cancel_flag, "event", None)
+    if flag is not None and flag.is_set():
+        raise QueryCancelled()
 
 
 def _build_response(question: str, state: dict) -> dict:
@@ -636,6 +667,8 @@ def answer_question(question: str, session_id: str | None, *, store: SessionStor
     response.setdefault("answer_language", "en")
     context = {**context, "language": response["answer_language"]}  # an ambiguous next message keeps it
     response["session_id"] = session_id
+    # Stopped by the user while it ran: keep it out of the chat (the UI already dropped it).
+    _check_cancelled()
     # The triage step's standalone English question (translation / follow-up resolved).
     store.append_message(session_id, role="user", content=asked,
                          normalized=state.get("resolved_question") or question)
@@ -753,6 +786,18 @@ def ai_query(req: AIQueryRequest, request: Request) -> dict:
                                canonical_question=req.canonical_question)
 
 
+@app.post("/api/ai-query/cancel")
+def cancel_query(req: CancelRequest) -> dict:
+    """Stop button: the streamed answer with this request_id stops at its next step and is not
+    saved to the chat. Unknown / already finished ids are a no-op."""
+    with _running_lock:
+        flag = _running.get(req.request_id)
+    if flag is not None:
+        flag.set()
+        log.info("stream %s cancelled by the user", req.request_id)
+    return {"cancelled": flag is not None, "request_id": req.request_id}
+
+
 @app.post("/api/ai-query/stream")
 def ai_query_stream(req: AIQueryRequest, request: Request) -> StreamingResponse:
     """Same answer as /api/ai-query, streamed as newline-delimited JSON events:
@@ -766,19 +811,36 @@ def ai_query_stream(req: AIQueryRequest, request: Request) -> StreamingResponse:
         raise HTTPException(status_code=400, detail="Question must not be empty.")
     _check_rate_limit(req, request)
     events: queue.Queue = queue.Queue()
+    cancel = threading.Event()
+    if req.request_id:
+        with _running_lock:
+            _running[req.request_id] = cancel
+
+    def emit(event: dict) -> None:
+        if cancel.is_set():
+            raise QueryCancelled()
+        events.put(event)
 
     def work() -> None:
+        _cancel_flag.event = cancel
         try:
             with prewarm.live_question():
                 response = answer_message(question, req.session_id, prior_questions=req.prior_questions,
-                                           via_followup=bool(req.via_followup), emit=events.put,
+                                           via_followup=bool(req.via_followup), emit=emit,
                                            response_language=req.response_language,
                                            canonical_question=req.canonical_question)
             events.put({"type": "done", "response": response})
+        except QueryCancelled:
+            log.info("stream %s stopped -- answer not stored", req.request_id)
+            events.put({"type": "error", "message": "Stopped."})
         except Exception as exc:  # answer_question already turns pipeline failures into answers
             log.exception("stream request failed")
             events.put({"type": "error", "message": f"{type(exc).__name__}: {exc}"})
         finally:
+            _cancel_flag.event = None
+            if req.request_id:
+                with _running_lock:
+                    _running.pop(req.request_id, None)
             events.put(None)
 
     threading.Thread(target=work, daemon=True).start()
@@ -1176,15 +1238,23 @@ def data_freshness() -> dict:
 # --------------------------------------------------------------------------- #
 
 @app.get("/api/sessions/{session_id}/export")
-def export_session(session_id: str, format: str = "md", include_sql: bool = False) -> Response:
+def export_session(session_id: str, format: str = "md", include_sql: bool = False,
+                   trace_id: str | None = None) -> Response:
     """The whole conversation as Markdown, a printable HTML page or JSON -- from the stored
-    answers (no query re-run, no LLM call)."""
+    answers (no query re-run, no LLM call). With trace_id: just that one question and answer
+    (the answer card's Export button)."""
     from gmr_agents.ops import export
 
     session = sessions.get_session(session_id)
     if session is None:
         raise HTTPException(status_code=404, detail="Session not found.")
-    safe = "".join(ch if ch.isalnum() or ch in "-_" else "_" for ch in (session.get("session_name") or "chat"))[:50] or "chat"
+    name = session.get("session_name") or "chat"
+    if trace_id:
+        session = export.single_turn(session, trace_id)
+        if session is None:
+            raise HTTPException(status_code=404, detail="That answer is not in this chat any more.")
+        name = f"{name[:50]}-answer"
+    safe = "".join(ch if ch.isalnum() or ch in "-_" else "_" for ch in name)[:60] or "chat"
     if format == "html":
         body, media, ext = export.to_html(session, include_sql), "text/html; charset=utf-8", "html"
     elif format == "json":
@@ -1217,6 +1287,18 @@ def patch_session(session_id: str, req: SessionPatchRequest) -> dict:
     if updated is None:
         raise HTTPException(status_code=404, detail="Session not found.")
     return updated
+
+
+@app.post("/api/sessions/{session_id}/truncate")
+def truncate_session(session_id: str, req: SessionTruncateRequest) -> dict:
+    """Edit-and-resubmit: keep the first `keep` messages and drop the rest, so the
+    question asked again replaces the old answer (and later turns) in the chat and its memory."""
+    if req.keep < 0:
+        raise HTTPException(status_code=400, detail="keep must be >= 0.")
+    session = sessions.truncate_messages(session_id, req.keep)
+    if session is None:
+        raise HTTPException(status_code=404, detail="Session not found.")
+    return session
 
 
 @app.delete("/api/sessions/{session_id}")

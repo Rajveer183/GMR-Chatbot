@@ -190,7 +190,7 @@ export const ResultRenderer = memo(function ResultRenderer({
 
       {followups.length && onFollowUp ? (
         <section
-          className="chat-result-section result-stagger"
+          className="chat-result-section result-stagger no-export"
           style={{ "--stagger": 2 + tables.length } as React.CSSProperties}
         >
           <h4 className="chat-section-heading">{uiText(lang, "followups")}</h4>

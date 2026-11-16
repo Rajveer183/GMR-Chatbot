@@ -1,6 +1,6 @@
 import React, { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { Menu, Plus, Pencil, Trash2, Search, X, User, Bot, Database, Download } from "lucide-react";
-import { apiClient } from "../api/client";
+import { apiClient, QueryStoppedError } from "../api/client";
 import type { FeedbackRating } from "../api/client";
 import type { AIQueryResponse, AIStreamEvent, DatasetSummary, FilterRequest, SessionSummary, SessionDetail, SessionMessage, TranslatedAnswer } from "../api/client";
 import { LanguageSelect } from "./LanguageSelect";
@@ -15,6 +15,8 @@ import { DataSourcesPanel } from "./DataSourcesPanel";
 import { ChatInput } from "./ChatInput";
 import type { ChatInputHandle } from "./ChatInput";
 import gmrLogo from "../assets/gmr_logo.png";
+import { downloadSnapshotHtml, downloadSnapshotPng, printSnapshot } from "../utils/snapshot";
+import type { SnapshotPart } from "../utils/snapshot";
 
 const LOADING_STATUS_MESSAGES = [
   "Analyzing with backend tools...",
@@ -31,6 +33,19 @@ const LOADING_STATUS_MESSAGES = [
 const ALL_ROWS = 1000;
 
 type ScrollIntent = "none" | "new-response" | "session-open";
+
+type SnapshotFormat = "png" | "pdf" | "html";
+const SNAPSHOT_FORMATS: SnapshotFormat[] = ["pdf", "png", "html"];
+const SNAPSHOT_LABEL_KEYS = { pdf: "exportPdf", png: "exportPng", html: "exportWebPage" } as const;
+
+/** Edit-and-resubmit: drop the chat from message `truncateTo` on (in the backend too) before asking. */
+interface RunOptions {
+  truncateTo?: number;
+}
+
+function newRequestId(): string {
+  return `${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 10)}`;
+}
 
 // The session that was open when the page was last used, so a reload lands
 // back in the same chat. localStorage can throw (private mode, blocked site
@@ -124,6 +139,7 @@ export const AIWorkspace: React.FC<AIWorkspaceProps> = ({ filters }) => {
   const [datasets, setDatasets] = useState<DatasetSummary[]>([]);
   const [sessionSearch, setSessionSearch] = useState("");
   const chatMessagesRef = useRef<HTMLDivElement>(null);
+  const chatThreadRef = useRef<HTMLDivElement>(null);
   const assistantResponseRefs = useRef<Map<string, HTMLDivElement>>(new Map());
   const userMessageRefs = useRef<Map<string, HTMLDivElement>>(new Map());
   const pendingQueryRef = useRef<HTMLDivElement>(null);
@@ -152,6 +168,12 @@ export const AIWorkspace: React.FC<AIWorkspaceProps> = ({ filters }) => {
   // trace_id -> this session's thumbs vote (loaded with the session; failures just show no vote)
   const [votes, setVotes] = useState<Record<string, FeedbackRating>>({});
   const [exportOpen, setExportOpen] = useState(false);
+  // The answer card whose Export menu is open (message id).
+  const [answerExportOpen, setAnswerExportOpen] = useState<string | null>(null);
+  // The question being edited in place (message index + draft text).
+  const [editing, setEditing] = useState<{ index: number; text: string } | null>(null);
+  // The answer running now -- what the Stop button aborts / cancels.
+  const stopRef = useRef<{ controller: AbortController; requestId: string } | null>(null);
   // Insights drawer (observability, alerts, quality, freshness, investigations) -- read-only reports.
   const [insightsOpen, setInsightsOpen] = useState(false);
   const recordVote = useCallback(
@@ -321,6 +343,8 @@ export const AIWorkspace: React.FC<AIWorkspaceProps> = ({ filters }) => {
     const id = activeSession?.session_id;
     setVotes({});
     setExportOpen(false);
+    setAnswerExportOpen(null);
+    setEditing(null);
     if (!id) return;
     apiClient
       .getFeedback(id)
@@ -387,15 +411,28 @@ export const AIWorkspace: React.FC<AIWorkspaceProps> = ({ filters }) => {
     refreshDatasets();
   }, []);
 
-  const runQuery = async (q: string, page = 1, pageSize = ALL_ROWS, viaSuggestion = false, canonical?: string) => {
+  const runQuery = async (
+    q: string, page = 1, pageSize = ALL_ROWS, viaSuggestion = false, canonical?: string, opts: RunOptions = {}
+  ) => {
     if (!q.trim() || !activeSession || loading) return;
     const trimmed = q.trim();
+    let session = activeSession;
     console.log(`%c[ui] submitting query: "${trimmed}"`, "color:#5e35b1");
     scrollIntentRef.current = "new-response";
     setPendingQuery(trimmed);
     setLoading(true);
     setError("");
+    const controller = new AbortController();
+    const requestId = newRequestId();
+    stopRef.current = { controller, requestId };
     try {
+      if (opts.truncateTo !== undefined) {
+        // The old answer (and anything after an edited question) leaves the chat and its memory first.
+        await apiClient.truncateSession(session.session_id, opts.truncateTo);
+        session = { ...session, messages: session.messages.slice(0, opts.truncateTo) };
+        setActiveSession(session);
+        if (controller.signal.aborted) throw new QueryStoppedError();
+      }
       const emptyDraft = (): AIQueryResponse => ({
         question: trimmed, summary: "", kpis: [], charts: [], tables: [], insights: [], warnings: [], suggested_followups: [],
       });
@@ -412,19 +449,28 @@ export const AIWorkspace: React.FC<AIWorkspaceProps> = ({ filters }) => {
         else if (event.type === "summary_replace")
           setStreamDraft((d) => ({ ...(d ?? emptyDraft()), summary: event.text }));
       };
-      const res = await apiClient.aiQueryStream(
-        {
-          question: trimmed,
-          session_id: activeSession.session_id,
-          filters,
-          page,
-          page_size: pageSize,
-          via_followup: viaSuggestion,
-          response_language: responseLanguage,
-          canonical_question: canonical,
-        },
-        onEvent
+      // Stop wins straight away, even while the non-streaming fallback request is still out.
+      const stopped = new Promise<never>((_, reject) =>
+        controller.signal.addEventListener("abort", () => reject(new QueryStoppedError()), { once: true })
       );
+      const res = await Promise.race([
+        apiClient.aiQueryStream(
+          {
+            question: trimmed,
+            session_id: session.session_id,
+            filters,
+            page,
+            page_size: pageSize,
+            via_followup: viaSuggestion,
+            response_language: responseLanguage,
+            canonical_question: canonical,
+            request_id: requestId,
+          },
+          onEvent,
+          controller.signal
+        ),
+        stopped,
+      ]);
       // Render straight from `res` -- it already carries everything
       // ResultRenderer needs (kpis/charts/tables/summary/etc.). This used to
       // discard nearly all of it and make a SECOND, blocking
@@ -447,7 +493,7 @@ export const AIWorkspace: React.FC<AIWorkspaceProps> = ({ filters }) => {
       // setActiveSession and clearing pendingQuery/loading must land in the
       // SAME render pass (no await between them) -- see the flash this
       // avoids, described in the git history for this block.
-      setActiveSession({ ...activeSession, messages: [...activeSession.messages, userMessage, assistantMessage] });
+      setActiveSession({ ...session, messages: [...session.messages, userMessage, assistantMessage] });
       setPendingQuery(null);
       setStreamDraft(null);
       setStreamStatus(null);
@@ -458,20 +504,73 @@ export const AIWorkspace: React.FC<AIWorkspaceProps> = ({ filters }) => {
       // background -- picks up real message ids/session name/etc. without
       // making the user wait for it.
       apiClient
-        .getSession(res.session_id || activeSession.session_id)
+        .getSession(res.session_id || session.session_id)
         .then((detail) => setActiveSession((prev) => (prev && prev.session_id === detail.session_id ? detail : prev)))
         .catch((err) => console.error("[ui] background session reconcile failed:", err));
       loadSessions().catch((err) => console.error("[ui] loadSessions failed:", err));
     } catch (err: any) {
-      console.error("[ui] query failed:", err);
-      setError(err.message || "Failed to run AI query");
+      if (err instanceof QueryStoppedError || controller.signal.aborted) {
+        // Stopped: nothing is saved; the question goes back in the box to edit or send again.
+        console.log("%c[ui] stopped by the user", "color:#5e35b1");
+        scrollIntentRef.current = "none";
+        chatInputRef.current?.setText(trimmed);
+      } else {
+        console.error("[ui] query failed:", err);
+        setError(err.message || "Failed to run AI query");
+      }
       setPendingQuery(null);
       setStreamDraft(null);
       setStreamStatus(null);
       setLoading(false);
     } finally {
+      if (stopRef.current?.controller === controller) stopRef.current = null;
       chatInputRef.current?.focus();
     }
+  };
+
+  const stopQuery = useCallback(() => {
+    const running = stopRef.current;
+    if (!running) return;
+    running.controller.abort();
+    void apiClient.cancelQuery(running.requestId);  // the backend stops too and stores nothing
+  }, []);
+
+  /** Export as shown on screen (charts, metric cards, tables) -- see utils/snapshot.ts. */
+  const exportSnapshot = (format: SnapshotFormat, title: string, parts: SnapshotPart[], closeMenu: () => void) => {
+    closeMenu();
+    if (!parts.length) return;
+    // Let the menu close first so it is not in the copy.
+    window.setTimeout(() => {
+      const run =
+        format === "png" ? downloadSnapshotPng(title, parts)
+        : format === "pdf" ? printSnapshot(title, parts)
+        : Promise.resolve(downloadSnapshotHtml(title, parts));
+      run.catch((err: any) => {
+        console.error("[ui] export failed:", err);
+        setError(err?.message || "Export failed");
+      });
+    }, 0);
+  };
+
+  /** One answer: its card, headed by the question that produced it. */
+  const answerParts = (index: number): SnapshotPart[] => {
+    const messages = activeSession?.messages ?? [];
+    const msg = messages[index];
+    const node = msg ? assistantResponseRefs.current.get(msg.id) : undefined;
+    if (!node) return [];
+    let u = index - 1;
+    while (u >= 0 && messages[u].role !== "user") u--;
+    return [{ node, heading: u >= 0 ? messages[u].content : msg.response?.question }];
+  };
+
+  /** Edit and resubmit: the edited question replaces the original and everything after it. */
+  const submitEdit = () => {
+    if (!editing || loading) return;
+    const text = editing.text.trim();
+    if (!text) return;
+    const index = editing.index;
+    setEditing(null);
+    void runQuery(text, 1, ALL_ROWS, false, undefined, { truncateTo: index });
   };
   // Stable handles for the (memoized) answer cards, so re-rendering the
   // workspace does not force every past answer's charts and tables to redraw.
@@ -569,6 +668,8 @@ export const AIWorkspace: React.FC<AIWorkspaceProps> = ({ filters }) => {
       inline={inline}
       loading={loading}
       onSubmit={onSubmitQuestion}
+      onStop={stopQuery}
+      stopLabel={t("stopGenerating")}
       placeholder={t("askPlaceholder")}
       micOnLabel={t("micOn")}
       micOffLabel={t("micOff")}
@@ -711,9 +812,13 @@ export const AIWorkspace: React.FC<AIWorkspaceProps> = ({ filters }) => {
                 </button>
                 {exportOpen ? (
                   <div className="export-menu-list" role="menu" onMouseLeave={() => setExportOpen(false)}>
-                    <a role="menuitem" href={apiClient.exportSessionUrl(activeSession.session_id, "html")} onClick={() => setExportOpen(false)}>
-                      {t("exportHtml")}
-                    </a>
+                    {SNAPSHOT_FORMATS.map((format) => (
+                      <button key={format} type="button" role="menuitem"
+                              onClick={() => exportSnapshot(format, activeSessionName,
+                                chatThreadRef.current ? [{ node: chatThreadRef.current }] : [], () => setExportOpen(false))}>
+                        {t(SNAPSHOT_LABEL_KEYS[format])}
+                      </button>
+                    ))}
                   </div>
                 ) : null}
               </div>
@@ -724,7 +829,7 @@ export const AIWorkspace: React.FC<AIWorkspaceProps> = ({ filters }) => {
         <DataSourcesPanel open={insightsOpen} onClose={() => setInsightsOpen(false)} datasets={datasets} />
 
         <div className={`chat-messages${isEmptyChat ? " is-empty" : ""}`} ref={chatMessagesRef}>
-          <div className="chat-thread chat-thread-enter" key={activeSession?.session_id || "none"}>
+          <div className="chat-thread chat-thread-enter" key={activeSession?.session_id || "none"} ref={chatThreadRef}>
             {(() => {
               const assistantMessages = (activeSession?.messages || []).filter((m) => m.role === "assistant");
               const lastAssistantId = assistantMessages.length ? assistantMessages[assistantMessages.length - 1].id : undefined;
@@ -748,7 +853,59 @@ export const AIWorkspace: React.FC<AIWorkspaceProps> = ({ filters }) => {
                         <span className="chat-msg-meta-name">{t("you")}</span>
                         <span className="chat-msg-meta-time">{formatMessageTime(msg.timestamp)}</span>
                       </div>
-                      <div className="chat-user-bubble chat-bubble-enter">{msg.content}</div>
+                      {editing?.index === index ? (
+                        <div className="chat-edit-box">
+                          <textarea
+                            className="chat-edit-textarea"
+                            value={editing.text}
+                            rows={3}
+                            autoFocus
+                            aria-label={t("editQuestion")}
+                            onChange={(e) => setEditing({ index, text: e.target.value })}
+                            onKeyDown={(e) => {
+                              if (e.key === "Enter" && !e.shiftKey) {
+                                e.preventDefault();
+                                submitEdit();
+                              } else if (e.key === "Escape") {
+                                setEditing(null);
+                              }
+                            }}
+                          />
+                          {index + 2 < (activeSession?.messages.length ?? 0) ? (
+                            <div className="chat-edit-hint">{t("editHint")}</div>
+                          ) : null}
+                          <div className="chat-edit-actions">
+                            <button type="button" className="summary-audio-btn" onClick={() => setEditing(null)}>
+                              {t("cancel")}
+                            </button>
+                            <button
+                              type="button"
+                              className="chat-edit-send"
+                              onClick={submitEdit}
+                              disabled={loading || !editing.text.trim()}
+                            >
+                              {t("editSend")}
+                            </button>
+                          </div>
+                        </div>
+                      ) : (
+                        <>
+                          <div className="chat-user-bubble chat-bubble-enter">{msg.content}</div>
+                          <div className="chat-user-actions">
+                            <button
+                              type="button"
+                              className="answer-action-btn"
+                              onClick={() => setEditing({ index, text: msg.content })}
+                              disabled={loading}
+                              title={t("editQuestion")}
+                              aria-label={t("editQuestion")}
+                            >
+                              <Pencil size={12} />
+                              <span>{t("edit")}</span>
+                            </button>
+                          </div>
+                        </>
+                      )}
                     </div>
                   ) : (
                     <div className="chat-msg-col assistant">
@@ -801,6 +958,38 @@ export const AIWorkspace: React.FC<AIWorkspaceProps> = ({ filters }) => {
                           <div className="chat-summary-text">{msg.content}</div>
                         )}
                       </div>
+                      {msg.response ? (
+                        <div className="chat-answer-actions">
+                          {activeSession ? (
+                            <div className="export-menu">
+                              <button
+                                type="button"
+                                className="answer-action-btn"
+                                onClick={() => setAnswerExportOpen((o) => (o === msg.id ? null : msg.id))}
+                                aria-expanded={answerExportOpen === msg.id}
+                                title={t("exportAnswerTitle")}
+                              >
+                                <Download size={13} />
+                                <span>{t("exportAnswer")}</span>
+                              </button>
+                              {answerExportOpen === msg.id ? (
+                                <div className="export-menu-list left" role="menu" onMouseLeave={() => setAnswerExportOpen(null)}>
+                                  {SNAPSHOT_FORMATS.map((format) => (
+                                    <button key={format} type="button" role="menuitem"
+                                            onClick={() => {
+                                              const parts = answerParts(index);
+                                              exportSnapshot(format, parts[0]?.heading || activeSessionName, parts,
+                                                             () => setAnswerExportOpen(null));
+                                            }}>
+                                      {t(SNAPSHOT_LABEL_KEYS[format])}
+                                    </button>
+                                  ))}
+                                </div>
+                              ) : null}
+                            </div>
+                          ) : null}
+                        </div>
+                      ) : null}
                     </div>
                   )}
                 </div>

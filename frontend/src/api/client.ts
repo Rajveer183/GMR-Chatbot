@@ -25,6 +25,8 @@ export interface AIQueryRequest {
   /** A clicked follow-up shown translated: the verified English question behind the
    * translated text in `question` -- that is what runs. */
   canonical_question?: string;
+  /** Client-made id the Stop button cancels with POST /api/ai-query/cancel. */
+  request_id?: string;
 }
 
 /** An earlier answer's text in another language (POST /api/translate). Only the
@@ -538,11 +540,26 @@ export type AIStreamEvent =
 
 /** Streams an answer: progress, then the numbers, then the written answer word
  * by word. Resolves with the final response (same shape as /api/ai-query). */
-async function streamQuery(payload: AIQueryRequest, onEvent: (event: AIStreamEvent) => void): Promise<AIQueryResponse> {
+/** Thrown when the user pressed Stop (never retried, never shown as an error). */
+export class QueryStoppedError extends Error {
+  constructor() {
+    super("Stopped.");
+    this.name = "QueryStoppedError";
+  }
+}
+
+async function streamQuery(
+  payload: AIQueryRequest,
+  onEvent: (event: AIStreamEvent) => void,
+  stopSignal?: AbortSignal
+): Promise<AIQueryResponse> {
   logRequest("POST", "/api/ai-query/stream", payload);
   const t0 = performance.now();
   const controller = new AbortController();
   const timer = window.setTimeout(() => controller.abort(), AI_QUERY_TIMEOUT_MS);
+  if (stopSignal?.aborted) throw new QueryStoppedError();
+  const onStop = () => controller.abort();
+  stopSignal?.addEventListener("abort", onStop);
   try {
     const response = await fetch(`${API_BASE}/api/ai-query/stream`, {
       method: "POST",
@@ -575,12 +592,14 @@ async function streamQuery(payload: AIQueryRequest, onEvent: (event: AIStreamEve
     logResponse("POST", "/api/ai-query/stream", performance.now() - t0, true, final);
     return final;
   } catch (err: any) {
+    if (stopSignal?.aborted) throw new QueryStoppedError();
     if (err?.name === "AbortError") {
       throw new Error(`The server did not respond within ${Math.round(AI_QUERY_TIMEOUT_MS / 1000)} seconds -- please try again.`);
     }
     throw err;
   } finally {
     window.clearTimeout(timer);
+    stopSignal?.removeEventListener("abort", onStop);
   }
 }
 
@@ -593,17 +612,21 @@ export const apiClient = {
 
   /** Streaming variant; falls back to the plain endpoint if the stream fails
    * before anything was shown. */
-  aiQueryStream: async (payload: AIQueryRequest, onEvent: (event: AIStreamEvent) => void): Promise<AIQueryResponse> => {
+  aiQueryStream: async (
+    payload: AIQueryRequest,
+    onEvent: (event: AIStreamEvent) => void,
+    stopSignal?: AbortSignal
+  ): Promise<AIQueryResponse> => {
     let shown = false;
     try {
       const data = await streamQuery(payload, (event) => {
         if (event.type !== "status") shown = true;
         onEvent(event);
-      });
+      }, stopSignal);
       logQueryTrace(payload.question, data);
       return data;
     } catch (err) {
-      if (shown) throw err;
+      if (shown || err instanceof QueryStoppedError || stopSignal?.aborted) throw err;
       console.warn("[api] stream failed before any answer was shown -- using /api/ai-query:", err);
       return apiClient.aiQuery(payload);
     }
@@ -682,6 +705,17 @@ export const apiClient = {
   deleteSession: async (session_id: string): Promise<{ deleted: boolean; session_id: string }> => {
     return deleteJSON(`/api/sessions/${encodeURIComponent(session_id)}`);
   },
+
+  /** Edit and resubmit: keep the first `keep` messages of the chat, drop the rest. */
+  truncateSession: async (session_id: string, keep: number): Promise<SessionDetail> => {
+    return postJSON(`/api/sessions/${encodeURIComponent(session_id)}/truncate`, { keep });
+  },
+
+  /** Stop button: the streamed answer stops and is not saved. Best effort. */
+  cancelQuery: async (request_id: string): Promise<void> => {
+    await postJSON("/api/ai-query/cancel", { request_id }).catch(() => undefined);
+  },
+
 
   listDatasets: async (): Promise<{ datasets: DatasetSummary[] }> => {
     return getJSON("/api/datasets");

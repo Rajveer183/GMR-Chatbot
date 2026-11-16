@@ -105,9 +105,20 @@ const en = {
   exportChat: "Export",
   exportHtml: "Report (HTML / print to PDF)",
   exportMd: "Markdown",
+  exportPdf: "PDF (as shown)",
+  exportPng: "Image (PNG)",
+  exportWebPage: "Web page (HTML)",
   hideSidebar: "Hide sidebar",
   showSidebar: "Show sidebar",
-  exportTitle: "Download this whole conversation",
+  exportTitle: "Download this whole conversation as shown on screen",
+  // response controls
+  stopGenerating: "Stop generating",
+  edit: "Edit",
+  editQuestion: "Edit and resubmit this question",
+  editSend: "Save & submit",
+  editHint: "The answers after this question will be replaced.",
+  exportAnswer: "Export",
+  exportAnswerTitle: "Download this answer as shown: charts, metric cards and tables",
 };
 
 export type UIKey = keyof typeof en;
@@ -116,6 +127,8 @@ type Strings = Partial<Record<UIKey, string>>;
 const hinglish: Strings = {
   helpful: "Kaam ka hai", notHelpful: "Kaam ka nahi", feedbackThanks: "Feedback ke liye shukriya",
   feedbackWhat: "Kya galat tha?", feedbackSend: "Bhejo", exportChat: "Export",
+  stopGenerating: "Roko", edit: "Edit", editSend: "Save karke bhejo",
+  editHint: "Is sawaal ke baad ke jawab badal jayenge.", exportAnswerTitle: "Yeh jawab download karo",
   interpretedAs: "Samjha gaya:",
   translating: "Translate ho raha hai…",
   translationFailed: "Translation abhi available nahi hai — original answer dikha rahe hain.",
@@ -174,6 +187,8 @@ const hinglish: Strings = {
 const hi: Strings = {
   helpful: "उपयोगी", notHelpful: "उपयोगी नहीं", feedbackThanks: "प्रतिक्रिया के लिए धन्यवाद",
   feedbackWhat: "क्या गलत था?", feedbackSend: "भेजें", exportChat: "एक्सपोर्ट",
+  stopGenerating: "रोकें", edit: "संपादित करें", editSend: "सहेजें और भेजें",
+  editHint: "इस प्रश्न के बाद के उत्तर बदल दिए जाएँगे।", exportAnswer: "एक्सपोर्ट", exportAnswerTitle: "यह उत्तर डाउनलोड करें",
   summary: "सारांश", keyMetrics: "मुख्य मीट्रिक्स", insights: "इनसाइट्स", followups: "सुझाए गए अगले प्रश्न",
   resultPreview: "परिणाम पूर्वावलोकन", warnings: "चेतावनियाँ", sources: "स्रोत", interpretedAs: "इस रूप में समझा गया:",
   dashboardView: "डैशबोर्ड जैसा: {card}",

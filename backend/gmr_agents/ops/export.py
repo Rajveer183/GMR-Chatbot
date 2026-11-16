@@ -45,6 +45,21 @@ def _turns(session: dict) -> list[dict]:
     return turns
 
 
+def single_turn(session: dict, trace_id: str) -> dict | None:
+    """The session cut down to one answer (by its trace id) and the question before it -- the
+    answer card's own Export. None when no answer in the session has that trace id."""
+    messages = session.get("messages") or []
+    for i, m in enumerate(messages):
+        if m.get("role") != "assistant" or ((m.get("response") or {}).get("debug") or {}).get("trace_id") != trace_id:
+            continue
+        keep = [m]
+        if i > 0 and messages[i - 1].get("role") == "user":
+            keep.insert(0, messages[i - 1])
+        at = keep[0].get("timestamp") or ""
+        return {**session, "messages": keep, "created_at": at, "updated_at": m.get("timestamp") or at}
+    return None
+
+
 def to_markdown(session: dict, include_sql: bool = False) -> str:
     out = [f"# {session.get('session_name') or 'Chat session'}", "",
            f"_Exported conversation -- {session.get('created_at', '')} to {session.get('updated_at', '')}_", ""]

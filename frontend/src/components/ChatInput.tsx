@@ -1,7 +1,6 @@
 import { forwardRef, useEffect, useImperativeHandle, useRef, useState } from "react";
-import { Mic, Send } from "lucide-react";
+import { Mic, Send, Square } from "lucide-react";
 import SpeechRecognition, { useSpeechRecognition } from "react-speech-recognition";
-import { TypingIndicator } from "./TypingIndicator";
 
 // The question box lives in its own component so a keystroke (or a live speech
 // transcript update) re-renders only this input bar. When the text state sat in
@@ -11,6 +10,8 @@ import { TypingIndicator } from "./TypingIndicator";
 export interface ChatInputHandle {
   clear: () => void;
   focus: () => void;
+  /** Put text back in the box (a stopped question, so it can be edited and sent again). */
+  setText: (text: string) => void;
 }
 
 interface ChatInputProps {
@@ -21,12 +22,15 @@ interface ChatInputProps {
   micOffLabel: string;
   /** BCP-47 locale for speech recognition. */
   speechLocale: string;
+  /** Stop button (shown in place of Send while an answer is running). */
+  onStop?: () => void;
+  stopLabel?: string;
   /** Render in the page flow (inside the welcome card) instead of the fixed bottom bar. */
   inline?: boolean;
 }
 
 export const ChatInput = forwardRef<ChatInputHandle, ChatInputProps>(
-  ({ loading, onSubmit, placeholder, micOnLabel, micOffLabel, speechLocale, inline = false }, ref) => {
+  ({ loading, onSubmit, onStop, stopLabel = "Stop", placeholder, micOnLabel, micOffLabel, speechLocale, inline = false }, ref) => {
     const [question, setQuestion] = useState("");
     const [speechError, setSpeechError] = useState<string | null>(null);
     const inputRef = useRef<HTMLTextAreaElement>(null);
@@ -42,6 +46,7 @@ export const ChatInput = forwardRef<ChatInputHandle, ChatInputProps>(
 
     useImperativeHandle(ref, () => ({
       clear: () => setQuestion(""),
+      setText: (text: string) => setQuestion(text),
       focus: () => {
         const el = inputRef.current;
         if (!el) return;
@@ -112,9 +117,15 @@ export const ChatInput = forwardRef<ChatInputHandle, ChatInputProps>(
             >
               <Mic size={18} />
             </button>
-            <button className="chat-send-btn" type="button" onClick={() => onSubmit(question)} disabled={loading || speechActive}>
-              {loading ? <TypingIndicator /> : <Send size={14} />}
-            </button>
+            {loading && onStop ? (
+              <button className="chat-send-btn stop" type="button" onClick={onStop} title={stopLabel} aria-label={stopLabel}>
+                <Square size={12} fill="currentColor" />
+              </button>
+            ) : (
+              <button className="chat-send-btn" type="button" onClick={() => onSubmit(question)} disabled={loading || speechActive}>
+                <Send size={14} />
+              </button>
+            )}
           </div>
         </div>
         {speechError ? <div className="chat-speech-error">{speechError}</div> : null}

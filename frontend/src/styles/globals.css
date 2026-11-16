@@ -2859,3 +2859,215 @@ button {
 .ds-search input { flex: 1; border: 0; outline: 0; background: transparent; font-size: 13px; color: inherit; }
 .ds-body { flex: 1; overflow-y: auto; padding: 4px 16px 20px; font-size: 13px; }
 .ds-body .ins-h:first-child { margin-top: 8px; }
+
+/* ==========================================================================
+   Response controls: Stop, Regenerate, Edit & resubmit, per-answer Export
+   ========================================================================== */
+.chat-send-btn.stop {
+  background: var(--text-main);
+  box-shadow: none;
+}
+
+.chat-answer-actions,
+.chat-user-actions {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  margin-top: 6px;
+}
+
+.chat-user-actions {
+  justify-content: flex-end;
+  opacity: 0;
+  transition: opacity var(--duration-fast) ease;
+}
+
+.chat-msg-col.user:hover .chat-user-actions,
+.chat-user-actions:focus-within {
+  opacity: 1;
+}
+
+@media (hover: none) {
+  .chat-user-actions {
+    opacity: 1;
+  }
+}
+
+.answer-action-btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  padding: 4px 10px;
+  border: 1px solid transparent;
+  border-radius: var(--radius-pill);
+  background: transparent;
+  color: var(--text-muted);
+  font-size: 12px;
+  cursor: pointer;
+  transition: background var(--duration-fast) ease, border-color var(--duration-fast) ease, color var(--duration-fast) ease;
+}
+
+.answer-action-btn:hover:not(:disabled) {
+  border-color: var(--border);
+  background: var(--card-bg);
+  color: var(--text-main);
+}
+
+.answer-action-btn:disabled {
+  opacity: 0.45;
+  cursor: not-allowed;
+}
+
+/* Under an answer: opens upward, so the fixed question box at the bottom never covers it. */
+.export-menu-list.left {
+  left: 0;
+  right: auto;
+  top: auto;
+  bottom: calc(100% + 4px);
+  min-width: 200px;
+  z-index: 60;
+}
+
+.chat-edit-box {
+  width: min(560px, 100%);
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  padding: 10px;
+  border: 1px solid var(--accent);
+  border-radius: var(--radius-lg);
+  background: var(--card-bg);
+  box-shadow: 0 0 0 3px var(--accent-ring);
+  box-sizing: border-box;
+}
+
+.chat-edit-textarea {
+  width: 100%;
+  min-height: 64px;
+  max-height: 220px;
+  resize: vertical;
+  border: none;
+  outline: none;
+  background: transparent;
+  color: var(--text-main);
+  font: inherit;
+  font-size: 14px;
+  line-height: 1.5;
+}
+
+.chat-edit-hint {
+  font-size: 12px;
+  color: var(--warning);
+}
+
+.chat-edit-actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: var(--space-2);
+}
+
+.chat-edit-send {
+  padding: 7px 14px;
+  border: none;
+  border-radius: var(--radius-pill);
+  background: linear-gradient(135deg, var(--bhel-blue) 0%, var(--bhel-navy-deep) 100%);
+  color: #fff;
+  font-size: 12.5px;
+  cursor: pointer;
+}
+
+.chat-edit-send:disabled {
+  opacity: 0.55;
+  cursor: not-allowed;
+}
+
+/* Export menu items are buttons (exports are built in code -- see utils/snapshot.ts). */
+.export-menu-list button {
+  padding: 8px 10px;
+  border: none;
+  border-radius: 6px;
+  background: transparent;
+  color: var(--text-main);
+  font: inherit;
+  font-size: 13px;
+  text-align: left;
+  cursor: pointer;
+}
+
+.export-menu-list button:hover {
+  background: var(--accent-soft);
+}
+
+/* ==========================================================================
+   "Export as shown" copy (utils/snapshot.ts): PNG / PDF / HTML of an answer or the chat
+   ========================================================================== */
+.snapshot-root {
+  box-sizing: border-box;
+  padding: 24px;
+  background: var(--page-bg);
+  font-family: var(--font-display, 'Inter', sans-serif);
+  color: var(--text-main);
+  -webkit-print-color-adjust: exact;
+  print-color-adjust: exact;
+}
+
+/* Entrance animations (cards, chart tiles, table rows start at opacity 0): finish them instantly so
+   the copy shows every element in its final, visible state. */
+.snapshot-root,
+.snapshot-root * {
+  animation-duration: 0s !important;
+  animation-delay: 0s !important;
+  animation-iteration-count: 1 !important;
+  transition: none !important;
+}
+
+.snapshot-root .result-stagger {
+  opacity: 1 !important;
+}
+
+.snapshot-root .table-container {
+  max-height: none !important;
+  overflow: visible !important;
+}
+
+.snapshot-header {
+  margin-bottom: 16px;
+  padding-bottom: 12px;
+  border-bottom: 2px solid var(--accent);
+}
+
+.snapshot-title {
+  font-size: 18px;
+  font-weight: 700;
+  color: var(--bhel-navy);
+}
+
+.snapshot-meta {
+  margin-top: 4px;
+  font-size: 12px;
+  color: var(--text-muted);
+}
+
+.snapshot-question {
+  margin: 0 0 10px;
+  padding: 10px 14px;
+  border-radius: var(--radius-md);
+  background: var(--accent-soft);
+  color: var(--bhel-navy);
+  font-size: 14px;
+  font-weight: 600;
+}
+
+.snapshot-root .chat-user-actions,
+.snapshot-root .chat-answer-actions {
+  display: none !important;
+}
+
+@media print {
+  .snapshot-root .chart-card,
+  .snapshot-root .kpi-card,
+  .snapshot-root .metric-card,
+  .snapshot-root tr {
+    break-inside: avoid;
+  }
+}
