@@ -45,7 +45,7 @@ def run(sql: str) -> str:
     return f"  {len(df)} row(s)\n" + df.head(8).to_string(max_colwidth=40)
 
 
-def main() -> None:
+def main() -> int:
     examples = business_rules.examples()
     pick = {int(a) for a in sys.argv[1:]}
     bad = 0
@@ -58,8 +58,9 @@ def main() -> None:
             bad += "REJECTED" in out or "DB ERROR" in out
             print(out)
     print(f"\n{bad} failing quer(ies)")
+    return 1 if bad else 0
 
 
 if __name__ == "__main__":
     sys.stdout.reconfigure(encoding="utf-8")
-    main()
+    sys.exit(main())

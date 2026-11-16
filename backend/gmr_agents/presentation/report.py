@@ -20,6 +20,7 @@ import logging
 import re
 from concurrent.futures import ThreadPoolExecutor
 from datetime import date, timedelta
+from gmr_agents.execution.ist_today import today as _ist_today  # IST date on any machine
 
 import pandas as pd
 
@@ -87,7 +88,7 @@ def _month_bounds(y: int, m: int) -> tuple[date, date]:
 
 def request(question: str, today: date | None = None) -> dict:
     """{'period', 'start', 'end', 'prev_start', 'prev_end', 'label', 'prev_label', 'project', 'assumed'}"""
-    today = today or date.today()
+    today = today or _ist_today()
     yday = today - timedelta(days=1)
     q = str(question or "").lower()
     project = next((p for p in _PROJECTS if re.search(rf"\b{p}\b", q)), None)

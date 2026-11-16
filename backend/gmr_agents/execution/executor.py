@@ -22,7 +22,7 @@ from sqlglot import exp
 from gmr_agents.catalog.catalog import AthenaCatalog
 from db_connection.readonly import assert_read_only
 from gmr_agents.execution.connections import athena_query, pooled_postgres_connection
-from gmr_agents.execution import hierarchy
+from gmr_agents.execution import hierarchy, ist_today
 from gmr_agents.execution.dialect import DIALECT, guard_division, has_aggregate
 
 log = logging.getLogger(__name__)
@@ -53,7 +53,13 @@ def run_sql(sql: str, database: str | None, engine: str) -> pd.DataFrame:
         return hierarchy.natural_order(hierarchy.relabel(sql, _run_postgres(sql)))
     # Agent queries only: a time limit (AGENT_ATHENA_TIMEOUT_S), so a runaway join is cancelled instead of holding
     # the request for minutes. Catalog refreshes and the data skeleton keep no limit.
-    return hierarchy.natural_order(athena_query(sql, database=database, max_seconds=config.AGENT_ATHENA_TIMEOUT_S))
+    sent = ist_today.anchor(sql, "athena")
+    try:
+        return hierarchy.natural_order(athena_query(sent, database=database, max_seconds=config.AGENT_ATHENA_TIMEOUT_S))
+    except Exception as exc:
+        if sent is not sql:
+            ist_today.unanchor_error(exc, "athena")
+        raise
 
 
 def _round_numeric(sql: str) -> str | None:
@@ -109,8 +115,13 @@ def _read_with_timeout(sql: str, conn) -> pd.DataFrame:
     connection's own default (background catalog jobs) is restored afterwards."""
     with conn.cursor() as cur:
         cur.execute(f"SET statement_timeout = {int(config.AGENT_SQL_TIMEOUT_MS)}")
+    sent = ist_today.anchor(sql, "postgres")  # 'today' = the IST date (execution/ist_today.py)
     try:
-        return pd.read_sql_query(sql, conn)
+        return pd.read_sql_query(sent, conn)
+    except Exception as exc:
+        if sent is not sql:
+            ist_today.unanchor_error(exc, "postgres")
+        raise
     finally:
         try:
             with conn.cursor() as cur:

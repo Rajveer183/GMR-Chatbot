@@ -16,6 +16,8 @@ from __future__ import annotations
 
 import re
 
+from gmr_agents.execution.ist_today import today as _ist_today  # IST date on any machine
+
 _PROJECTS = {"agra": ["agra"], "kashi": ["kashi", "kasi", "varanasi"],
              "triveni": ["triveni", "trivei", "prayagraj", "mirzapur"]}
 _OEMS = {"aew": ["aew"], "cap": ["cap"], "hpl": ["hpl"], "seipl": ["seipl"]}
@@ -342,7 +344,7 @@ def _om_problems(question: str, low: str, asked: str | None = None) -> list[str]
     # circle wise in Azamgarh zone in 2026' ran to '2026-12-31' -- EDC-MAU 68 instead of the card's 55.
     if "gold_om_hhu_reading_day_agg" in low:
         import datetime as _dt
-        today = _dt.date.today().isoformat()
+        today = _ist_today().isoformat()
         late = [d for d in re.findall(r"'(\d{4}-\d{2}-\d{2})'", low) if d >= today]
         if late or not re.search(r"current_date\s*-\s*1\b|current_date\s*-\s*interval\s*'1 day'|'\d{4}-\d{2}-\d{2}'",
                                  low):
@@ -1528,8 +1530,8 @@ def check(question: str, sql_texts: list[str], columns: set[str] | None = None, 
     # last month' ran for 1-31 October (the current month) while the answer said September.
     if re.search(r"\blast month\b|\bprevious month\b|\bpichhle mahine\b", question, re.I):
         import datetime as _dt
-        this_month = _dt.date.today().replace(day=1).isoformat()
-        prev_month = (_dt.date.today().replace(day=1) - _dt.timedelta(days=1)).strftime("%Y-%m")
+        this_month = _ist_today().replace(day=1).isoformat()
+        prev_month = (_ist_today().replace(day=1) - _dt.timedelta(days=1)).strftime("%Y-%m")
         pinned = re.findall(r"'(\d{4}-\d{2})-\d{2}'", low)
         hes = any(re.search(rf"\bhes_gold\.{t}\b", low) for t in _TECHNICAL_TABLES) or "hes_silver." in low
         if f"'{this_month}'" in low and "interval '1 month'" not in low:

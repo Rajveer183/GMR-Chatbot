@@ -21,6 +21,7 @@ from __future__ import annotations
 
 import re
 from datetime import date, datetime
+from gmr_agents.execution.ist_today import today as _ist_today  # IST date on any machine
 
 from shared import config
 
@@ -54,7 +55,7 @@ def check(tables: list[str], sql: str | None, skeleton: dict | None = None) -> l
 
         skeleton = data_skeleton.load()
     cards = {c.get("table"): c for c in (skeleton or {}).get("tables") or []}
-    measured = _day((skeleton or {}).get("built_at")) or date.today()
+    measured = _day((skeleton or {}).get("built_at")) or _ist_today()
     sql_text = (sql or "").lower()
     out: list[dict] = []
     for raw in tables or []:

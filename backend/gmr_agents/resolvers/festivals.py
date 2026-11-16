@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import re
 from datetime import date
+from gmr_agents.execution.ist_today import today as _ist_today  # IST date on any machine
 
 # Main festival day as observed in Uttar Pradesh. Fixed-date holidays are generated per year below.
 _LUNAR = {
@@ -42,7 +43,7 @@ def _dates(name: str) -> list[date]:
 
 def resolve(question: str, today: date | None = None) -> list[tuple[str, date]]:
     """(name as written, date) for each festival named; [] when none (or no known date)."""
-    today = today or date.today()
+    today = today or _ist_today()
     out = []
     for m in _NAME_RE.finditer(question or ""):
         written = m.group(1)

@@ -15,6 +15,7 @@ from __future__ import annotations
 
 import re
 from datetime import date
+from gmr_agents.execution.ist_today import today as _ist_today  # IST date on any machine
 
 import pandas as pd
 
@@ -59,7 +60,7 @@ def fix(text: str, frames: list, given: str, today: date | None = None) -> tuple
     """(text with unsupported month-years corrected, the 'Month YYYY' strings that were wrong)."""
     if not text or not _MONTH_YEAR.search(text):
         return text, []
-    today = today or date.today()
+    today = today or _ist_today()
     seen = _frame_years(frames)
     ok = set(seen[0]) | {int(y) for y in _YEAR.findall(given or "")} | {today.year}
     if _LAST_YEAR.search(given or ""):

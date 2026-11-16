@@ -21,6 +21,7 @@ import logging
 import re
 from concurrent.futures import ThreadPoolExecutor
 from datetime import date
+from gmr_agents.execution.ist_today import today as _ist_today  # IST date on any machine
 
 import pandas as pd
 
@@ -111,7 +112,7 @@ def request(question: str, prior_turns: list[dict] | None = None, today: date | 
         if word == "may" and not m.group(2):
             continue   # 'may' is usually the verb
         y = m.group(2)
-        year = (2000 + int(y) if len(y) == 2 else int(y)) if y else (today or date.today()).year
+        year = (2000 + int(y) if len(y) == 2 else int(y)) if y else (today or _ist_today()).year
         month = date(year, _MONTHS[word], 1)
         break
     return {"meter": meter, "consumer_id": cons, "month": month}
