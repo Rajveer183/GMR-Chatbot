@@ -41,8 +41,9 @@ class EndpointValidationTests(unittest.TestCase):
         self.client = TestClient(main.app)
 
     def test_bad_page_size(self):
-        r = self.client.post("/api/table-page", json={"trace_id": "x", "page": 1, "page_size": 7})
-        self.assertEqual(r.status_code, 422)
+        for size in (0, 501):
+            r = self.client.post("/api/table-page", json={"trace_id": "x", "page": 1, "page_size": size})
+            self.assertEqual(r.status_code, 422)
 
     def test_bad_page(self):
         r = self.client.post("/api/table-page", json={"trace_id": "x", "page": 0, "page_size": 25})

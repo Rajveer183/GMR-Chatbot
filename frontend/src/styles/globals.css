@@ -2322,13 +2322,44 @@ button {
   font-size: 12.5px;
   color: #475569;
 }
-.table-pager-size select {
-  margin-left: 8px;
+.table-pager-size input,
+.table-pager-page input {
   padding: 3px 6px;
   border: 1px solid #cbd5e1;
   border-radius: 6px;
   background: #fff;
   font: inherit;
+  color: inherit;
+  text-align: center;
+}
+/* No number spinners -- they ate the box's width so only one digit showed. */
+.table-pager-size input,
+.table-pager-page input {
+  -moz-appearance: textfield;
+  appearance: textfield;
+}
+.table-pager-size input::-webkit-outer-spin-button,
+.table-pager-size input::-webkit-inner-spin-button,
+.table-pager-page input::-webkit-outer-spin-button,
+.table-pager-page input::-webkit-inner-spin-button {
+  -webkit-appearance: none;
+  margin: 0;
+}
+.table-pager-size input {
+  box-sizing: border-box;
+  margin-left: 8px;
+  width: 72px;            /* 3 digits + the 25/50/100 suggestions arrow */
+  text-align: left;
+}
+.table-pager-page input {
+  box-sizing: content-box;
+  margin: 0 6px;
+}
+.table-pager-size input:focus,
+.table-pager-page input:focus {
+  outline: none;
+  border-color: #0b3c6d;
+  box-shadow: 0 0 0 2px rgba(11, 60, 109, 0.15);
 }
 .table-pager-nav {
   display: flex;

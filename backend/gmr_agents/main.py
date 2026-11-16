@@ -884,7 +884,7 @@ class TablePageRequest(BaseModel):
                                   # rows the answer itself showed (e.g. a top-5 answer, then rows 6..)
 
 
-_PAGE_SIZES = (25, 50, 100)
+_MAX_PAGE_SIZE = 500          # any rows-per-page the user types, 1.._MAX_PAGE_SIZE
 _TOTALS: dict[tuple[str, int], int] = {}     # (trace_id, table) -> total rows, counted once
 
 
@@ -1028,8 +1028,8 @@ def table_page(req: TablePageRequest) -> dict:
     from gmr_agents.llm_pipeline import _cell, raw_cols
     from gmr_agents.execution import executor
 
-    if req.page < 1 or req.page_size not in _PAGE_SIZES:
-        raise HTTPException(status_code=422, detail=f"page must be >= 1 and page_size one of {_PAGE_SIZES}.")
+    if req.page < 1 or not 1 <= req.page_size <= _MAX_PAGE_SIZE:
+        raise HTTPException(status_code=422, detail=f"page must be >= 1 and page_size between 1 and {_MAX_PAGE_SIZE}.")
     base, engine, database = _answer_sql(req.trace_id, req.table_index)
     key = (req.trace_id, req.table_index)
     try:

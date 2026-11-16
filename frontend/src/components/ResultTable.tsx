@@ -50,6 +50,14 @@ interface ResultTableProps {
 }
 
 const PAGE_SIZES = [25, 50, 100];
+/** Rows per page can be typed freely, up to this (the backend's /api/table-page limit). */
+const MAX_PAGE_SIZE = 500;
+
+/** A whole number typed into a pager box, clamped to [min, max]; null when it isn't a number. */
+const parseClamped = (text: string, min: number, max: number): number | null => {
+  const n = Math.floor(Number(text.replace(/[,\s]/g, "")));
+  return Number.isFinite(n) && text.trim() !== "" ? Math.min(max, Math.max(min, n)) : null;
+};
 
 const saveBlob = (blob: Blob, filename: string) => {
   const url = URL.createObjectURL(blob);
@@ -76,6 +84,9 @@ export const ResultTable: React.FC<ResultTableProps> = ({ table, traceId, tableI
   const [sorting, setSorting] = useState<SortingState>([]);
   const [page, setPage] = useState(1);
   const [pageSize, setPageSize] = useState(25);
+  // What is typed in the page / rows-per-page boxes; applied on Enter or when the box loses focus.
+  const [pageDraft, setPageDraft] = useState("1");
+  const [sizeDraft, setSizeDraft] = useState("25");
   const [remoteRows, setRemoteRows] = useState<TableRow[] | null>(null);
   const [loading, setLoading] = useState(false);
   const [pageError, setPageError] = useState<string | null>(null);
@@ -122,19 +133,67 @@ export const ResultTable: React.FC<ResultTableProps> = ({ table, traceId, tableI
   const pageRows = page === 1 ? firstPageRows : pageSize;
   const needsServer = pageStart + pageRows > delivered.length && delivered.length < totalCount && !!traceId;
 
+  // A new answer starts on page 1 (a new rows-per-page does too -- set in commitSize, in the same
+  // render, so no request goes out for the old page at the new size).
   useEffect(() => {
     setPage(1);
-  }, [pageSize, table.rows]);
+  }, [table.rows]);
+
+  useEffect(() => setPageDraft(String(page)), [page]);
+  useEffect(() => setSizeDraft(String(pageSize)), [pageSize]);
+
+  const commitPage = () => {
+    // Without a trace id only the delivered rows exist, so pages past them can't be fetched.
+    const reachable = traceId
+      ? totalPages
+      : Math.max(1, 1 + Math.ceil(Math.max(0, delivered.length - firstPageRows) / pageSize));
+    const n = parseClamped(pageDraft, 1, Math.min(totalPages, reachable));
+    if (n === null) {
+      setPageDraft(String(page));
+      return;
+    }
+    setPage(n);
+    setPageDraft(String(n));
+  };
+  const commitSize = () => {
+    const n = parseClamped(sizeDraft, 1, MAX_PAGE_SIZE);
+    if (n === null) {
+      setSizeDraft(String(pageSize));
+      return;
+    }
+    setPageSize(n);
+    setPage(1);
+    setSizeDraft(String(n));
+  };
+  const onBoxKey = (commit: () => void, reset: () => void) => (e: React.KeyboardEvent<HTMLInputElement>) => {
+    if (e.key === "Enter") {
+      commit();
+      e.currentTarget.blur();
+    } else if (e.key === "Escape") {
+      reset();
+      e.currentTarget.blur();
+    }
+  };
+  // "Page {page} of {pages}" in the answer's language, split around {page} so the box sits in its place.
+  const [pageLabelBefore, pageLabelAfter = ""] = uiText(lang, "pageOf", {
+    page: "\u0000",
+    pages: totalPages.toLocaleString(),
+  }).split("\u0000");
 
   useEffect(() => {
+    // Every run clears 'loading' itself: a superseded request is cancelled (its .finally is skipped),
+    // so leaving it to the request kept "Loading page" up for good when the next page/size needed
+    // no request at all (e.g. back to a page of delivered rows).
     if (!needsServer || !traceId) {
       setRemoteRows(null);
       setPageError(null);
+      setLoading(false);
       return;
     }
     let cancelled = false;
     setLoading(true);
     setPageError(null);
+    setRemoteRows(null);   // don't show the previous page's rows under the new page number
     apiClient
       .tablePage(traceId, page, pageSize, tableIndex, pageStart)
       .then((res) => {
@@ -299,13 +358,24 @@ export const ResultTable: React.FC<ResultTableProps> = ({ table, traceId, tableI
         <div className="table-pager">
           <label className="table-pager-size">
             {uiText(lang, "rowsPerPage")}
-            <select value={pageSize} onChange={(e) => setPageSize(Number(e.target.value))}>
+            <input
+              type="number"
+              inputMode="numeric"
+              min={1}
+              max={MAX_PAGE_SIZE}
+              list={`page-sizes-${tableIndex}`}
+              value={sizeDraft}
+              onChange={(e) => setSizeDraft(e.target.value)}
+              onBlur={commitSize}
+              onKeyDown={onBoxKey(commitSize, () => setSizeDraft(String(pageSize)))}
+              aria-label={uiText(lang, "rowsPerPage")}
+              title={`1 – ${MAX_PAGE_SIZE}`}
+            />
+            <datalist id={`page-sizes-${tableIndex}`}>
               {PAGE_SIZES.map((n) => (
-                <option key={n} value={n}>
-                  {n}
-                </option>
+                <option key={n} value={n} />
               ))}
-            </select>
+            </datalist>
           </label>
           <div className="table-pager-nav">
             <button type="button" onClick={() => setPage((p) => Math.max(1, p - 1))} disabled={page <= 1 || loading}
@@ -313,7 +383,20 @@ export const ResultTable: React.FC<ResultTableProps> = ({ table, traceId, tableI
               <ChevronLeft size={14} /> {uiText(lang, "previous")}
             </button>
             <span className="table-pager-page">
-              {uiText(lang, "pageOf", { page, pages: totalPages })}
+              {pageLabelBefore}
+              <input
+                type="number"
+                inputMode="numeric"
+                min={1}
+                max={totalPages}
+                value={pageDraft}
+                onChange={(e) => setPageDraft(e.target.value)}
+                onBlur={commitPage}
+                onKeyDown={onBoxKey(commitPage, () => setPageDraft(String(page)))}
+                aria-label={uiText(lang, "pageOf", { page, pages: totalPages })}
+                style={{ width: `${Math.max(3, String(totalPages).length + 2)}ch` }}
+              />
+              {pageLabelAfter}
             </span>
             <button type="button" onClick={() => setPage((p) => Math.min(totalPages, p + 1))}
               disabled={page >= totalPages || loading || (!traceId && pageStart + pageRows >= delivered.length)}
