@@ -42,6 +42,8 @@ export interface TranslatedAnswer {
   tables: AITableSpec[];
   suggested_followups: string[];
   suggested_followup_labels?: string[] | null;
+  /** The "Interpreted as" question in the target language (null = keep the English one). */
+  resolved_question_label?: string | null;
   /** "failed" = the translation could not be made; the text is the original. */
   translation: { target: string; status: "ok" | "partial" | "failed" | "skipped" };
 }
@@ -261,6 +263,8 @@ export interface AIQueryResponse {
   /** The follow-ups as shown, in the answer's language (same order). A click sends the shown
    * text as the question and the English one as canonical_question. */
   suggested_followup_labels?: string[] | null;
+  /** The "Interpreted as" question as shown in the answer's language (set by a translation). */
+  resolved_question_label?: string | null;
   /** Where the answer comes from, built by the backend's grounding guard (never by the
    * LLM): the live query + verified pattern/rules for data answers, the cited rule /
    * glossary chunks for explanations. */

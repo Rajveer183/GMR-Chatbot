@@ -823,6 +823,7 @@ def translate_answer(req: TranslateRequest, request: Request) -> dict:
             "kpis": out.get("kpis") or [], "charts": out.get("charts") or [], "tables": out.get("tables") or [],
             "suggested_followups": out.get("suggested_followups") or [],
             "suggested_followup_labels": out.get("suggested_followup_labels"),
+            "resolved_question_label": out.get("resolved_question_label"),
             "translation": out.get("translation") or {"target": target, "status": "skipped"}}
 
 

@@ -387,6 +387,10 @@ def _label_items(response: dict, target: str) -> dict[str, str]:
     if target != "en":
         for i, q in enumerate(response.get("suggested_followups") or []):
             items[f"followups.{i}"] = str(q)
+        # The 'Interpreted as' line (English, from the resolver) follows the chosen language too.
+        resolved = str((response.get("debug") or {}).get("resolved_question") or "").strip()
+        if resolved:
+            items["resolved_question"] = resolved
     return items
 
 
@@ -400,12 +404,15 @@ def _clear_display(out: dict) -> None:
                 if block == "tables":
                     obj.pop("column_labels", None)
     out.pop("suggested_followup_labels", None)
+    out.pop("resolved_question_label", None)
 
 
 def _apply(out: dict, done: dict[str, str]) -> None:
     for k, text in done.items():
         head, _, rest = k.partition(".")
-        if head == "col":
+        if head == "resolved_question":
+            out["resolved_question_label"] = text  # debug.resolved_question itself stays English
+        elif head == "col":
             for table in out.get("tables") or []:
                 if rest in (table.get("columns") or []):
                     table.setdefault("column_labels", {})[rest] = text

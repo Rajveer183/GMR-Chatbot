@@ -374,6 +374,7 @@ export const AIWorkspace: React.FC<AIWorkspaceProps> = ({ filters }) => {
       result: {
         ...response, summary: t.summary, insights: t.insights, warnings: t.warnings, answer_language: t.answer_language,
         kpis: t.kpis, charts: t.charts, tables: t.tables, suggested_followup_labels: t.suggested_followup_labels,
+        resolved_question_label: t.resolved_question_label,
       },
       note: null,
     };
@@ -756,7 +757,12 @@ export const AIWorkspace: React.FC<AIWorkspaceProps> = ({ filters }) => {
                         msg.response.debug.resolved_question.trim().toLowerCase() !==
                           (msg.response.question || "").trim().toLowerCase() ? (
                           <div className="chat-interpreted-as">
-                            {uiText(answerLanguage, "interpretedAs")} <span lang="en">{msg.response.debug.resolved_question}</span>
+                            {uiText(answerLanguage, "interpretedAs")}{" "}
+                            {shown?.result.resolved_question_label ? (
+                              <span>{shown.result.resolved_question_label}</span>
+                            ) : (
+                              <span lang="en">{msg.response.debug.resolved_question}</span>
+                            )}
                           </div>
                         ) : null}
                         {shown?.note ? (
