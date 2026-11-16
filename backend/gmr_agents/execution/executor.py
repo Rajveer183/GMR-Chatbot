@@ -56,7 +56,39 @@ def run_sql(sql: str, database: str | None, engine: str) -> pd.DataFrame:
     return hierarchy.natural_order(athena_query(sql, database=database, max_seconds=config.AGENT_ATHENA_TIMEOUT_S))
 
 
+def _round_numeric(sql: str) -> str | None:
+    """ROUND(x, n) with every x cast to numeric: Postgres has no ROUND(double precision, integer), and
+    PERCENT_RANK / CUME_DIST / STDDEV / float columns are double. 16 Nov: every percentile question failed
+    its first query on this and cost a full SQL repair round."""
+    import sqlglot
+    from sqlglot import exp
+
+    try:
+        tree = sqlglot.parse_one(sql, dialect="postgres")
+    except Exception:
+        return None
+    changed = False
+    for node in list(tree.find_all(exp.Round)):
+        if node.args.get("decimals") is not None and not isinstance(node.this, exp.Cast):
+            node.set("this", exp.Cast(this=node.this.copy(), to=exp.DataType.build("NUMERIC")))
+            changed = True
+    return tree.sql(dialect="postgres") if changed else None
+
+
 def _run_postgres(sql: str) -> pd.DataFrame:
+    try:
+        return _run_postgres_once(sql)
+    except Exception as exc:
+        if "function round(double precision" in str(exc).lower():
+            fixed = _round_numeric(sql)
+            if fixed:
+                log.info("postgres: ROUND(double precision, n) -- re-running with numeric casts")
+                assert_read_only(fixed)
+                return _run_postgres_once(fixed)
+        raise
+
+
+def _run_postgres_once(sql: str) -> pd.DataFrame:
     try:
         with pooled_postgres_connection() as conn:
             return _read_with_timeout(sql, conn)

@@ -35,13 +35,13 @@ _ASK = {
     "outlier": r"outlier|anomal|unusual|abnormal|extreme|z.?score|deviat(?:e|es|ing)\b|deviation from",
     "forecast": r"forecast|predict|projection|\bproject (?:installations|the|demand|for)|extrapolat|next (?:week|month|quarter|\d)|"
                 r"at (?:the|this) (?:current )?(?:pace|rate)|if the trend continues|long.?term|horizon|will (?:we|it|they)\b|"
-                r"runs? out|by (?:december|january|end of)",
+                r"runs? out|by (?:december|january|end of)|backtest|forecast accuracy|how accurate",
     "moving": r"moving average|rolling average|smooth",
     "change": r"change.?point|regime|structural break|drift|when did .{0,40}chang|trend chang",
     "season": r"autocorrel|seasonal|weekday|day of (?:the )?week|periodic|(?:weekly|monthly|daily|time) pattern|"
               r"patterns? (?:in|do you|you see)|pattern recognition",
     "sim": r"monte carlo|simulat|probabilit|likel(?:y|ihood)\b|chance|odds|best.?case|worst.?case|stress test|scenario|"
-           r"bayes|ensemble|confidence interval|uncertainty",
+           r"bayes|ensemble",
     "pca": r"\bpca\b|principal component|dimension(?:ality)? reduc|fewer dimensions|few key dimensions|components? explain",
     "pareto": r"pareto|80/20|20 ?% of (?:the )?\w+ (?:cause|hold|make|account)",
     "tiers": r"\bcluster(?:ing| (?:zones|circles|divisions|feeders|dts|technicians|meters|consumers)| by)\b|\bclusters\b|"
@@ -333,6 +333,96 @@ def _drop_partial(rows: pd.DataFrame, dates: pd.Series | None, today: pd.Timesta
 # Analyses
 # --------------------------------------------------------------------------- #
 
+_RECENT = {"day": 30, "week": 12, "month": 6}
+
+
+def _forecast(y: np.ndarray, unit: str, h: int) -> dict:
+    """The projection _series_stats describes, as numbers: a straight line through the recent window when it
+    fits (R^2 >= 0.3 and never negative), else the recent average. lo / hi = 95% prediction range per period."""
+    n = len(y)
+    pw = min(n, _RECENT.get(unit, 6))
+    yw = y[-pw:]
+    xw = np.arange(n - pw, n, dtype=float)
+    avg = float(yw.mean())
+    xs = np.arange(n, n + h, dtype=float)
+    if pw >= 3:
+        ps, pi = np.polyfit(xw, yw, 1)
+        fit = ps * xw + pi
+        sse = float(((yw - fit) ** 2).sum())
+        r2 = 1 - sse / (float(((yw - avg) ** 2).sum()) or 1)
+        fut = ps * xs + pi
+        if r2 >= .3 and (fut >= 0).all():
+            se = math.sqrt(sse / max(1, pw - 2))
+            sxx = float(((xw - xw.mean()) ** 2).sum()) or 1.0
+            # Prediction interval of a straight-line fit: wider the further ahead.
+            band = 1.96 * se * np.sqrt(1 + 1 / pw + (xs - xw.mean()) ** 2 / sxx)
+            return {"method": "trend", "pw": pw, "fut": fut, "lo": np.maximum(0, fut - band), "hi": fut + band,
+                    "tot_band": 1.96 * se * math.sqrt(h)}
+    sd = float(np.std(yw, ddof=1)) if pw > 1 else 0.0
+    fut = np.full(h, avg)
+    return {"method": "average", "pw": pw, "fut": fut, "lo": np.maximum(0, fut - 1.96 * sd), "hi": fut + 1.96 * sd,
+            "tot_band": 1.96 * sd * math.sqrt(h)}
+
+
+def _next_labels(dates: pd.Series | None, unit: str, h: int) -> list[str]:
+    if dates is None or not len(dates):
+        return [f"+{i + 1}" for i in range(h)]
+    last = pd.Timestamp(dates.iloc[-1])
+    if unit == "month":
+        return [(last + pd.DateOffset(months=i + 1)).strftime("%b %Y") for i in range(h)]
+    step = pd.Timedelta(days=7 if unit == "week" else 1)
+    return [str((last + step * (i + 1)).date()) for i in range(h)]
+
+
+def _interval_lines(name: str, y: np.ndarray, unit: str, h: int, dates: pd.Series | None) -> list[str]:
+    """One forecast per future period with its 95% range (only for short horizons -- a 30-day list is noise),
+    and the range of the h-period total."""
+    if len(y) < 4:
+        return []
+    f = _forecast(y, unit, h)
+    tot = float(f["fut"].sum())
+    out = [f"- {name} forecast total for the next {h} {unit}s: {_fmt(tot)} (95% range {_fmt(max(0, tot - f['tot_band']))}"
+           f"..{_fmt(tot + f['tot_band'])}; method: {'recent straight-line trend' if f['method'] == 'trend' else 'recent average'}"
+           f" over the last {f['pw']} {unit}s)"]
+    if h <= 6:
+        labs = _next_labels(dates, unit, h)
+        out.append(f"- {name} forecast per {unit} with 95% range: "
+                   + "; ".join(f"{labs[i]} {_fmt(f['fut'][i])} ({_fmt(f['lo'][i])}..{_fmt(f['hi'][i])})" for i in range(h)))
+    return out
+
+
+def _backtest_lines(name: str, y: np.ndarray, unit: str, h: int, dates: pd.Series | None) -> list[str]:
+    """Historical validation: the same method run as if standing k periods ago (up to 3 such starting points),
+    its forecast compared with what actually happened. Says how far to trust the projection above."""
+    n = len(y)
+    k = max(1, min(h, n // 4, 30 if unit == "day" else 6))
+    origins = [n - j * k for j in (1, 2, 3) if n - j * k >= 4]
+    if not origins:
+        return []
+    errs, cover, tot_errs = [], [], []
+    for o in origins:
+        f = _forecast(y[:o], unit, k)
+        act = y[o:o + k]
+        m = act > 0
+        if m.any():
+            errs += list(np.abs(act[m] - f["fut"][m]) / act[m])
+        cover += list((act >= f["lo"]) & (act <= f["hi"]))
+        if act.sum() > 0:
+            tot_errs.append((float(f["fut"].sum()) - float(act.sum())) / float(act.sum()))
+    if not errs or not tot_errs:
+        return []
+    o = origins[0]
+    f0 = _forecast(y[:o], unit, k)
+    when = str(pd.Timestamp(dates.iloc[o - 1]).date()) if dates is not None and len(dates) >= o else f"period {o}"
+    mape = float(np.mean(errs)) * 100
+    grade = "good" if mape <= 10 else "fair" if mape <= 25 else "poor"
+    return [f"- {name} historical check (backtest): the same method, run as if on {when}, forecast "
+            f"{_fmt(float(f0['fut'].sum()))} for the next {k} {unit}s; actual was {_fmt(float(y[o:o + k].sum()))} "
+            f"({'+' if tot_errs[0] >= 0 else ''}{_fmt(tot_errs[0] * 100)}%). Over {len(origins)} such test(s): typical "
+            f"per-{unit} error {_fmt(mape)}% ({grade} accuracy), total off by {_fmt(float(np.mean(np.abs(tot_errs))) * 100)}% "
+            f"on average, {int(np.sum(cover))} of {len(cover)} actual {unit}s fell inside the 95% range."]
+
+
 def _series_stats(name: str, y: np.ndarray, dates: pd.Series | None, asks: set[str], unit: str,
                   horizon: int | None = None) -> list[str]:
     out = []
@@ -387,6 +477,8 @@ def _series_stats(name: str, y: np.ndarray, dates: pd.Series | None, asks: set[s
                 out.append(f"- {name} projection: no reliable trend over the last {pw} {unit}s (R^2 {_fmt(r2w)}), so the best "
                            f"estimate is the recent average -- {_fmt(avg)} per {unit} (one {unit} usually within "
                            f"{_fmt(max(0, avg - 1.96 * sd_w))}..{_fmt(avg + 1.96 * sd_w)}); next {h} {unit}s total about {_fmt(avg * h)}")
+            out += _interval_lines(name, y, unit, h, dates)
+            out += _backtest_lines(name, y, unit, h, dates)
             if "sim" in asks:
                 rng = np.random.default_rng(7)
                 draws = rng.choice(y[-win:], size=(5000, h), replace=True).sum(axis=1)
@@ -589,6 +681,11 @@ def analyse(question: str, df: pd.DataFrame | None, today: pd.Timestamp | None =
         if not isinstance(frame, pd.DataFrame) or len(frame) < 3:
             continue
         rows, label, dates, nums = _split(frame)
+        if dates is not None and dates.nunique() <= 1:
+            # One date on every row (HES cards return MAX(data_date) AS data_month) labels the month -- the rows are
+            # items, not a series. 16 Nov: 35 circles were collapsed into one 'period' and no correlation was computed.
+            texts = [c for c in rows.columns if c != label and not pd.api.types.is_numeric_dtype(rows[c])]
+            label, dates = (texts[0] if texts else None), None
         if not nums:
             continue
         if dates is not None:
@@ -627,7 +724,8 @@ def analyse(question: str, df: pd.DataFrame | None, today: pd.Timestamp | None =
             break
     head = ("STATS (computed exactly by code from the rows -- quote these figures, never re-estimate them; name the "
             "method in plain words, e.g. 'a straight-line trend', 'correlation across 18 zones'; projections and "
-            "simulations are estimates that assume the recent pattern holds -- say so; correlation is not proof of cause):")
+            "simulations are estimates that assume the recent pattern holds -- say so; a forecast is quoted with its 95% "
+            "range and its historical check (backtest error) when given; correlation is not proof of cause):")
     tail = []
     if missing:
         tail.append("NOT RUN: " + "; ".join(missing) + ". Say plainly that this was not run (no such model exists in "
@@ -637,7 +735,7 @@ def analyse(question: str, df: pd.DataFrame | None, today: pd.Timestamp | None =
     if not lines and asks - {"forecast", "whatif"}:
         tail.append("No statistic could be computed from these rows (too few items or periods) -- say what the numbers "
                     "show directly, without claiming a statistical method.")
-    return "\n".join([head, *lines[:16], *tail]) if lines else "\n".join(tail)
+    return "\n".join([head, *lines[:20], *tail]) if lines else "\n".join(tail)
 
 
 def line_up(df: pd.DataFrame | None, extras: list) -> str:

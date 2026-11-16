@@ -18,6 +18,7 @@ from gmr_agents.guards import injection
 from gmr_agents.checks import entity_check
 from gmr_agents.resolvers import query_encoder
 from gmr_agents.resolvers import scope as place_scope
+from gmr_agents.resolvers import festivals
 from gmr_agents.agents.common import _METER_SERIAL_RE, _PERIOD_RE, _history_block, _step, _today
 
 
@@ -805,6 +806,14 @@ def fix_question(state: dict, triage: dict, prior_turns: list[dict] | None) -> b
     changed = drop_invented_period(state, triage, prior_turns)
     changed = fix_measure(state, triage, prior_turns) or changed
     changed = fix_scope(state, triage, prior_turns) or changed
+    if triage["kind"] == "data" and festivals.resolve(state["question"]):
+        # 'since Diwali': the festival's date pinned by code (resolvers/festivals.py) -- the resolved question
+        # often keeps the name only, or the model's guess of the wrong year.
+        got = festivals.resolve(state["question"])
+        note = "; ".join(f"{w} = {d.strftime('%d %b %Y')}" for w, d in got)
+        if note not in triage["question"]:
+            triage["question"] = re.sub(r"[\s?.]*$", "", triage["question"]) + f" ({note}; use this date)?"
+            changed = True
     if (triage["kind"] == "data" and _CONSUMER_WORD_RE.search(state["question"])
             and not _CONSUMER_WORD_RE.search(triage["question"])):
         # 'consumer stock ageing type wise' was resolved without 'consumer' (every type shown).

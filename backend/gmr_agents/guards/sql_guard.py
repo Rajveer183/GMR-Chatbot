@@ -128,6 +128,15 @@ def _check_cross_join_fanout(root: exp.Expression) -> str | None:
         if src is None or not loose:
             continue
         multi = [r for r in [src.this, *(j.this for j in loose)] if not _single_source(r, ctes, frozenset())]
+        # A scaffold grid (months CROSS JOIN projects, then LEFT JOIN the facts ON both keys) is the standard way
+        # to keep zero rows: every cross-joined set is a key of an outer join. 16 Nov: 'why has SAT completion
+        # fallen despite higher installation' was rejected twice for exactly this grid and refused.
+        outer_keys = set()
+        for j in joins:
+            if (j.args.get("side") or "").upper() in ("LEFT", "RIGHT", "FULL") and j.args.get("on") is not None:
+                outer_keys |= {c.table.lower() for c in j.args["on"].find_all(exp.Column) if c.table}
+        if multi and all(r.alias_or_name.lower() in outer_keys for r in multi):
+            continue
         # FROM a, b WHERE a.k = b.k is a join written in WHERE: link relations an equality connects.
         group = {r.alias_or_name.lower(): r.alias_or_name.lower() for r in multi}
 

@@ -57,6 +57,16 @@ Reply with JSON only:
 {"summary": "the answer (1-3 sentences, longer only for summaries/drafts/why)", "insights": ["0-2 short, specific observations from the data"], "followups": [3 numbers from FOLLOW-UP OPTIONS: the most useful next questions after this answer, best first]}"""
 
 
+_CHANGE_ASK_RE = re.compile(r"\b(?:increas\w*|decreas\w*|ris(?:e|es|ing|en)|rose|grow\w*|grew|growth|fell|fall\w*|"
+                            r"drop\w*|declin\w*|jump\w*|spik\w*|went up|gone up|went down|change[sd]?|compared? (?:with|to) "
+                            r"last|vs\.? last|since last)\b", re.I)
+_PERIOD_COL_RE = re.compile(r"date|month|week|period|year|day|prev|last|change|delta|growth", re.I)
+
+
+def _has_period_column(df) -> bool:
+    return df is not None and hasattr(df, "columns") and any(_PERIOD_COL_RE.search(str(c)) for c in df.columns)
+
+
 def _write_answer(state: dict, triage: dict, plan: dict, result: dict, extras: list[dict] | None = None) -> dict:
     t0 = time.perf_counter()
     preview, n = _result_preview(result.get("result"))
@@ -83,6 +93,14 @@ def _write_answer(state: dict, triage: dict, plan: dict, result: dict, extras: l
         parts.append("DATA NOTE: every table used is a CURRENT snapshot (latest refresh); it keeps no day-by-day "
                      "history, so the date in the question could not be applied. Say this in the first sentence "
                      "and give the figure as on the latest refresh.")
+    elif tables and all(t.endswith("_snapshot") for t in tables) and _CHANGE_ASK_RE.search(state["question"]) \
+            and not _has_period_column(result.get("result")):
+        # 16 Nov: 'which divisions are contributing most to the increase in pending installations?' listed today's
+        # pending levels as if they were the increase -- the snapshot keeps no earlier figure to subtract.
+        parts.append("DATA NOTE: every table used is a CURRENT snapshot with no history, so the rise / fall the "
+                     "question asks about cannot be measured. Say so in the first sentence, then answer with the "
+                     "current levels: which items hold the largest share of today's total (with their share). "
+                     "Never call a current level an increase or decrease.")
     facts = _result_facts(result.get("result"))
     parts.append(f"RESULT ({n} row(s){more}; total available: {result.get('group_count')}):\n"
                  + injection.wrap(preview, "database"))

@@ -13,6 +13,7 @@ import { SourcesNote } from "./SourcesNote";
 import { SuggestedQuestions } from "./SuggestedQuestions";
 import { FeedbackButtons } from "./FeedbackButtons";
 import type { FeedbackRating } from "../api/client";
+import { apiClient } from "../api/client";
 import { resultToPayload } from "../utils/clipboard";
 import { resultToSpeech } from "../utils/speech";
 import { uiText } from "../i18n/languages";
@@ -136,6 +137,19 @@ export const ResultRenderer = memo(function ResultRenderer({
       ))}
 
       <InsightList title={uiText(lang, "insights")}items={result.insights ?? []} />
+
+      {result.report?.trace_id ? (
+        <section className="chat-result-section">
+          <div className="table-download">
+            <a className="table-download-btn" href={apiClient.reportExportUrl(result.report.trace_id, "xlsx")} download>
+              Download report (Excel)
+            </a>
+            <a className="table-download-btn" href={apiClient.reportExportUrl(result.report.trace_id, "html")} download>
+              Download report (HTML)
+            </a>
+          </div>
+        </section>
+      ) : null}
 
       {/* Internal checks (hypotheses tested, confidence, earlier investigations) stay in the backend: the
           answer itself carries the verdict. */}

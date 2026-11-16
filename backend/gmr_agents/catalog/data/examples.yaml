@@ -5839,3 +5839,88 @@ examples:
       FROM latest l LEFT JOIN b ON b.project = l.project
       GROUP BY l.project, l.latest_batch, l.latest_batch_date, l.latest_batch_meters
       ORDER BY 1
+
+  # 16 Nov 2026 advanced-analytics test: verified by running each SQL against live data.
+  - q: ["Why has the SAT completion rate decreased despite higher installation?", "why is SAT % falling while installations rise", "SAT rate dropping even though installs went up", "installations up but SAT completion down why"]
+    note: "SAT % has no history (snapshot): explain it from the flows. SAT is accepted in BATCHES on milestone_config.sat_date, so months without a batch add 0 SAT while installs keep adding to the denominator -- SAT % of installed falls between batches. Main = month-wise installs vs SAT-completed meters (last 6 complete months, batches named); extra = today's SAT % of installed and of eligible, eligible pending, not yet due. Answer: name the months with installs but no SAT batch, quote SAT % of installed vs of eligible, and the eligible pending backlog."
+    sql: |
+      WITH months AS (
+        SELECT generate_series(date_trunc('month', CURRENT_DATE) - INTERVAL '6 months',
+                               date_trunc('month', CURRENT_DATE) - INTERVAL '1 month', INTERVAL '1 month')::date AS month
+      ), inst AS (
+        SELECT period_start AS month, SUM(meter_count) AS installed
+        FROM public.gold_mi_installation_month_agg
+        WHERE has_meter_serial AND progress_category IS NOT NULL AND NOT is_replacement
+          AND period_start >= (date_trunc('month', CURRENT_DATE) - INTERVAL '6 months')::date
+        GROUP BY 1
+      ), sat AS (
+        SELECT date_trunc('month', m.sat_date)::date AS month, SUM(s.meter_count) AS sat_completed,
+               STRING_AGG(DISTINCT LOWER(s.project) || ' ' || m.sat_number, ', ') AS sat_batches
+        FROM public.gold_mi_sat_invoice_snapshot s
+        JOIN public.milestone_config m ON LOWER(m.project) = LOWER(s.project) AND m.sat_number = 'SAT-' || s.sat_stage
+        WHERE s.sat_stage IS NOT NULL AND m.sat_date >= (date_trunc('month', CURRENT_DATE) - INTERVAL '6 months')::date
+        GROUP BY 1
+      )
+      SELECT mo.month, COALESCE(i.installed, 0) AS meters_installed, COALESCE(s.sat_completed, 0) AS meters_sat_completed,
+             COALESCE(s.sat_batches, 'no SAT batch') AS sat_batches
+      FROM months mo LEFT JOIN inst i ON i.month = mo.month LEFT JOIN sat s ON s.month = mo.month
+      ORDER BY mo.month
+    extra:
+      - purpose: "SAT position now: SAT % of installed vs of eligible, eligible pending and not yet due"
+        sql: |
+          SELECT SUM(meter_count) AS installed_all, SUM(meter_count) FILTER (WHERE sat_stage IS NOT NULL) AS sat_meters,
+                 ROUND(SUM(meter_count) FILTER (WHERE sat_stage IS NOT NULL) * 100.0 / NULLIF(SUM(meter_count), 0), 2) AS sat_pct_of_installed,
+                 SUM(meter_count) FILTER (WHERE is_sat_eligible) AS eligible_meters,
+                 ROUND(SUM(meter_count) FILTER (WHERE sat_stage IS NOT NULL) * 100.0 / NULLIF(SUM(meter_count) FILTER (WHERE is_sat_eligible), 0), 2) AS sat_pct_of_eligible,
+                 SUM(meter_count) FILTER (WHERE is_sat_eligible AND sat_stage IS NULL) AS eligible_pending_sat,
+                 SUM(meter_count) FILTER (WHERE NOT is_sat_eligible AND sat_stage IS NULL) AS not_yet_due
+          FROM public.gold_mi_sat_invoice_snapshot
+
+  - q: ["Is low PF correlated with any other operational issues?", "does low power factor go with theft or outages", "low PF relationship with communication failures and hidden outages", "which issues move together with low power factor"]
+    note: "Cross-issue correlation across circles for the HES default month: low PF, silent (non-communicating) meters, theft suspects and hidden-outage meters per circle, each PER 1,000 METERS of the circle (dim_meter) -- raw counts all grow with circle size and would correlate by size alone. Low PF first; the meter base last. The correlations are computed by code (STATS); say correlation is not proof of cause."
+    sql: |
+      WITH m AS (SELECT MAX(month_date) AS mo FROM (SELECT month_date FROM hes_gold.dt_load_profile WHERE month_date >= DATE '2026-06-01' GROUP BY month_date HAVING COUNT(DISTINCT data_date) >= 10) c),
+      base AS (SELECT UPPER(circle) AS circle, COUNT(*) AS meters FROM hes_gold.dim_meter WHERE circle IS NOT NULL GROUP BY 1),
+      pf AS (SELECT UPPER(circle) AS circle, SUM(unique_meter_count) AS low_pf_meters
+             FROM hes_gold.lpf2_low_power_factor WHERE data_date = (SELECT mo FROM m) AND severity NOT IN ('Normal', 'NoData') AND circle IS NOT NULL GROUP BY 1),
+      nc AS (SELECT UPPER(circle) AS circle, COUNT(*) AS silent_meters
+             FROM hes_gold.communication_failures WHERE data_date = (SELECT mo FROM m) AND circle IS NOT NULL GROUP BY 1),
+      th AS (SELECT UPPER(circle) AS circle, COUNT(DISTINCT meter_no) AS theft_suspects
+             FROM hes_gold.energy_theft_suspect WHERE month_date = (SELECT mo FROM m) AND is_theft_suspect AND circle IS NOT NULL GROUP BY 1),
+      ho AS (SELECT UPPER(circle) AS circle, COUNT(DISTINCT meter_no) AS hidden_outage_meters
+             FROM hes_gold.hidden_outage_summary WHERE data_date = (SELECT mo FROM m) AND circle IS NOT NULL GROUP BY 1)
+      SELECT (SELECT mo FROM m) AS data_month, pf.circle,
+             ROUND(pf.low_pf_meters * 1000.0 / b.meters, 1) AS low_pf_per_1000_meters,
+             ROUND(COALESCE(nc.silent_meters, 0) * 1000.0 / b.meters, 1) AS silent_per_1000_meters,
+             ROUND(COALESCE(th.theft_suspects, 0) * 1000.0 / b.meters, 2) AS theft_suspects_per_1000_meters,
+             ROUND(COALESCE(ho.hidden_outage_meters, 0) * 1000.0 / b.meters, 1) AS hidden_outage_per_1000_meters,
+             b.meters
+      FROM pf JOIN base b ON b.circle = pf.circle
+      LEFT JOIN nc ON nc.circle = pf.circle LEFT JOIN th ON th.circle = pf.circle LEFT JOIN ho ON ho.circle = pf.circle
+      ORDER BY low_pf_per_1000_meters DESC
+
+  - q: ["Compare each circle's installation growth with its zone average", "circle growth vs zone growth", "which circles grow faster than their zone", "circle wise growth against the zone"]
+    note: "Growth = last complete month vs the month before. The zone figure is the zone's own growth from its totals (window SUMs over its circles), not an average of circle rates (a 35 -> 4 circle would distort it). One row per circle with its zone's growth and the gap in percentage points."
+    sql: |
+      WITH c AS (
+        SELECT UPPER(zone) AS zone, UPPER(circle) AS circle,
+               SUM(meter_count) FILTER (WHERE period_start = (date_trunc('month', CURRENT_DATE) - INTERVAL '2 months')::date) AS month_before,
+               SUM(meter_count) FILTER (WHERE period_start = (date_trunc('month', CURRENT_DATE) - INTERVAL '1 month')::date) AS last_month
+        FROM public.gold_mi_installation_month_agg
+        WHERE has_meter_serial AND progress_category IS NOT NULL AND NOT is_replacement
+          AND period_start >= (date_trunc('month', CURRENT_DATE) - INTERVAL '2 months')::date
+          AND period_start < date_trunc('month', CURRENT_DATE)::date
+          AND NULLIF(TRIM(zone), '') IS NOT NULL AND NULLIF(TRIM(circle), '') IS NOT NULL
+        GROUP BY 1, 2
+      ), g AS (
+        SELECT zone, circle, COALESCE(month_before, 0) AS month_before, COALESCE(last_month, 0) AS last_month,
+               ROUND((COALESCE(last_month, 0) - month_before) * 100.0 / NULLIF(month_before, 0), 1) AS growth_pct
+        FROM c
+      )
+      SELECT zone, circle, month_before, last_month, growth_pct,
+             ROUND((SUM(last_month) OVER (PARTITION BY zone) - SUM(month_before) OVER (PARTITION BY zone)) * 100.0
+                   / NULLIF(SUM(month_before) OVER (PARTITION BY zone), 0), 1) AS zone_growth_pct,
+             ROUND(growth_pct - (SUM(last_month) OVER (PARTITION BY zone) - SUM(month_before) OVER (PARTITION BY zone)) * 100.0
+                   / NULLIF(SUM(month_before) OVER (PARTITION BY zone), 0), 1) AS gap_vs_zone_pts
+      FROM g
+      ORDER BY zone, gap_vs_zone_pts DESC NULLS LAST

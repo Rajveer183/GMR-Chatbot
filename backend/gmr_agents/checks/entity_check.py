@@ -1059,6 +1059,54 @@ def _revenue_journey_problems(question: str, low: str, sql_texts: list[str], ask
     return problems
 
 
+_SCALE_WORDS = {"k": 1e3, "thousand": 1e3, "lakh": 1e5, "lakhs": 1e5, "lac": 1e5, "l": 1e5, "million": 1e6, "mn": 1e6,
+                "m": 1e6, "crore": 1e7, "cr": 1e7, "billion": 1e9}
+_ALIASED_INT_RE = re.compile(r"(?<![\w.'])(\d{5,}|\d{1,3}(?:_\d{3})+)(?:\.0+)?\s+as\s+\"?(\w+)", re.I)
+
+
+def _stated_numbers(question: str) -> set[int]:
+    out = set()
+    for num, scale in re.findall(r"(\d+(?:[.,]\d+)*)\s*(k|thousand|lakhs?|lac|l|million|mn|m|crore|cr|billion)?\b", question, re.I):
+        try:
+            v = float(num.replace(",", ""))
+        except ValueError:
+            continue
+        out.add(round(v * _SCALE_WORDS.get(scale.lower(), 1)) if scale else round(v))
+    return out
+
+
+def _invented_constants(question: str, sql_texts: list[str]) -> list[str]:
+    """A big literal number given a column name ('SELECT 5000000 AS target') that the question never stated is an
+    assumption dressed up as data. 16 Nov: 'what would happen to the overall target if current performance
+    continued?' answered against a 5,000,000 target that is stored nowhere."""
+    out = []
+    # 'Top 10 percentile' with PERCENT_RANK ordered DESC and kept >= 0.9 selects the BOTTOM 10%. 16 Nov: 'which
+    # circles are in the top 10 percentile for open complaints?' returned the 4 smallest and answered 'none'.
+    for s in sql_texts:
+        sl = re.sub(r"\s+", " ", (s or "").lower())
+        if re.search(r"percent_rank\(\) over \([^)]*order by [^)]*\bdesc\b", sl) and re.search(r">=?\s*0?\.9\b", sl) \
+                and re.search(r"\btop\b|\bhighest\b|\bmost\b", question, re.I):
+            out.append("PERCENT_RANK() ordered DESC and kept >= 0.9 is the BOTTOM 10%: order ASC (PERCENT_RANK() OVER "
+                       "(ORDER BY x)) and keep >= 0.9 for the top 10 percentile")
+    return out + _invented_figures(question, sql_texts)
+
+
+def _invented_figures(question: str, sql_texts: list[str]) -> list[str]:
+    stated = _stated_numbers(question)
+    bad = []
+    for s in sql_texts:
+        for num, alias in _ALIASED_INT_RE.findall(s or ""):
+            v = int(num.replace("_", ""))
+            if v not in stated and not (1900 <= v <= 2100):
+                bad.append(f"{v} AS {alias}")
+    if not bad:
+        return []
+    return [f"the SQL invents the figure(s) {', '.join(sorted(set(bad)))} -- no such number is stored and the question "
+            "does not state it. Use stored data only; if the figure (e.g. a target) is not in any table, leave it out and "
+            "return what is stored (installed so far, recent pace, meters still pending installation) -- the answer "
+            "will say the target is not available"]
+
+
 def check(question: str, sql_texts: list[str], columns: set[str] | None = None, asked: str | None = None) -> list[str]:
     """Problems found (empty = consistent). `columns` = the column names of the SQL's
     tables (None = unknown: every check runs). A check those tables cannot satisfy is
@@ -1394,6 +1442,7 @@ def check(question: str, sql_texts: list[str], columns: set[str] | None = None, 
                 problems.append(f"{discom.upper()} = project(s) {', '.join(projects)} -- revenue_receivables has no "
                                 f"discom column, so filter LOWER(project) IN ({', '.join(repr(p) for p in projects)})")
 
+    problems += _invented_constants(question, sql_texts)
     problems += _om_problems(question, low, asked)
     problems += _revenue_journey_problems(question, low, sql_texts, asked)
     problems += _mapping_problems(question, sql_texts)

@@ -39,11 +39,13 @@ has one entry per stage with its timing and the model that ran it.
 from __future__ import annotations
 
 import asyncio
+import collections
 import json
 import logging
 import copy
 import os
 import queue
+import re
 import threading
 import time
 from collections import deque
@@ -60,6 +62,7 @@ from shared.logging_config import append_jsonl, configure_logging, new_trace_id
 from shared.session_store import SessionStore
 from gmr_agents.ops import answer_cache, investigations, prewarm
 from gmr_agents.presentation import restyle
+from gmr_agents.presentation import report
 from gmr_agents.resolvers import language, multi_question
 from gmr_agents.llm_pipeline import run_agent
 from gmr_agents.catalog import business_rules
@@ -398,6 +401,49 @@ def _switch_language(question: str, previous: dict, target: str, trace_id: str, 
     return response, dict(previous.get("context") or {})
 
 
+_DOWNLOAD_ASK_RE = re.compile(r"\bdownload\w*|\bexport\w*|\bexcel\b|\bxlsx\b|\bcsv\b|\bspreadsheet\b", re.I)
+_REPORTS: "collections.OrderedDict[str, dict]" = collections.OrderedDict()   # trace_id -> report tables (downloads)
+_REPORTS_KEEP = 50
+
+
+def _report_answer(question: str, trace_id: str, session_id: str, t0: float, emit=None) -> tuple[dict, dict] | None:
+    """The report (presentation/report.py) as a response + turn context, logged like any answer (sql / extra_sql =
+    the report's queries, so table paging / download re-run them). None when the report could not be built -- the
+    question then goes through the normal pipeline."""
+    if emit is not None:
+        emit({"type": "status", "message": "Building the report"})
+    try:
+        built = report.build(question)
+    except Exception:
+        log.exception("[%s] report failed -- answering through the pipeline", trace_id)
+        return None
+    ms = round((time.perf_counter() - t0) * 1000, 1)
+    tables = built["tables"]
+    for i, t in enumerate(tables):
+        t["table_index"] = i
+    _REPORTS[trace_id] = {"title": built["title"], "tables": tables, "summary": built["summary"],
+                          "insights": built["insights"]}
+    while len(_REPORTS) > _REPORTS_KEEP:
+        _REPORTS.popitem(last=False)
+    state = {"summary": built["summary"], "insights": built["insights"], "kpis": built["kpis"], "tables": tables,
+             "charts": built["charts"], "agent": "report", "trace_id": trace_id, "total_ms": ms}
+    response = _build_response(question, state)
+    response["report"] = {"title": built["title"], "period": built["request"]["period"], "trace_id": trace_id}
+    r = built["request"]
+    context = {"domain": "wfm", "answer_kind": "report", "topics": ["report"],
+               "filters": [f"project = {r['project']}"] if r["project"] else [],
+               "kpis": [f"{k['label']}: {k['formatted_value']}" for k in built["kpis"]]}
+    append_jsonl("questions", {
+        "at": datetime.now(timezone(timedelta(hours=5, minutes=30))).strftime("%Y-%m-%dT%H:%M:%S"),
+        "trace_id": trace_id, "session_id": session_id, "question": question, "kind": "report", "domain": "wfm",
+        "sql": built["sql"], "extra_sql": built["extra_sql"], "rows": sum(len(t["rows"]) for t in tables),
+        "refused": False, "summary": built["summary"][:500], "total_ms": ms, "llm_calls": 0, "tokens": 0,
+        "execution": {"latency_ms": ms, "ttft_ms": ms, "llm_calls": 0, "input_tokens": 0, "output_tokens": 0,
+                      "db_queries": len(built["extra_sql"]) + 2, "estimated_cost_usd": 0.0, "termination": "REPORT"}})
+    log.info("[%s] REPORT %s in %.0fms", trace_id, built["title"], ms)
+    return response, context
+
+
 def answer_question(question: str, session_id: str | None, *, store: SessionStore | None = None,
                     prior_questions: list[str] | None = None, via_followup: bool = False, emit=None,
                     response_language: str | None = None, canonical_question: str | None = None) -> dict:
@@ -443,6 +489,10 @@ def answer_question(question: str, session_id: str | None, *, store: SessionStor
         elif restyle.is_recap(asked):
             recapped = restyle.recap((store.get_session(session_id) or {}).get("messages") or [])
     cached = None if previous or restyled or recapped else answer_cache.get(question, prior_turns)
+    reported = None
+    if not (previous or restyled or recapped) and report.is_report(question):
+        reported = _report_answer(question, trace_id, session_id, t0, emit)
+        cached = None  # a report always reads today's figures
     if restyled is not None or recapped is not None:
         ms = round((time.perf_counter() - t0) * 1000, 1)
         if restyled is not None:
@@ -485,6 +535,12 @@ def answer_question(question: str, session_id: str | None, *, store: SessionStor
         # The cache is keyed on the question text, so the replay may be in another language than
         # this request wants (dropdown / explicit request): translated below, never re-queried.
         target, detected = language.resolve(asked, run_pref, response.get("detected_language"), prior_turns)
+    elif reported is not None:
+        # 'Generate the weekly report' / 'daily report for Kashi': assembled by code from fixed, dashboard-checked
+        # queries (presentation/report.py) -- no LLM call.
+        response, context = reported
+        state = {}
+        target, detected = language.resolve(asked, run_pref, None, prior_turns)
     elif investigations.is_recall(question):
         # 'Have we investigated X before / has it improved since?': answered from the investigation
         # store (ops/investigations.py) -- no LLM call; one read-only query only for 'improved since'.
@@ -508,6 +564,10 @@ def answer_question(question: str, session_id: str | None, *, store: SessionStor
         state = run_agent(question, prior_questions=prior, prior_turns=prior_turns, trace_id=trace_id,
                           session_id=session_id, emit=emit, response_language=run_pref)
         response = _build_response(question, state)
+        if response.get("tables") and not response.get("refused") and _DOWNLOAD_ASK_RE.search(question):
+            # 'Give me a downloadable report of ...': the table's Download button gives the full rows (CSV / Excel).
+            response["summary"] = (str(response.get("summary") or "").rstrip()
+                                   + "\n\nThe full table can be downloaded as CSV or Excel with the Download button on the table.")
         if state.get("investigation"):
             # Cross-session memory: earlier investigations of a similar question, then this one is stored.
             response["related_investigations"] = investigations.related(question, exclude=trace_id)
@@ -841,12 +901,18 @@ def table_export(req: TableExportRequest) -> Response:
 
     if req.format not in ("csv", "xlsx"):
         raise HTTPException(status_code=422, detail="format must be csv or xlsx.")
-    base, engine, database = _answer_sql(req.trace_id, req.table_index)
-    try:
-        df = executor.run_sql(f"{_without_limit(base, engine)} LIMIT {EXPORT_MAX_ROWS}", database, engine)
-    except Exception as exc:
-        log.warning("table export %s/%s failed: %s", req.trace_id, req.table_index, exc)
-        raise HTTPException(status_code=503, detail="The table could not be exported -- please try again.") from None
+    rep = _REPORTS.get(req.trace_id)
+    if rep is not None and 0 <= req.table_index < len(rep["tables"]):
+        # A report's tables are small and already computed (one is built by code, with no SQL): exactly as shown.
+        t = rep["tables"][req.table_index]
+        df = pd.DataFrame(t["rows"], columns=t["columns"])
+    else:
+        base, engine, database = _answer_sql(req.trace_id, req.table_index)
+        try:
+            df = executor.run_sql(f"{_without_limit(base, engine)} LIMIT {EXPORT_MAX_ROWS}", database, engine)
+        except Exception as exc:
+            log.warning("table export %s/%s failed: %s", req.trace_id, req.table_index, exc)
+            raise HTTPException(status_code=503, detail="The table could not be exported -- please try again.") from None
     if req.labels and len(req.labels) == len(df.columns):
         df.columns = [str(c) for c in req.labels]
     safe = "".join(ch if ch.isalnum() or ch in "-_ " else "_" for ch in (req.title or "table")).strip()[:60] or "table"
@@ -859,6 +925,50 @@ def table_export(req: TableExportRequest) -> Response:
     with pd.ExcelWriter(buf, engine="openpyxl") as xl:
         df.to_excel(xl, index=False, sheet_name="data")
     return Response(buf.getvalue(), headers=headers,
+                    media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet")
+
+
+@app.get("/api/report-export/{trace_id}")
+def report_export(trace_id: str, format: str = "xlsx") -> Response:
+    """A whole report (presentation/report.py) as one Excel workbook -- a Summary sheet (summary + actions) and one
+    sheet per table -- or one HTML page. From the figures already shown: no query, no LLM call."""
+    import html
+    import io
+
+    import pandas as pd
+
+    rep = _REPORTS.get(trace_id)
+    if rep is None:
+        raise HTTPException(status_code=404, detail="That report is no longer in memory -- ask for it again.")
+    safe = "".join(ch if ch.isalnum() or ch in "-_ " else "_" for ch in rep["title"]).strip()[:80] or "report"
+    if format == "html":
+        parts = [f"<h1>{html.escape(rep['title'])}</h1>",
+                 "".join(f"<p>{html.escape(line.replace('**', ''))}</p>" for line in rep["summary"].splitlines()),
+                 "<h2>Recommended actions</h2><ul>" + "".join(f"<li>{html.escape(a)}</li>" for a in rep["insights"]) + "</ul>"]
+        for t in rep["tables"]:
+            parts.append(f"<h2>{html.escape(t['heading'])}</h2>"
+                         + pd.DataFrame(t["rows"], columns=t["columns"]).to_html(index=False, na_rep="", border=0))
+        page = ("<!doctype html><meta charset='utf-8'><title>" + html.escape(rep["title"]) + "</title><style>body{font-family:"
+                "system-ui,sans-serif;max-width:1100px;margin:24px auto;padding:0 16px;color:#1f2937}table{border-collapse:"
+                "collapse;margin-bottom:16px;font-size:13px}td,th{border:1px solid #d1d5db;padding:4px 8px;text-align:left}"
+                "th{background:#f3f4f6}</style>" + "".join(parts))
+        return Response(page, media_type="text/html; charset=utf-8",
+                        headers={"Content-Disposition": f'attachment; filename="{safe}.html"'})
+    if format != "xlsx":
+        raise HTTPException(status_code=422, detail="format must be xlsx or html.")
+    buf = io.BytesIO()
+    with pd.ExcelWriter(buf, engine="openpyxl") as xl:
+        summary = [line.replace("**", "") for line in rep["summary"].splitlines()] + ["", "Recommended actions:"] \
+            + [f"- {a}" for a in rep["insights"]]
+        pd.DataFrame({rep["title"]: summary}).to_excel(xl, index=False, sheet_name="Summary")
+        used = {"Summary"}
+        for t in rep["tables"]:
+            name = "".join(ch for ch in t["heading"] if ch not in "[]:*?/\\")[:31] or "Table"
+            while name in used:
+                name = name[:28] + f"_{len(used)}"
+            used.add(name)
+            pd.DataFrame(t["rows"], columns=t["columns"]).to_excel(xl, index=False, sheet_name=name)
+    return Response(buf.getvalue(), headers={"Content-Disposition": f'attachment; filename="{safe}.xlsx"'},
                     media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet")
 
 

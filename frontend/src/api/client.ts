@@ -246,6 +246,8 @@ export interface AIQueryResponse {
   investigation?: Investigation | null;
   /** Earlier investigations of a similar question (backend ops/investigations.py). */
   related_investigations?: RelatedInvestigation[];
+  /** A daily / weekly / monthly report built by code (backend presentation/report.py): whole-report download. */
+  report?: { title: string; period: string; trace_id: string } | null;
   text_summary?: string;
   display_mode?: "summary_first" | "full";
   spelling_corrections?: { original: string; corrected: string }[];
@@ -621,6 +623,9 @@ export const apiClient = {
     getJSON(`/api/investigations?limit=${limit}`),
   getLlmStatus: async (): Promise<{ models: LlmModelStatus[] }> => getJSON("/api/llm/status"),
   digestUrl: (hours = 24): string => `${API_BASE}/api/insights/digest?hours=${hours}&format=md`,
+  /** A whole report (summary, actions and every table) as one Excel workbook or HTML page. */
+  reportExportUrl: (trace_id: string, format: "xlsx" | "html"): string =>
+    `${API_BASE}/api/report-export/${encodeURIComponent(trace_id)}?format=${format}`,
 
   /** An earlier answer re-presented in another language: the backend translates the stored
    * answer's text (no SQL re-run, no new chat message, numbers checked unchanged). */

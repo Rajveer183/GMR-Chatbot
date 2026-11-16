@@ -117,6 +117,10 @@ def _plan_prompt(triage: dict, catalog, previous: dict | None) -> tuple[str, lis
     if _investigate.asked(question):
         # Investigation: the same measure split along other dimensions, tested by code (presentation/investigate.py).
         sections.append(S("investigation", 1, [_investigate.PLAN_HINT], required=True))
+    advanced = [hint for rx, hint in _ADVANCED_HINTS if rx.search(question)]
+    if advanced:
+        # Contribution / ranking / percentile / period-over-period / hierarchy / what-if shapes (16 Nov test).
+        sections.append(S("analytic_shape", 1, advanced, required=True))
     sections.append(S("chart_guide", 6, business_rules.chart_guide(question).splitlines(), joiner="\n", min_items=12,
                       header="CHART GUIDE (pick the chart whose 'when' best matches the question and the rows your SQL "
                              "returns; shape the SQL so the chart can be drawn -- e.g. one column per stacked part, or a "
@@ -235,6 +239,35 @@ def _edges_order(sections: list) -> list:
     by_name["reminder"] = context_manager.Section("reminder", 1, [_REMINDER], required=True)
     ordered = [by_name[n] for n in _EDGE_ORDER if n in by_name]
     return ordered + [s for s in sections if s.name not in _EDGE_ORDER]
+
+
+# Shapes the 16 Nov advanced-analytics test got wrong, each shown only when the question asks for it.
+_ADVANCED_HINTS = [
+    (re.compile(r"contribut\w*|share of (?:the )?total|account(?:s|ed)? for|biggest part|most of the", re.I),
+     "CONTRIBUTION: rank every item by the measure AND give its share of the GRAND total over ALL items "
+     "(SUM(x) * 100.0 / SUM(SUM(x)) OVER ()) -- never a share of only the top N rows shown; for 'contributed most to the "
+     "increase / drop', the measure is each item's change between the two periods and the share is of the total change."),
+    (re.compile(r"percentile|quartile|decile|\btop \d+ ?%|\bbottom \d+ ?%|\bties?\b|\btied\b|\brank", re.I),
+     "RANKING: ties share a rank -- RANK() (or DENSE_RANK() when asked), never ROW_NUMBER(); percentile = "
+     "PERCENT_RANK() OVER (ORDER BY x) * 100 (ROUND((...)::numeric, 1) in Postgres); 'top 10 percentile' = rows with "
+     "PERCENT_RANK() >= 0.9, return the rank and percentile columns."),
+    (re.compile(r"(?:month|week|year|quarter|day)[- ]over[- ](?:month|week|year|quarter|day)|\bmom\b|\byoy\b|\bwow\b|"
+                r"year on year|same (?:month|period|week) last year|previous year", re.I),
+     "PERIOD OVER PERIOD: one row per period with the measure, the previous period's value (LAG() OVER (ORDER BY "
+     "period), or the same period a year earlier for year-over-year), the change and the change % -- complete periods "
+     "only unless the running one is asked (label it 'to date')."),
+    (re.compile(r"\b(?:circle|division|zone|sub.?division|feeder)s?'?s? .{0,40}\b(?:vs|versus|against|with|compared? (?:with|to)|"
+                r"relative to)\b.{0,30}\b(?:its|their|the) (?:zone|circle|division|project|parent)", re.I),
+     "HIERARCHY COMPARISON: compute the child level (e.g. circle) and its parent's figure (e.g. zone average / total) "
+     "in the SAME row: child CTE grouped by parent + child, then the parent's own figure from window SUMs over its "
+     "children (SUM(x) OVER (PARTITION BY parent); a parent growth % = from those sums, not an average of child "
+     "rates, which tiny children distort) and the gap -- 'growth' = the change between two stated periods (last month vs the month "
+     "before), never all-time totals."),
+    (re.compile(r"\bwhat if\b|\bif .{0,40}\b(?:drop|fall|rise|increase|decrease|reduce|add)\w*|\bscenario\b|\bsuppose\b", re.I),
+     "WHAT-IF BASE: a scenario about a period ('next month', 'per day') starts from that period's recent RATE (e.g. "
+     "the monthly or daily figure over recent complete periods), never from a cumulative all-time total; SAT completions "
+     "per month come from SAT batches by sat_date (public.milestone_config)."),
+]
 
 
 def _clean_sql(raw: Any) -> str:
