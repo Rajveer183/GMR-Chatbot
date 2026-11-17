@@ -3652,3 +3652,26 @@ button {
 .chat-session-quickpin.on:hover {
   color: var(--danger);
 }
+
+/* Folder rows: same rule as chats -- a pinned folder keeps its filled pin visible,
+   the other buttons (rename/delete) appear on hover. */
+.chat-sessions-list .chat-folder-row .chat-session-actions {
+  opacity: 1;
+}
+
+.chat-sessions-list .chat-folder-row .chat-session-actions > * {
+  opacity: 0;
+  transition: opacity var(--duration-fast) ease;
+}
+
+.chat-sessions-list .chat-folder-row:hover .chat-session-actions > *,
+.chat-sessions-list .chat-folder-row:focus-within .chat-session-actions > *,
+.chat-sessions-list .chat-folder-row.is-pinned .chat-session-quickpin {
+  opacity: 1;
+}
+
+@media (hover: none) {
+  .chat-sessions-list .chat-folder-row .chat-session-actions > * {
+    opacity: 1;
+  }
+}

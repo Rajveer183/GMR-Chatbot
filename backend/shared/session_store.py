@@ -290,7 +290,8 @@ class SessionStore:
             for s in data["sessions"]:
                 if s.get("folder_id"):
                     counts[s["folder_id"]] = counts.get(s["folder_id"], 0) + 1
-            return [{**f, "session_count": counts.get(f["folder_id"], 0)} for f in data.get("folders") or []]
+            return [{**f, "pinned": bool(f.get("pinned")), "pinned_at": f.get("pinned_at"),
+                     "session_count": counts.get(f["folder_id"], 0)} for f in data.get("folders") or []]
 
     def create_folder(self, name: str) -> dict:
         folder = {"folder_id": uuid.uuid4().hex[:12], "name": (name or "").strip()[:60] or "New folder",
@@ -299,17 +300,30 @@ class SessionStore:
             data = self._read()
             data.setdefault("folders", []).append(folder)
             self._write_meta(data)
-        return {**folder, "session_count": 0}
+        return {**folder, "pinned": False, "pinned_at": None, "session_count": 0}
 
-    def rename_folder(self, folder_id: str, name: str) -> dict | None:
+    def update_folder(self, folder_id: str, name: str | None = None, pinned: bool | None = None) -> dict | None:
+        """Rename and/or pin a folder (None = leave as is). A pinned folder is listed under
+        Pinned as well as under Folders."""
         with self._lock:
             data = self._read()
             for f in data.get("folders") or []:
                 if f.get("folder_id") == folder_id:
-                    f["name"] = (name or "").strip()[:60] or f["name"]
+                    if name is not None:
+                        f["name"] = name.strip()[:60] or f["name"]
+                    if pinned is not None:
+                        f["pinned"] = bool(pinned)
+                        if pinned:
+                            f["pinned_at"] = _now()
+                        else:
+                            f.pop("pinned_at", None)
                     self._write_meta(data)
-                    return dict(f)
+                    count = sum(1 for s in data["sessions"] if s.get("folder_id") == folder_id)
+                    return {**f, "pinned": bool(f.get("pinned")), "pinned_at": f.get("pinned_at"), "session_count": count}
         return None
+
+    def rename_folder(self, folder_id: str, name: str) -> dict | None:
+        return self.update_folder(folder_id, name=name)
 
     def delete_folder(self, folder_id: str) -> bool:
         """Remove the folder; its chats are kept and go back to the main list."""

@@ -24,7 +24,8 @@ interface ChatHistoryProps {
   onUpdate: (sessionId: string, patch: SessionPatch) => Promise<void>;
   onDelete: (sessionId: string) => void;
   onCreateFolder: (name: string) => Promise<ChatFolder | null>;
-  onRenameFolder: (folderId: string, name: string) => Promise<void>;
+  /** Rename and/or pin a folder. */
+  onUpdateFolder: (folderId: string, patch: { name?: string; pinned?: boolean }) => Promise<void>;
   onDeleteFolder: (folderId: string) => Promise<void>;
 }
 
@@ -97,18 +98,22 @@ function Highlight({ text, query }: { text: string; query: string }) {
 
 interface MenuState {
   session: SessionSummary;
+  place: string;
   top: number;
   left: number;
 }
 
 export const ChatHistory: React.FC<ChatHistoryProps> = ({
-  sessions, folders, activeId, t, onOpen, onUpdate, onDelete, onCreateFolder, onRenameFolder, onDeleteFolder,
+  sessions, folders, activeId, t, onOpen, onUpdate, onDelete, onCreateFolder, onUpdateFolder, onDeleteFolder,
 }) => {
   const [query, setQuery] = useState("");
   const [hits, setHits] = useState<SessionSearchHit[] | null>(null);
   const [searching, setSearching] = useState(false);
   const [renamingId, setRenamingId] = useState<string | null>(null);
   const [renameValue, setRenameValue] = useState("");
+  // A chat or folder can be listed twice (under Pinned and in its usual place); the rename
+  // input opens only in the row it was started from.
+  const [renamePlace, setRenamePlace] = useState<string>("");
   const [renamingFolderId, setRenamingFolderId] = useState<string | null>(null);
   const [newFolderFor, setNewFolderFor] = useState<string | null | undefined>(undefined); // undefined = closed; string = move that chat in
   const [newFolderName, setNewFolderName] = useState("");
@@ -202,14 +207,21 @@ export const ChatHistory: React.FC<ChatHistoryProps> = ({
   const { pinned, byFolder, recent, archived } = useMemo(() => {
     const live = sessions.filter((s) => !s.archived);
     const folderIds = new Set(folders.map((f) => f.folder_id));
+    // A pinned chat that is in a folder is listed in both places -- it is the same chat,
+    // so whatever happens to it (rename, new answers) shows in both rows.
     const byFolder = new Map<string, SessionSummary[]>();
     for (const s of live) {
-      if (!s.pinned && s.folder_id && folderIds.has(s.folder_id)) {
+      if (s.folder_id && folderIds.has(s.folder_id)) {
         byFolder.set(s.folder_id, [...(byFolder.get(s.folder_id) ?? []), s]);
       }
     }
+    type PinnedEntry = { kind: "chat"; at: string; chat: SessionSummary } | { kind: "folder"; at: string; folder: ChatFolder };
+    const pinned: PinnedEntry[] = [
+      ...live.filter((s) => s.pinned).map((chat) => ({ kind: "chat" as const, at: chat.pinned_at ?? "", chat })),
+      ...folders.filter((f) => f.pinned).map((folder) => ({ kind: "folder" as const, at: folder.pinned_at ?? "", folder })),
+    ].sort((a, b) => b.at.localeCompare(a.at));
     return {
-      pinned: live.filter((s) => s.pinned).sort((a, b) => (b.pinned_at ?? "").localeCompare(a.pinned_at ?? "")),
+      pinned,
       byFolder,
       recent: live.filter((s) => !s.pinned && !(s.folder_id && folderIds.has(s.folder_id))),
       archived: sessions.filter((s) => s.archived),
@@ -230,7 +242,7 @@ export const ChatHistory: React.FC<ChatHistoryProps> = ({
     const id = renamingFolderId;
     setRenamingFolderId(null);
     const name = renameValue.trim();
-    if (id && name && folderName(id) !== name) await onRenameFolder(id, name);
+    if (id && name && folderName(id) !== name) await onUpdateFolder(id, { name });
   };
 
   const commitNewFolder = async () => {
@@ -249,10 +261,11 @@ export const ChatHistory: React.FC<ChatHistoryProps> = ({
     if (target) await onUpdate(target, { folder_id: folder.folder_id });
   };
 
-  const openMenu = (e: React.MouseEvent, session: SessionSummary) => {
+  const openMenu = (e: React.MouseEvent, session: SessionSummary, place: string) => {
     e.stopPropagation();
     const r = (e.currentTarget as HTMLElement).getBoundingClientRect();
-    setMenu(menu?.session.session_id === session.session_id ? null : { session, top: r.bottom + 4, left: r.left - 150 });
+    const same = menu?.session.session_id === session.session_id && menu.place === place;
+    setMenu(same ? null : { session, place, top: r.bottom + 4, left: r.left - 150 });
   };
 
   const act = (fn: () => void) => () => {
@@ -278,18 +291,20 @@ export const ChatHistory: React.FC<ChatHistoryProps> = ({
     onDrop: (e: React.DragEvent) => onDrop(e, folderId),
   });
 
-  const renderItem = (s: SessionSummary, hit?: SessionSearchHit) => (
+  const renderItem = (s: SessionSummary, hit?: SessionSearchHit, place = "list") => {
+    const renaming = renamingId === s.session_id && renamePlace === place;
+    return (
     <div
-      key={s.session_id}
+      key={`${place}:${s.session_id}`}
       className={`chat-session-item${activeId === s.session_id ? " active" : ""}${hit ? " is-hit" : ""}${s.archived ? " is-archived" : ""}${s.pinned ? " is-pinned" : ""}`}
       title={s.session_name}
-      draggable={!hit && renamingId !== s.session_id}
+      draggable={!hit && !renaming}
       onDragStart={(e) => {
         e.dataTransfer.setData("text/x-gmr-session", s.session_id);
         e.dataTransfer.effectAllowed = "move";
       }}
     >
-      {renamingId === s.session_id ? (
+      {renaming ? (
         <input
           className="chat-session-rename"
           value={renameValue}
@@ -338,17 +353,94 @@ export const ChatHistory: React.FC<ChatHistoryProps> = ({
         <button
           className="chat-icon-btn"
           type="button"
-          onClick={(e) => openMenu(e, s)}
+          onClick={(e) => openMenu(e, s, place)}
           title={t("moreActions")}
           aria-label={t("moreActions")}
           aria-haspopup="menu"
-          aria-expanded={menu?.session.session_id === s.session_id}
+          aria-expanded={menu?.session.session_id === s.session_id && menu.place === place}
         >
           <MoreHorizontal size={13} />
         </button>
       </div>
     </div>
-  );
+    );
+  };
+
+  /** A folder row and (when open) its chats. place "pinned" = its copy under Pinned, which
+   * opens and closes separately from the one under Folders. */
+  const renderFolder = (f: ChatFolder, place: "folders" | "pinned") => {
+    const openKey = place === "pinned" ? `pin:${f.folder_id}` : f.folder_id;
+    const open = openFolders.includes(openKey);
+    const items = byFolder.get(f.folder_id) ?? [];
+    const dropKey = `${place}:${f.folder_id}`;
+    const renaming = renamingFolderId === f.folder_id && renamePlace === place;
+    return (
+      <div key={`${place}:${f.folder_id}`} className="chat-folder">
+        <div
+          className={`chat-folder-row${dropTarget === dropKey ? " drop" : ""}${f.pinned ? " is-pinned" : ""}`}
+          {...dropProps(dropKey, f.folder_id)}
+        >
+          {renaming ? (
+            <>
+              <Folder size={13} />
+              <input
+                className="chat-session-rename"
+                value={renameValue}
+                onChange={(e) => setRenameValue(e.target.value)}
+                onBlur={commitFolderRename}
+                onKeyDown={(e) => {
+                  if (e.key === "Enter") commitFolderRename();
+                  if (e.key === "Escape") setRenamingFolderId(null);
+                }}
+                maxLength={60}
+                autoFocus
+              />
+            </>
+          ) : (
+            <button type="button" className="chat-folder-toggle" onClick={() => toggleFolder(openKey)} aria-expanded={open}>
+              {open ? <ChevronDown size={12} /> : <ChevronRight size={12} />}
+              {open ? <FolderOpen size={13} /> : <Folder size={13} />}
+              <span className="chat-folder-name">{f.name}</span>
+              <span className="chat-folder-count">{items.length}</span>
+            </button>
+          )}
+          <div className="chat-session-actions">
+            <button
+              className={`chat-icon-btn chat-session-quickpin${f.pinned ? " on" : ""}`}
+              type="button"
+              onClick={() => onUpdateFolder(f.folder_id, { pinned: !f.pinned })}
+              title={t(f.pinned ? "unpin" : "pin")}
+              aria-label={t(f.pinned ? "unpin" : "pin")}
+            >
+              <Pin size={12} className="pin-on" fill={f.pinned ? "currentColor" : "none"} />
+              {f.pinned ? <PinOff size={12} className="pin-off" /> : null}
+            </button>
+            <button
+              className="chat-icon-btn"
+              type="button"
+              onClick={() => {
+                setRenameValue(f.name);
+                setRenamePlace(place);
+                setRenamingFolderId(f.folder_id);
+              }}
+              title={t("renameFolder")}
+              aria-label={t("renameFolder")}
+            >
+              <Pencil size={11} />
+            </button>
+            <button className="chat-icon-btn danger" type="button" onClick={() => setConfirmFolder(f)} title={t("deleteFolder")} aria-label={t("deleteFolder")}>
+              <Trash2 size={11} />
+            </button>
+          </div>
+        </div>
+        {open ? (
+          <div className="chat-folder-items">
+            {items.length ? items.map((s) => renderItem(s, undefined, dropKey)) : <div className="chat-folders-hint">{t("folderEmpty")}</div>}
+          </div>
+        ) : null}
+      </div>
+    );
+  };
 
   const newFolderInput = (
     <div className="chat-folder-row new">
@@ -409,7 +501,7 @@ export const ChatHistory: React.FC<ChatHistoryProps> = ({
             {results.length === 0 && !searching ? (
               <div className="chat-section-empty">{t("noChatsMatch", { q })}</div>
             ) : (
-              results.map((h) => renderItem(h, h))
+              results.map((h) => renderItem(h, h, "search"))
             )}
           </>
         ) : (
@@ -417,7 +509,9 @@ export const ChatHistory: React.FC<ChatHistoryProps> = ({
             {pinned.length ? (
               <section className="chat-section">
                 <SectionHead label={t("pinnedChats")} open={sectionOpen("pinned")} onToggle={() => toggleSection("pinned")} />
-                {sectionOpen("pinned") ? pinned.map((s) => renderItem(s)) : null}
+                {sectionOpen("pinned")
+                  ? pinned.map((p) => (p.kind === "chat" ? renderItem(p.chat, undefined, "pinned") : renderFolder(p.folder, "pinned")))
+                  : null}
               </section>
             ) : null}
 
@@ -448,65 +542,7 @@ export const ChatHistory: React.FC<ChatHistoryProps> = ({
             {folders.length === 0 && newFolderFor === undefined ? (
               <div className="chat-section-empty" title={t("foldersHint")}>{t("noFolders")}</div>
             ) : null}
-            {folders.map((f) => {
-              const open = openFolders.includes(f.folder_id);
-              const items = byFolder.get(f.folder_id) ?? [];
-              return (
-                <div key={f.folder_id} className="chat-folder">
-                  <div
-                    className={`chat-folder-row${dropTarget === f.folder_id ? " drop" : ""}`}
-                    {...dropProps(f.folder_id, f.folder_id)}
-                  >
-                    {renamingFolderId === f.folder_id ? (
-                      <>
-                        <Folder size={13} />
-                        <input
-                          className="chat-session-rename"
-                          value={renameValue}
-                          onChange={(e) => setRenameValue(e.target.value)}
-                          onBlur={commitFolderRename}
-                          onKeyDown={(e) => {
-                            if (e.key === "Enter") commitFolderRename();
-                            if (e.key === "Escape") setRenamingFolderId(null);
-                          }}
-                          maxLength={60}
-                          autoFocus
-                        />
-                      </>
-                    ) : (
-                      <button type="button" className="chat-folder-toggle" onClick={() => toggleFolder(f.folder_id)} aria-expanded={open}>
-                        {open ? <ChevronDown size={12} /> : <ChevronRight size={12} />}
-                        {open ? <FolderOpen size={13} /> : <Folder size={13} />}
-                        <span className="chat-folder-name">{f.name}</span>
-                        <span className="chat-folder-count">{items.length}</span>
-                      </button>
-                    )}
-                    <div className="chat-session-actions">
-                      <button
-                        className="chat-icon-btn"
-                        type="button"
-                        onClick={() => {
-                          setRenameValue(f.name);
-                          setRenamingFolderId(f.folder_id);
-                        }}
-                        title={t("renameFolder")}
-                        aria-label={t("renameFolder")}
-                      >
-                        <Pencil size={11} />
-                      </button>
-                      <button className="chat-icon-btn danger" type="button" onClick={() => setConfirmFolder(f)} title={t("deleteFolder")} aria-label={t("deleteFolder")}>
-                        <Trash2 size={11} />
-                      </button>
-                    </div>
-                  </div>
-                  {open ? (
-                    <div className="chat-folder-items">
-                      {items.length ? items.map((s) => renderItem(s)) : <div className="chat-folders-hint">{t("folderEmpty")}</div>}
-                    </div>
-                  ) : null}
-                </div>
-              );
-            })}
+            {folders.map((f) => renderFolder(f, "folders"))}
             </>
             ) : null}
             </section>
@@ -539,6 +575,7 @@ export const ChatHistory: React.FC<ChatHistoryProps> = ({
             role="menuitem"
             onClick={act(() => {
               setRenameValue(menu.session.session_name);
+              setRenamePlace(menu.place);
               setRenamingId(menu.session.session_id);
               setQuery("");
             })}

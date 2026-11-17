@@ -393,6 +393,8 @@ export interface ChatFolder {
   name: string;
   created_at: string;
   session_count: number;
+  pinned?: boolean;
+  pinned_at?: string | null;
 }
 
 /** Fields PATCH /api/sessions/{id} accepts; only the ones sent change (folder_id: null = no folder). */
@@ -746,8 +748,9 @@ export const apiClient = {
     return postJSON("/api/folders", { name });
   },
 
-  renameFolder: async (folder_id: string, name: string): Promise<ChatFolder> => {
-    return patchJSON(`/api/folders/${encodeURIComponent(folder_id)}`, { name });
+  /** Rename and/or pin a folder (fields left out are unchanged). */
+  updateFolder: async (folder_id: string, patch: { name?: string; pinned?: boolean }): Promise<ChatFolder> => {
+    return patchJSON(`/api/folders/${encodeURIComponent(folder_id)}`, patch);
   },
 
   deleteFolder: async (folder_id: string): Promise<{ deleted: boolean }> => {

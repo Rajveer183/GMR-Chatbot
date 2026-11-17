@@ -659,12 +659,14 @@ export const AIWorkspace: React.FC<AIWorkspaceProps> = ({ filters }) => {
     }
   };
 
-  const renameFolder = async (folderId: string, name: string) => {
+  /** Rename and/or pin a folder. */
+  const updateFolder = async (folderId: string, patch: { name?: string; pinned?: boolean }) => {
     try {
-      await apiClient.renameFolder(folderId, name);
+      const updated = await apiClient.updateFolder(folderId, patch);
+      setFolders((prev) => prev.map((f) => (f.folder_id === folderId ? { ...f, ...updated } : f)));
       await loadFolders();
     } catch (err: any) {
-      setError(err.message || "Failed to rename folder");
+      setError(err.message || "Failed to update folder");
     }
   };
 
@@ -827,7 +829,7 @@ export const AIWorkspace: React.FC<AIWorkspaceProps> = ({ filters }) => {
           onUpdate={updateSession}
           onDelete={deleteSession}
           onCreateFolder={createFolder}
-          onRenameFolder={renameFolder}
+          onUpdateFolder={updateFolder}
           onDeleteFolder={deleteFolder}
         />
 

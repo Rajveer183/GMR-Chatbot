@@ -110,6 +110,12 @@ class FolderRequest(BaseModel):
     name: str
 
 
+class FolderPatchRequest(BaseModel):
+    """Rename and/or pin a folder; fields left out are unchanged."""
+    name: str | None = None
+    pinned: bool | None = None
+
+
 class SessionTruncateRequest(BaseModel):
     keep: int
 
@@ -1294,8 +1300,8 @@ def create_folder(req: FolderRequest) -> dict:
 
 
 @app.patch("/api/folders/{folder_id}")
-def rename_folder(folder_id: str, req: FolderRequest) -> dict:
-    folder = sessions.rename_folder(folder_id, req.name)
+def update_folder(folder_id: str, req: FolderPatchRequest) -> dict:
+    folder = sessions.update_folder(folder_id, req.name, req.pinned)
     if folder is None:
         raise HTTPException(status_code=404, detail="Folder not found.")
     return folder

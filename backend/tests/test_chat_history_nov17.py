@@ -134,3 +134,40 @@ def test_api_patch_and_folder_endpoints(tmp_path, monkeypatch):
     assert c.get("/api/sessions/search", params={"q": "nothing"}).json() == []
     assert c.get("/api/folders").json()[0]["name"] == "KPIs"
     assert c.delete(f"/api/folders/{fid}").json()["deleted"] is True
+
+
+def test_pinned_chat_keeps_its_folder(store):
+    """Pinning a chat that is in a folder keeps it in the folder (the UI lists it in both)."""
+    a = _chat(store, "q1", "a1")
+    f = store.create_folder("Ops")
+    store.patch_session(a, folder_id=f["folder_id"])
+    s = store.patch_session(a, pinned=True)
+    assert s["pinned"] is True and s["folder_id"] == f["folder_id"]
+    assert store.list_folders()[0]["session_count"] == 1
+
+
+def test_pin_folder(store, tmp_path):
+    f = store.create_folder("Ops")
+    assert f["pinned"] is False
+    up = store.update_folder(f["folder_id"], pinned=True)
+    assert up["pinned"] is True and up["pinned_at"] and up["name"] == "Ops"
+    assert store.update_folder(f["folder_id"], name="Ops 2")["pinned"] is True  # rename keeps the pin
+    store.flush()
+    again = SessionStore(store.path)
+    assert again.list_folders()[0]["pinned"] is True
+    assert again.update_folder(f["folder_id"], pinned=False)["pinned_at"] is None
+    assert again.update_folder("missing", pinned=True) is None
+
+
+def test_api_pin_folder(tmp_path, monkeypatch):
+    from fastapi.testclient import TestClient
+
+    from gmr_agents import main
+
+    monkeypatch.setattr(main, "sessions", SessionStore(str(tmp_path / "api2.json")))
+    c = TestClient(main.app)
+    fid = c.post("/api/folders", json={"name": "KPIs"}).json()["folder_id"]
+    assert c.patch(f"/api/folders/{fid}", json={"pinned": True}).json()["pinned"] is True
+    r = c.patch(f"/api/folders/{fid}", json={"name": "KPI pack"}).json()
+    assert r["name"] == "KPI pack" and r["pinned"] is True
+    assert c.patch("/api/folders/nope", json={"pinned": True}).status_code == 404
