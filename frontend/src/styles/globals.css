@@ -139,7 +139,7 @@ button {
   /* var(--border) is too light to read against the colored gradient behind
      it -- a translucent dark tint keeps consistent contrast whatever color
      bleeds through underneath, instead of needing to match one exact bg. */
-  border-right: 1px solid rgba(15, 23, 42, 0.1);
+  border-right: 1px solid var(--divider);
   display: flex;
   flex-direction: column;
 }
@@ -185,7 +185,7 @@ button {
 
 .chat-sidebar-icon:hover,
 .chat-sidebar-icon[aria-pressed="true"] {
-  background: rgba(15, 23, 42, 0.06);
+  background: var(--hover-tint);
   color: var(--text-main);
 }
 
@@ -213,7 +213,7 @@ button {
 
 .chat-icon-btn:hover {
   background: var(--active-bg);
-  color: var(--bhel-navy);
+  color: var(--heading-ink);
   border-color: var(--accent);
 }
 
@@ -245,7 +245,7 @@ button {
 }
 
 .chat-new-btn:hover {
-  background: rgba(15, 23, 42, 0.06);
+  background: var(--hover-tint);
 }
 
 /* New chat + the temporary-chat toggle on one row (toggle at the right end, like ChatGPT). */
@@ -300,7 +300,7 @@ button {
   min-height: 36px;
   font-size: 13.5px;
   font-weight: 500;
-  color: #334155;
+  color: var(--text-secondary);
   text-align: left;
   display: flex;
   gap: var(--space-2);
@@ -310,13 +310,13 @@ button {
 }
 
 .chat-menu-item:hover {
-  background: #f8fafc;
-  color: var(--bhel-navy);
+  background: var(--surface-2);
+  color: var(--heading-ink);
 }
 
 .chat-menu-item.active {
   background: var(--active-bg);
-  color: var(--bhel-navy);
+  color: var(--heading-ink);
   font-weight: 650;
   border-left-color: var(--accent);
 }
@@ -324,7 +324,7 @@ button {
 .chat-files-section {
   padding: var(--space-2) var(--space-2) 0;
   margin-top: 2px;
-  border-top: 1px solid rgba(15, 23, 42, 0.08);
+  border-top: 1px solid var(--divider);
 }
 
 .chat-files-toggle {
@@ -343,7 +343,7 @@ button {
 }
 
 .chat-files-toggle:hover {
-  background: #f8fafc;
+  background: var(--surface-2);
 }
 
 .chat-files-count {
@@ -390,7 +390,7 @@ button {
 }
 
 .chat-files-item:hover {
-  background: #f1f5f9;
+  background: var(--surface-3);
 }
 
 .chat-files-item-icon {
@@ -486,7 +486,7 @@ button {
 }
 
 .chat-search-close:hover {
-  background: #f1f5f9;
+  background: var(--surface-3);
   color: var(--text-main);
 }
 
@@ -527,7 +527,7 @@ button {
 }
 
 .chat-search-row.active {
-  background: #f1f5f9;
+  background: var(--surface-3);
 }
 
 .chat-search-row-icon {
@@ -646,7 +646,7 @@ button {
 }
 
 .chat-session-item:hover {
-  background: #f8fafc;
+  background: var(--surface-2);
 }
 
 .chat-session-item.active {
@@ -687,8 +687,8 @@ button {
 
 .chat-sidebar-footer {
   padding: var(--space-3) var(--space-4);
-  border-top: 1px solid rgba(15, 23, 42, 0.08);
-  background: #f8fafc;
+  border-top: 1px solid var(--divider);
+  background: var(--surface-2);
 }
 
 .chat-sidebar-footer .role {
@@ -783,9 +783,51 @@ button {
   margin-left: auto;
   font-size: 11px;
   color: var(--text-muted);
-  background: #f1f5f9;
+  background: var(--surface-3);
   border-radius: 999px;
   padding: 1px 7px;
+}
+
+/* Theme -> System / Light / Dark flyout, opening to the right of the menu. */
+.chat-profile-sub {
+  position: relative;
+}
+
+.chat-profile-menu .chat-profile-sub > button.is-active {
+  background: var(--active-bg);
+}
+
+.chat-profile-chevron,
+.chat-profile-check {
+  margin-left: auto;
+  color: var(--text-muted);
+}
+
+.chat-profile-check {
+  color: var(--accent);
+}
+
+.chat-profile-submenu {
+  position: absolute;
+  left: calc(100% + 8px);
+  bottom: -4px;
+  min-width: 170px;
+  background: var(--card-bg);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-md);
+  box-shadow: var(--menu-shadow);
+  padding: 4px;
+  z-index: 1001;
+}
+
+/* Hover bridge across the 8px gap so the flyout stays open on the way over. */
+.chat-profile-submenu::before {
+  content: "";
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  left: -12px;
+  width: 12px;
 }
 
 /* ==========================================================================
@@ -798,7 +840,7 @@ button {
   background: transparent;
   /* Matches .chat-sidebar's border -- var(--border) is too light to read
      against the colored gradient behind it. */
-  border-bottom: 1px solid rgba(15, 23, 42, 0.1);
+  border-bottom: 1px solid var(--divider);
   min-height: 64px;
   padding: var(--space-3) var(--space-5);
   display: flex;
@@ -840,7 +882,7 @@ button {
 }
 
 .chat-header-btn:hover {
-  background: #f8fafc;
+  background: var(--surface-2);
 }
 
 .chat-active-badge {
@@ -850,7 +892,7 @@ button {
   font-size: 12px;
   font-weight: 600;
   background: var(--accent-soft);
-  color: var(--bhel-navy);
+  color: var(--heading-ink);
   border-radius: var(--radius-pill);
   padding: 6px 11px 6px 9px;
 }
@@ -893,7 +935,7 @@ button {
 }
 
 .chat-language-select select:hover {
-  background: #f8fafc;
+  background: var(--surface-2);
 }
 
 .chat-language-select select:focus-visible {
@@ -1249,7 +1291,7 @@ button {
   font-size: 22px;
   font-weight: 700;
   letter-spacing: -0.01em;
-  color: var(--bhel-navy);
+  color: var(--heading-ink);
   margin-bottom: 2px;
 }
 
@@ -1297,7 +1339,7 @@ button {
   padding: 14px 16px;
   border: 1px solid var(--border);
   border-radius: var(--radius-md);
-  background: #f8fafc;
+  background: var(--surface-2);
   font: inherit;
   text-align: left;
   color: var(--text-main);
@@ -1327,7 +1369,7 @@ button {
   align-items: center;
   justify-content: center;
   flex-shrink: 0;
-  color: var(--bhel-navy);
+  color: var(--heading-ink);
   background: rgba(11, 60, 109, 0.08);
 }
 
@@ -1406,7 +1448,7 @@ button {
 .empty-state-capability-title {
   font-size: 15px;
   font-weight: 650;
-  color: var(--bhel-navy);
+  color: var(--heading-ink);
   min-width: 0;
   white-space: nowrap;
   overflow: hidden;
@@ -1473,14 +1515,14 @@ button {
 }
 
 .summary-audio-btn:hover:not(:disabled) {
-  background: #f8fafc;
+  background: var(--surface-2);
   border-color: var(--accent);
 }
 
 .summary-audio-btn.playing {
   border-color: var(--accent);
   background: var(--accent-soft);
-  color: var(--bhel-navy);
+  color: var(--heading-ink);
 }
 
 .summary-audio-btn.copied {
@@ -1623,7 +1665,7 @@ button {
   font-family: var(--font-display);
   font-size: 21px;
   font-weight: 700;
-  color: var(--bhel-navy);
+  color: var(--heading-ink);
   line-height: 1.2;
   font-variant-numeric: tabular-nums;
   letter-spacing: -0.01em;
@@ -1700,7 +1742,7 @@ button {
   font-family: var(--font-display);
   font-size: 14.5px;
   font-weight: 600;
-  color: var(--bhel-navy);
+  color: var(--heading-ink);
 }
 
 .chart-card-subtitle {
@@ -1747,8 +1789,8 @@ button {
 }
 
 .chart-expand-btn:hover {
-  color: var(--bhel-navy);
-  background: #f8fafc;
+  color: var(--heading-ink);
+  background: var(--surface-2);
   border-color: var(--accent);
 }
 
@@ -1761,7 +1803,7 @@ button {
   cursor: pointer;
 }
 .apexcharts-tooltip.apexcharts-theme-light {
-  border: 1px solid #cbd5e1 !important;
+  border: 1px solid var(--border-strong) !important;
   box-shadow: 0 6px 18px rgba(15, 23, 42, 0.12) !important;
 }
 .apexcharts-tooltip-text-y-value { font-family: "SF Mono", ui-monospace, Consolas, monospace; font-weight: 700; }
@@ -1803,7 +1845,7 @@ button {
   gap: var(--space-3);
   padding: 12px 16px;
   border-bottom: 1px solid var(--border-light);
-  background: #fbfcfe;
+  background: var(--surface-2);
   flex-wrap: wrap;
 }
 
@@ -1811,7 +1853,7 @@ button {
   font-family: var(--font-display);
   font-size: 14.5px;
   font-weight: 600;
-  color: var(--bhel-navy);
+  color: var(--heading-ink);
 }
 
 .table-card-subtitle {
@@ -2031,7 +2073,7 @@ button {
 }
 
 .qa-chip {
-  background: #f1f5f9;
+  background: var(--surface-3);
   border: 1px solid var(--border);
   border-radius: var(--radius-pill);
   padding: 6px 12px;
@@ -2044,7 +2086,7 @@ button {
 
 .qa-chip:hover {
   border-color: var(--accent);
-  color: var(--bhel-navy);
+  color: var(--heading-ink);
   background: var(--active-bg);
   box-shadow: var(--shadow);
 }
@@ -2098,7 +2140,7 @@ button {
   font-family: var(--font-display);
   font-size: 19px;
   font-weight: 700;
-  color: var(--bhel-navy);
+  color: var(--heading-ink);
 }
 
 .chart-modal-subtitle {
@@ -2118,8 +2160,8 @@ button {
 }
 
 .chart-modal-close:hover {
-  background: #f1f5f9;
-  color: var(--bhel-navy);
+  background: var(--surface-3);
+  color: var(--heading-ink);
 }
 
 .chart-modal-body {
@@ -2198,8 +2240,8 @@ button {
 }
 
 .confirm-dialog-close:hover {
-  background: #f1f5f9;
-  color: var(--bhel-navy);
+  background: var(--surface-3);
+  color: var(--heading-ink);
 }
 
 .confirm-dialog-actions {
@@ -2393,7 +2435,7 @@ button {
 
 .chat-icon-btn.mic-btn:hover {
   background: var(--border-light);
-  color: var(--bhel-navy);
+  color: var(--heading-ink);
 }
 
 .chat-icon-btn.mic-btn.active {
@@ -2674,16 +2716,16 @@ button {
   justify-content: space-between;
   gap: 8px 16px;
   padding: 10px 14px;
-  border-top: 1px solid #e2e8f0;
+  border-top: 1px solid var(--border-strong);
   font-size: 12.5px;
-  color: #475569;
+  color: var(--text-secondary);
 }
 .table-pager-size input,
 .table-pager-page input {
   padding: 3px 6px;
-  border: 1px solid #cbd5e1;
+  border: 1px solid var(--border-strong);
   border-radius: 6px;
-  background: #fff;
+  background: var(--card-bg);
   font: inherit;
   color: inherit;
   text-align: center;
@@ -2727,9 +2769,9 @@ button {
   align-items: center;
   gap: 4px;
   padding: 4px 10px;
-  border: 1px solid #cbd5e1;
+  border: 1px solid var(--border-strong);
   border-radius: 6px;
-  background: #fff;
+  background: var(--card-bg);
   color: #0b3c6d;
   font: inherit;
   cursor: pointer;
@@ -2737,7 +2779,7 @@ button {
 .table-pager-nav button:disabled {
   color: #94a3b8;
   cursor: not-allowed;
-  background: #f8fafc;
+  background: var(--surface-2);
 }
 .table-pager-page {
   min-width: 90px;
@@ -3038,7 +3080,7 @@ button {
    earlier investigations with a read-only re-check.
    ========================================================================== */
 .inv-panel {
-  border: 1px solid rgba(15, 23, 42, 0.1);
+  border: 1px solid var(--divider);
   border-radius: var(--radius-sm);
   background: var(--card-bg);
   padding: 8px 12px;
@@ -3122,7 +3164,7 @@ button {
 }
 
 .inv-status-ok { background: #dcfce7; color: #166534; }
-.inv-status-no { background: #f1f5f9; color: #475569; }
+.inv-status-no { background: var(--surface-3); color: var(--text-secondary); }
 .inv-status-partly { background: #fef3c7; color: #92400e; }
 
 .inv-h { font-weight: 600; color: var(--text-main); }
@@ -3168,7 +3210,7 @@ button {
   margin: 0 4px 2px 0;
   padding: 0 6px;
   border-radius: 4px;
-  background: rgba(15, 23, 42, 0.06);
+  background: var(--hover-tint);
   font-family: ui-monospace, SFMono-Regular, Consolas, monospace;
   font-size: 11.5px;
   color: var(--text-main);
@@ -3180,14 +3222,14 @@ button {
 .ev-fix .ev-label { color: #92400e; }
 .ev-ok .ev-label { color: #166534; }
 .ev-ms { margin-left: 6px; font-size: 11px; color: var(--text-subtle); white-space: nowrap; }
-.ev-sql { border: 1px solid rgba(15, 23, 42, 0.1); border-radius: var(--radius-sm); overflow: hidden; }
+.ev-sql { border: 1px solid var(--divider); border-radius: var(--radius-sm); overflow: hidden; }
 .ev-sql-head {
   display: flex;
   align-items: center;
   justify-content: space-between;
   gap: 8px;
   padding: 3px 8px;
-  background: rgba(15, 23, 42, 0.04);
+  background: var(--hover-tint);
   font-weight: 600;
   color: var(--text-main);
 }
@@ -3494,7 +3536,7 @@ button {
 .snapshot-title {
   font-size: 18px;
   font-weight: 700;
-  color: var(--bhel-navy);
+  color: var(--heading-ink);
 }
 
 .snapshot-meta {
@@ -3508,7 +3550,7 @@ button {
   padding: 10px 14px;
   border-radius: var(--radius-md);
   background: var(--accent-soft);
-  color: var(--bhel-navy);
+  color: var(--heading-ink);
   font-size: 14px;
   font-weight: 600;
 }
@@ -3660,7 +3702,7 @@ button {
 }
 
 .chat-folder-row:hover {
-  background: #f8fafc;
+  background: var(--surface-2);
 }
 
 .chat-folder-row.new {
@@ -3739,7 +3781,7 @@ button {
 }
 
 .chat-archived-toggle:hover {
-  color: var(--bhel-navy);
+  color: var(--heading-ink);
 }
 
 .chat-newfolder-for {
@@ -4033,7 +4075,7 @@ button {
 }
 
 .chat-sessions-list .chat-session-item:hover {
-  background: rgba(15, 23, 42, 0.045);
+  background: var(--hover-tint);
 }
 
 .chat-sessions-list .chat-session-item.active {
@@ -4053,7 +4095,7 @@ button {
 }
 
 .chat-sessions-list .chat-folder-row:hover {
-  background: rgba(15, 23, 42, 0.045);
+  background: var(--hover-tint);
 }
 
 .chat-folder-toggle {
@@ -4194,3 +4236,94 @@ button {
   visibility: visible;
   opacity: 1;
 }
+
+/* ==========================================================================
+   Dark theme twins for colours that are hard-coded above (tokens themselves
+   switch in theme.css under :root[data-theme="dark"]).
+   ========================================================================== */
+:root[data-theme="dark"] .chat-icon-btn.danger { color: #f87171; }
+:root[data-theme="dark"] .chat-icon-btn.danger:hover { color: #fca5a5; }
+:root[data-theme="dark"] .chat-error,
+:root[data-theme="dark"] .export-notice.error { border-color: rgba(248, 113, 113, 0.35); color: #fca5a5; }
+:root[data-theme="dark"] .chat-error { background: rgba(248, 113, 113, 0.08); }
+:root[data-theme="dark"] .chat-speech-error,
+:root[data-theme="dark"] .table-page-error { color: #f87171; }
+:root[data-theme="dark"] .chat-warning-card { border-color: rgba(248, 113, 113, 0.35); background: rgba(248, 113, 113, 0.08); color: #fca5a5; }
+:root[data-theme="dark"] .summary-audio-btn.copied,
+:root[data-theme="dark"] .feedback-btn.active.up { color: #34d399; }
+:root[data-theme="dark"] .confirm-btn { background: rgba(248, 113, 113, 0.16); color: #fca5a5; }
+:root[data-theme="dark"] .confirm-btn:hover { background: rgba(248, 113, 113, 0.26); }
+:root[data-theme="dark"] .btn-outline.cancel-btn { background: var(--surface-3); color: var(--text-main); }
+:root[data-theme="dark"] .btn-outline.cancel-btn:hover { background: var(--active-bg); }
+:root[data-theme="dark"] .archived-expiry,
+:root[data-theme="dark"] .chat-icon-btn.mic-btn.transcribing { color: #fbbf24; }
+:root[data-theme="dark"] .chat-icon-btn.mic-btn.active { background: rgba(56, 189, 248, 0.14); border-color: #38bdf8; color: #7dd3fc; }
+:root[data-theme="dark"] .table-pager-page input:focus { border-color: var(--accent); }
+:root[data-theme="dark"] .table-pager-nav button { color: var(--heading-ink); }
+:root[data-theme="dark"] .table-pager-nav button:disabled { color: var(--text-subtle); }
+:root[data-theme="dark"] .table-page-status { color: var(--text-muted); }
+:root[data-theme="dark"] .inv-conf-high,
+:root[data-theme="dark"] .inv-status-ok { background: rgba(52, 211, 153, 0.14); color: #6ee7b7; }
+:root[data-theme="dark"] .inv-conf-medium,
+:root[data-theme="dark"] .inv-status-partly { background: rgba(251, 191, 36, 0.14); color: #fcd34d; }
+:root[data-theme="dark"] .inv-conf-low { background: rgba(248, 113, 113, 0.14); color: #fca5a5; }
+:root[data-theme="dark"] .inv-note.warn,
+:root[data-theme="dark"] .ev-fix .ev-label,
+:root[data-theme="dark"] .ins-meta.warn,
+:root[data-theme="dark"] .fcp-notes.is-warn,
+:root[data-theme="dark"] .fcp-chip--rec { color: #fcd34d; }
+:root[data-theme="dark"] .ev-ok .ev-label { color: #6ee7b7; }
+:root[data-theme="dark"] .instant-tip { background: #e2e8f0; color: #0f172a; }
+/* Navy "GMR" letters vanish on the dark sidebar: a light chip keeps the logo as-is. */
+:root[data-theme="dark"] .chat-brand-logo,
+:root[data-theme="dark"] .chat-rail-logo-img { background: #f1f5f9; border-radius: 6px; padding: 2px 4px; }
+:root[data-theme="dark"] .chat-profile-menu,
+:root[data-theme="dark"] .chat-row-menu,
+:root[data-theme="dark"] .export-menu-list,
+:root[data-theme="dark"] .chat-rail-flyout,
+:root[data-theme="dark"] .chat-search-dialog { box-shadow: var(--menu-shadow); }
+:root[data-theme="dark"] .chat-search-overlay,
+:root[data-theme="dark"] .chart-modal-overlay,
+:root[data-theme="dark"] .confirm-overlay,
+:root[data-theme="dark"] .ins-overlay,
+:root[data-theme="dark"] .ds-overlay { background: rgba(0, 0, 0, 0.55); }
+:root[data-theme="dark"] .chat-app-layout {
+  background: radial-gradient(1100px 550px at 10% -10%, rgba(59, 130, 246, 0.1), transparent),
+    radial-gradient(950px 520px at 100% 0%, rgba(245, 163, 0, 0.05), transparent),
+    var(--page-bg);
+}
+:root[data-theme="dark"] .chat-messages,
+:root[data-theme="dark"] .chart-modal-body { scrollbar-color: rgba(148, 163, 184, 0.3) transparent; }
+
+/* ApexCharts: options are built with the light dashboard tokens (charts/dataviz.ts);
+   CSS beats SVG presentation attributes, so neutral ink/grid flip here. Series
+   colours and white labels inside bars are left alone. */
+:root[data-theme="dark"] .apexcharts-xaxis-label,
+:root[data-theme="dark"] .apexcharts-yaxis-label,
+:root[data-theme="dark"] .apexcharts-xaxis-title-text,
+:root[data-theme="dark"] .apexcharts-yaxis-title-text,
+:root[data-theme="dark"] .apexcharts-datalabel-label,
+:root[data-theme="dark"] .apexcharts-datalabels-group text { fill: var(--text-muted); }
+:root[data-theme="dark"] .apexcharts-datalabel-value { fill: var(--text-main); }
+:root[data-theme="dark"] .apexcharts-legend-text { color: var(--text-secondary) !important; }
+:root[data-theme="dark"] .apexcharts-gridline,
+:root[data-theme="dark"] .apexcharts-grid-borders line,
+:root[data-theme="dark"] .apexcharts-xaxis line,
+:root[data-theme="dark"] .apexcharts-yaxis line { stroke: var(--border); }
+:root[data-theme="dark"] .apexcharts-pie-area,
+:root[data-theme="dark"] .apexcharts-bar-area[stroke="#FFFFFF"] { stroke: var(--card-bg); }
+:root[data-theme="dark"] .apexcharts-radialbar-track path { stroke: var(--border); }
+:root[data-theme="dark"] .apexcharts-tooltip.apexcharts-theme-light {
+  background: var(--card-bg) !important;
+  color: var(--text-main);
+  border-color: var(--border-strong) !important;
+  box-shadow: var(--menu-shadow) !important;
+}
+:root[data-theme="dark"] .apexcharts-tooltip.apexcharts-theme-light .apexcharts-tooltip-title {
+  background: var(--surface-3) !important;
+  border-bottom-color: var(--border) !important;
+}
+:root[data-theme="dark"] .apexcharts-xaxistooltip,
+:root[data-theme="dark"] .apexcharts-yaxistooltip { background: var(--surface-3); color: var(--text-main); border-color: var(--border-strong); }
+:root[data-theme="dark"] .apexcharts-menu { background: var(--card-bg); border-color: var(--border); color: var(--text-main); }
+:root[data-theme="dark"] .apexcharts-menu-item:hover { background: var(--active-bg); }

@@ -57,7 +57,7 @@
   max-width: 360px;
   padding: var(--space-3) var(--space-4);
   border-radius: var(--radius-md);
-  background: #fff;
+  background: var(--card-bg);
   color: var(--fcp-tone);
 }
 .fcp-verdict svg { flex: none; }

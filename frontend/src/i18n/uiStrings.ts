@@ -165,6 +165,10 @@ const en = {
   // profile menu + archived chats
   profile: "Profile",
   archivedChatsTitle: "Archived chats",
+  theme: "Theme",
+  themeSystem: "System",
+  themeLight: "Light",
+  themeDark: "Dark",
   archivedChatsHint: "Archived chats are deleted automatically {days} days after archiving unless you unarchive them.",
   noArchived: "You have no archived chats.",
   archivedOn: "Archived {date}",
@@ -248,6 +252,7 @@ const hinglish: Strings = {
 };
 
 const hi: Strings = {
+  theme: "थीम", themeSystem: "सिस्टम", themeLight: "लाइट", themeDark: "डार्क",
   pin: "पिन करें", unpin: "पिन हटाएँ", pinned: "पिन किया गया", pinnedChats: "पिन की गई चैट", rename: "नाम बदलें",
   moreActions: "और विकल्प", moveTo: "फ़ोल्डर में ले जाएँ", removeFromFolder: "फ़ोल्डर से हटाएँ", folders: "फ़ोल्डर", noFolders: "कोई फ़ोल्डर नहीं",
   newFolder: "नया फ़ोल्डर", folderName: "फ़ोल्डर का नाम", folderEmpty: "अभी कोई चैट नहीं", renameFolder: "फ़ोल्डर का नाम बदलें",

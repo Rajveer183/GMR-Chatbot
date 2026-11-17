@@ -1,7 +1,14 @@
 import React, { useEffect, useMemo, useRef, useState } from "react";
-import { Archive, ArchiveRestore, Trash2, User, X } from "lucide-react";
+import { Archive, ArchiveRestore, Check, ChevronRight, SunMoon, Trash2, User, X } from "lucide-react";
 import type { SessionSummary } from "../api/client";
 import type { UIKey } from "../i18n/uiStrings";
+import { readThemePref, setThemePref, type ThemePref } from "../utils/theme";
+
+const THEME_OPTIONS: { value: ThemePref; label: UIKey }[] = [
+  { value: "system", label: "themeSystem" },
+  { value: "light", label: "themeLight" },
+  { value: "dark", label: "themeDark" },
+];
 
 type T = (key: UIKey, vars?: Record<string, string | number>) => string;
 
@@ -17,10 +24,15 @@ interface ProfileMenuProps {
 
 export const ProfileMenu: React.FC<ProfileMenuProps> = ({ archivedCount, t, onOpenArchived }) => {
   const [open, setOpen] = useState(false);
+  const [themeOpen, setThemeOpen] = useState(false);
+  const [theme, setTheme] = useState<ThemePref>(readThemePref);
   const ref = useRef<HTMLDivElement>(null);
 
   useEffect(() => {
-    if (!open) return;
+    if (!open) {
+      setThemeOpen(false);
+      return;
+    }
     const onDown = (e: MouseEvent) => {
       if (ref.current && !ref.current.contains(e.target as Node)) setOpen(false);
     };
@@ -40,6 +52,7 @@ export const ProfileMenu: React.FC<ProfileMenuProps> = ({ archivedCount, t, onOp
           <button
             type="button"
             role="menuitem"
+            onMouseEnter={() => setThemeOpen(false)}
             onClick={() => {
               setOpen(false);
               onOpenArchived();
@@ -48,6 +61,39 @@ export const ProfileMenu: React.FC<ProfileMenuProps> = ({ archivedCount, t, onOp
             <Archive size={14} /> {t("archivedChatsTitle")}
             {archivedCount ? <span className="chat-profile-count">{archivedCount}</span> : null}
           </button>
+          <div className="chat-profile-sub" onMouseEnter={() => setThemeOpen(true)}>
+            <button
+              type="button"
+              role="menuitem"
+              aria-haspopup="menu"
+              aria-expanded={themeOpen}
+              className={themeOpen ? "is-active" : undefined}
+              onClick={() => setThemeOpen((v) => !v)}
+            >
+              <SunMoon size={14} /> {t("theme")}
+              <ChevronRight size={14} className="chat-profile-chevron" />
+            </button>
+            {themeOpen ? (
+              <div className="chat-profile-submenu" role="menu">
+                {THEME_OPTIONS.map((o) => (
+                  <button
+                    key={o.value}
+                    type="button"
+                    role="menuitemradio"
+                    aria-checked={theme === o.value}
+                    onClick={() => {
+                      setTheme(o.value);
+                      setThemePref(o.value);
+                      setOpen(false);
+                    }}
+                  >
+                    {t(o.label)}
+                    {theme === o.value ? <Check size={14} className="chat-profile-check" /> : null}
+                  </button>
+                ))}
+              </div>
+            ) : null}
+          </div>
         </div>
       ) : null}
       <button
