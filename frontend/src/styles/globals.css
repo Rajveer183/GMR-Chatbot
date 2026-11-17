@@ -2862,23 +2862,135 @@ button {
   transition: width 0.18s ease;
 }
 
-.chat-app-layout.sidebar-collapsed .chat-sidebar > :not(.chat-sidebar-top):not(.chat-sidebar-rail-btn) {
+.chat-app-layout.sidebar-collapsed .chat-new-btn,
+.chat-app-layout.sidebar-collapsed .chat-history {
   display: none;
 }
 
-.chat-app-layout.sidebar-collapsed .chat-sidebar-top {
-  justify-content: center;
-  padding-left: 0;
-  padding-right: 0;
+/* Collapsed rail (ChatGPT-style): GMR logo, new chat, search, recents; profile avatar at the bottom. */
+.chat-sidebar-rail {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 6px;
+  padding: var(--space-3) 0 var(--space-2);
+  min-height: 0;
 }
 
-.chat-app-layout.sidebar-collapsed .chat-brand-logo,
-.chat-app-layout.sidebar-collapsed .chat-sidebar-search-btn {
+.chat-rail-logo {
+  margin-bottom: 10px;
+}
+
+.chat-rail-logo-img {
+  display: block;
+  width: 34px;
+  height: auto;
+  object-fit: contain;
+}
+
+.chat-rail-logo-toggle {
   display: none;
+}
+
+.chat-rail-logo:hover .chat-rail-logo-img,
+.chat-rail-logo:focus-visible .chat-rail-logo-img {
+  display: none;
+}
+
+.chat-rail-logo:hover .chat-rail-logo-toggle,
+.chat-rail-logo:focus-visible .chat-rail-logo-toggle {
+  display: block;
 }
 
 .chat-sidebar-rail-btn {
-  margin: var(--space-1) auto 0;
+  margin: 0;
+}
+
+.chat-rail-recents {
+  position: relative;
+}
+
+.chat-rail-flyout {
+  position: absolute;
+  top: -6px;
+  left: calc(100% + 8px);
+  width: 300px;
+  max-height: min(520px, 70vh);
+  display: flex;
+  flex-direction: column;
+  background: var(--card-bg, #fff);
+  border: 1px solid var(--border);
+  border-radius: 16px;
+  box-shadow: 0 12px 36px rgba(15, 23, 42, 0.16);
+  padding: 8px 6px;
+  z-index: 1000;
+}
+
+.chat-rail-flyout-head {
+  padding: 8px 12px 6px;
+  font-size: 13px;
+  color: var(--text-muted);
+}
+
+.chat-rail-flyout-list {
+  overflow-y: auto;
+  min-height: 0;
+}
+
+.chat-rail-flyout-item {
+  display: block;
+  width: 100%;
+  border: none;
+  background: transparent;
+  text-align: left;
+  padding: 9px 12px;
+  border-radius: 10px;
+  font-size: 14px;
+  color: var(--text-main);
+  cursor: pointer;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.chat-rail-flyout-item:hover,
+.chat-rail-flyout-item:focus-visible {
+  background: var(--active-bg, rgba(15, 23, 42, 0.06));
+  outline: none;
+}
+
+.chat-rail-flyout-item.active {
+  background: var(--active-bg, rgba(15, 23, 42, 0.06));
+  font-weight: 600;
+}
+
+.chat-rail-flyout-empty {
+  padding: 8px 12px;
+  color: var(--text-muted);
+  font-size: 13px;
+}
+
+/* Profile in the rail: avatar only, menu opens to the right of the rail. */
+.chat-app-layout.sidebar-collapsed .chat-profile {
+  padding: var(--space-2) 0;
+  display: flex;
+  justify-content: center;
+}
+
+.chat-app-layout.sidebar-collapsed .chat-profile-btn {
+  width: auto;
+  padding: 4px;
+}
+
+.chat-app-layout.sidebar-collapsed .chat-profile-name {
+  display: none;
+}
+
+.chat-app-layout.sidebar-collapsed .chat-profile-menu {
+  left: 8px;
+  right: auto;
+  width: 220px;
 }
 
 /* Drag handle on the expanded sidebar's right edge (width set inline from AIWorkspace). */

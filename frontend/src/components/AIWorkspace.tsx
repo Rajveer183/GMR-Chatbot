@@ -11,6 +11,7 @@ import { LoadingStatus } from "./LoadingStatus";
 import { TypingIndicator } from "./TypingIndicator";
 import { ConfirmDialog } from "./ConfirmDialog";
 import { ChatHistory } from "./ChatHistory";
+import { RailRecents } from "./RailRecents";
 import { ChatSearchDialog, recordOpened } from "./ChatSearchDialog";
 import { ArchivedChatsDialog, ProfileMenu } from "./ProfileMenu";
 import { EmptyState } from "./EmptyState";
@@ -946,6 +947,42 @@ export const AIWorkspace: React.FC<AIWorkspaceProps> = ({ filters }) => {
             onKeyDown={onSidebarResizeKey}
           />
         )}
+        {sidebarCollapsed ? (
+          <nav className="chat-sidebar-rail" aria-label={t("showSidebar")}>
+            {/* GMR logo; on hover it turns into the sidebar icon, click expands (like ChatGPT). */}
+            <button
+              className="chat-sidebar-icon chat-rail-logo"
+              type="button"
+              onClick={toggleSidebar}
+              aria-expanded={false}
+              aria-label={t("showSidebar")}
+              title={t("showSidebar")}
+            >
+              <img className="chat-rail-logo-img" src={gmrLogo} alt="GMR" />
+              <PanelLeft className="chat-rail-logo-toggle" size={18} />
+            </button>
+            <button className="chat-sidebar-icon chat-sidebar-rail-btn" onClick={createNewSession} type="button"
+                    title={t("newChat")} aria-label={t("newChat")}>
+              <SquarePen size={18} />
+            </button>
+            <button
+              className="chat-sidebar-icon chat-sidebar-rail-btn"
+              type="button"
+              onClick={() => setHistorySearchOpen(true)}
+              aria-haspopup="dialog"
+              aria-label={t("searchHistory")}
+              title={`${t("searchHistory")} (Ctrl+K)`}
+            >
+              <Search size={18} />
+            </button>
+            <RailRecents
+              sessions={sessions}
+              activeId={activeSession?.session_id ?? null}
+              t={t}
+              onOpen={(id) => openSession(id, true)}
+            />
+          </nav>
+        ) : (
         <div className="chat-sidebar-top">
           <img className="chat-brand-logo" src={gmrLogo} alt="GMR" />
           <button
@@ -969,12 +1006,7 @@ export const AIWorkspace: React.FC<AIWorkspaceProps> = ({ filters }) => {
             <PanelLeft size={18} />
           </button>
         </div>
-        {sidebarCollapsed ? (
-          <button className="chat-sidebar-icon chat-sidebar-rail-btn" onClick={createNewSession} type="button"
-                  title={t("newChat")} aria-label={t("newChat")}>
-            <SquarePen size={18} />
-          </button>
-        ) : null}
+        )}
 
         <button className="chat-new-btn" onClick={createNewSession} type="button">
           <SquarePen size={17} /> {t("newChat")}
