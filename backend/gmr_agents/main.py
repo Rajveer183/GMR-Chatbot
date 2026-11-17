@@ -60,7 +60,7 @@ from pydantic import BaseModel
 from shared import config, llm_gateway, redis_client
 from shared.logging_config import append_jsonl, configure_logging, new_trace_id
 from shared.session_store import SessionStore
-from gmr_agents.ops import answer_cache, investigations, prewarm
+from gmr_agents.ops import answer_cache, http_middleware, investigations, prewarm
 from gmr_agents.presentation import restyle
 from gmr_agents.presentation import report
 from gmr_agents.presentation import feeder_compare
@@ -342,8 +342,16 @@ async def lifespan(_: FastAPI):
 app = FastAPI(title="GMR Agentic Router (MDM/WFM)", version="0.1.0", lifespan=lifespan)
 app.add_middleware(
     CORSMiddleware, allow_origins=["*"], allow_credentials=True, allow_methods=["*"], allow_headers=["*"],
-    expose_headers=["Content-Disposition", "X-Row-Count", "X-Truncated"],
+    expose_headers=["Content-Disposition", "X-Row-Count", "X-Truncated", "X-Request-ID", "traceparent",
+                    "Server-Timing"],
 )
+http_middleware.install(app)
+
+
+@app.get("/api/metrics/http")
+def http_metrics() -> dict:
+    """Per-route HTTP timings (p50 / p95 / max) from the request middleware -- no LLM, no DB."""
+    return http_middleware.http_timing_summary()
 
 
 @app.get("/api/cache/status")

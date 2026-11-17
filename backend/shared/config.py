@@ -159,6 +159,11 @@ SLO_MAX_REFUSAL_RATE = _float("SLO_MAX_REFUSAL_RATE")
 SLO_MAX_BUSY_RATE = _float("SLO_MAX_BUSY_RATE")
 SLO_MAX_REPAIR_RATE = _float("SLO_MAX_REPAIR_RATE")
 SLO_MAX_TOKENS_PER_QUESTION = _float("SLO_MAX_TOKENS_PER_QUESTION")
+# --- HTTP layer (gmr_agents/ops/http_middleware.py): headers + timing + gzip, no effect on answers ---
+HTTP_GZIP_ENABLED = _flag("HTTP_GZIP_ENABLED")          # gzip JSON bodies when the client accepts it (never the stream)
+HTTP_GZIP_MIN_BYTES = _int("HTTP_GZIP_MIN_BYTES")       # smaller bodies are sent as they are
+HTTP_SLOW_REQUEST_MS = _int("HTTP_SLOW_REQUEST_MS")     # slower requests go to outputs/logs/slow_requests.jsonl (0 = off)
+HTTP_TIMING_WINDOW = _int("HTTP_TIMING_WINDOW")         # requests kept per route for /api/metrics/http
 QUESTION_MAX_DB_QUERIES = _int("QUESTION_MAX_DB_QUERIES")       # per-question cap on database queries (0 = off)
 AGENT_SQL_TIMEOUT_MS = _int("AGENT_SQL_TIMEOUT_MS")            # per agent SQL statement (Postgres)
 AGENT_ATHENA_TIMEOUT_S = float(os.environ.get("AGENT_ATHENA_TIMEOUT_S") or 120)  # agent Athena query: cancel after this (no logged query ever needed more: max 106 s of 11,428, 11 Nov)
