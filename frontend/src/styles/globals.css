@@ -4132,3 +4132,30 @@ button {
   opacity: .7;
 }
 .export-notice-close:hover { opacity: 1; }
+
+/* App-wide instant tooltip bubble (utils/instantTooltips.ts) -- replaces the
+   browser's ~1s-delayed native title tooltip everywhere in the UI. */
+.instant-tip {
+  position: fixed;
+  left: 0;
+  top: 0;
+  max-width: 320px;
+  background: #111827;
+  color: #fff;
+  font-size: 12px;
+  font-weight: 500;
+  line-height: 1.35;
+  padding: 5px 9px;
+  border-radius: 6px;
+  white-space: pre-line;
+  overflow-wrap: anywhere;
+  pointer-events: none;
+  z-index: 10000;
+  visibility: hidden;
+  opacity: 0;
+}
+
+.instant-tip.show {
+  visibility: visible;
+  opacity: 1;
+}

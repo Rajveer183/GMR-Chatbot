@@ -73,6 +73,11 @@ function buildClone(title: string, parts: SnapshotPart[], withTips = false): HTM
       root.appendChild(q);
     }
     const clone = part.node.cloneNode(true) as HTMLElement;
+    // Instant tooltips (utils/instantTooltips.ts) moved hovered titles aside; put them back.
+    clone.querySelectorAll("[data-tip-title]").forEach((el) => {
+      el.setAttribute("title", el.getAttribute("data-tip-title") ?? "");
+      el.removeAttribute("data-tip-title");
+    });
     stripControls(clone);
     if (!withTips) clone.querySelectorAll("[data-chart-tip]").forEach((el) => el.removeAttribute("data-chart-tip"));
     root.appendChild(clone);

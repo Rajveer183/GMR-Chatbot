@@ -48,7 +48,7 @@ export const RailRecents: React.FC<RailRecentsProps> = ({ t, renderHistory }) =>
         aria-expanded={open}
         aria-pressed={open}
         aria-label={t("recentSessions")}
-        title={t("recentSessions")}
+        data-tip={t("recentSessions")}
         onClick={() => setOpen((v) => !v)}
       >
         <MessageCircle size={18} />

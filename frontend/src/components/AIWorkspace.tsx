@@ -976,12 +976,12 @@ export const AIWorkspace: React.FC<AIWorkspaceProps> = ({ filters }) => {
               onClick={toggleSidebar}
               aria-expanded={false}
               aria-label={t("showSidebar")}
-              title={t("showSidebar")}
+              data-tip={t("showSidebar")}
             >
               <PanelLeft size={18} />
             </button>
             <button className="chat-sidebar-icon chat-sidebar-rail-btn" onClick={createNewSession} type="button"
-                    title={t("newChat")} aria-label={t("newChat")}>
+                    data-tip={t("newChat")} aria-label={t("newChat")}>
               <SquarePen size={18} />
             </button>
             <button
@@ -990,7 +990,7 @@ export const AIWorkspace: React.FC<AIWorkspaceProps> = ({ filters }) => {
               onClick={() => setHistorySearchOpen(true)}
               aria-haspopup="dialog"
               aria-label={t("searchHistory")}
-              title={`${t("searchHistory")} (Ctrl+K)`}
+              data-tip={`${t("searchHistory")} (Ctrl+K)`}
             >
               <Search size={18} />
             </button>
@@ -1005,7 +1005,7 @@ export const AIWorkspace: React.FC<AIWorkspaceProps> = ({ filters }) => {
             onClick={() => setHistorySearchOpen(true)}
             aria-haspopup="dialog"
             aria-label={t("searchHistory")}
-            title={`${t("searchHistory")} (Ctrl+K)`}
+            data-tip-pos="below" data-tip={`${t("searchHistory")} (Ctrl+K)`}
           >
             <Search size={18} />
           </button>
@@ -1015,7 +1015,7 @@ export const AIWorkspace: React.FC<AIWorkspaceProps> = ({ filters }) => {
             onClick={toggleSidebar}
             aria-expanded={!sidebarCollapsed}
             aria-label={t(sidebarCollapsed ? "showSidebar" : "hideSidebar")}
-            title={t(sidebarCollapsed ? "showSidebar" : "hideSidebar")}
+            data-tip-pos="below" data-tip={t(sidebarCollapsed ? "showSidebar" : "hideSidebar")}
           >
             <PanelLeft size={18} />
           </button>
