@@ -1100,6 +1100,29 @@ def _invented_constants(question: str, sql_texts: list[str]) -> list[str]:
     return out + _invented_figures(question, sql_texts)
 
 
+def _backlog_scenario_in_sql(question: str, sql_texts: list[str]) -> list[str]:
+    """A what-if % about a RATE applied to the BACKLOG in SQL. 17 Nov probe: 'if SAT completion rate improves by 10%,
+    how much would the non-SAT backlog reduce' returned backlog * 0.10 = 26,325 as the reduction (twice, despite the
+    planner hint). The rate series and the backlog are returned instead; presentation/stats.py applies the change."""
+    from gmr_agents.presentation import stats as _stats
+    change = _stats.scenario(question)
+    if change is None or not _stats._BACKLOG_ASK_RE.search(question):
+        return []
+    factors = {round(abs(change), 4), round(1 + change, 4), round(1 - abs(change), 4)}
+    for s in sql_texts:
+        for lit in re.findall(r"\*\s*\(?\s*(\d*\.\d+|\d+)\s*\)?", s or ""):
+            try:
+                if round(float(lit), 4) in factors and float(lit) != 1:
+                    return [f"the SQL applies the scenario factor {lit} itself -- a what-if % changes the RATE (installs / "
+                            "SAT completions per day or month), never the backlog. Return the rate as a series (one row per "
+                            "complete day for the last 30 days, or per month for the last 6 months; SAT completions = SAT "
+                            "batches by sat_date from public.milestone_config) and the current backlog as a one-row extra "
+                            "query (column named ..._pending / backlog); code computes the scenario. No factor in SQL."]
+            except ValueError:
+                continue
+    return []
+
+
 def _invented_figures(question: str, sql_texts: list[str]) -> list[str]:
     stated = _stated_numbers(question)
     bad = []
@@ -1452,6 +1475,9 @@ def check(question: str, sql_texts: list[str], columns: set[str] | None = None, 
                                 f"discom column, so filter LOWER(project) IN ({', '.join(repr(p) for p in projects)})")
 
     problems += _invented_constants(question, sql_texts)
+    # The user's own wording too: the resolved question can lose the 'if' ('count after increasing ... by 15%').
+    problems += _backlog_scenario_in_sql(question, sql_texts) or (
+        _backlog_scenario_in_sql(asked, sql_texts) if asked else [])
     problems += _om_problems(question, low, asked)
     problems += _revenue_journey_problems(question, low, sql_texts, asked)
     problems += _mapping_problems(question, sql_texts)

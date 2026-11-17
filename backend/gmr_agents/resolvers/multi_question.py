@@ -84,8 +84,15 @@ def split(message: str) -> tuple[list[str], list[str]]:
     # we finish the remaining meters?' was split (16 Nov) and the second part answered at today's pace.
     if _CONDITIONAL.search(found[0]) or any(_DEPENDENT.search(p) for p in found[1:]):
         return [text], []
+    # 'Is there a correlation between A and B? Does more A cause more B?' / '... by project? Correlation or causation?':
+    # the causation part is about the same figures. 17 Nov probe: split, the second part was answered with no data
+    # ("the definitions do not provide any analysis") or contradicted the first.
+    if any(_CAUSAL_PART.search(p) for p in found[1:]):
+        return [text], []
     return found[:MAX_PARTS], found[MAX_PARTS:]
 
 
 _CONDITIONAL = re.compile(r"^\s*(?:what\s+if|what\s+happens\s+if|if\b|suppose|supposing|assum\w*|in case|agar|maan lo)", re.I)
 _DEPENDENT = re.compile(r"^\s*(?:then\b|in that case|so\b|after that|with that|at that (?:pace|rate))", re.I)
+_CAUSAL_PART = re.compile(r"\bcaus\w*|\bcorrelation\b|\bdriv(?:e|es|ing)\b|\bcoinciden\w*|"
+                          r"\bjust (?:a )?(?:link|association)\b", re.I)

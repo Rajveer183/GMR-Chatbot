@@ -30,6 +30,10 @@ _DATES = re.compile(rf"\d{{4}}-\d{{2}}(?:-\d{{2}})?|\b\d{{1,2}}(?:st|nd|rd|th)?\
                     rf"(?<![\w,])(?:19|20)\d\d(?![\d,])|\b{_MON}[-' ]\d{{2}}\b", re.I)
 
 
+_EPISODE_CTX = re.compile(r"\bnormal\b|\bepisodes?\b|\bspikes?\b|\bsurges?\b|\bdrops?\b|\bstarted\b|\bbegan\b|"
+                          r"\brecover\w*|\bfirst\b|\bsecond\b|\bthird\b", re.I)
+
+
 def _mask_dates(text: str) -> str:
     return _DATES.sub(lambda m: re.sub(r"\d", "x", m.group()), text)
 
@@ -93,6 +97,11 @@ def wrong_claims(text: str, df: pd.DataFrame | None, period_col: str | None = No
             continue
         decimals = len(raw.split(".")[1]) if "." in raw else 0
         want_min = bool(_MIN_RE.match(m.group("word")))
+        # An episode's peak is a LOCAL peak ('the second spike peaked on 26 Sep at 21,213 vs normal 1,805'), not the
+        # series maximum. 17 Nov probe: every episode sentence but the largest was cut, leaving one line.
+        if m.group("word").lower().startswith("peak") and _EPISODE_CTX.search(
+                text[max(0, m.start() - 160):m.end() + 60]):
+            continue
         verdicts = []  # (ok, explanation) per place the number appears
         for col in num_cols:
             vals = pd.to_numeric(body[col], errors="coerce")

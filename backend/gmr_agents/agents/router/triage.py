@@ -151,7 +151,13 @@ def _parse_triage(d: dict, state: dict, model: str) -> dict:
     # says -- before 6 Nov the triage prompt called voltage and load out_of_scope. Checked before the
     # mapping words: '% consumers with load violation by feeder' also reads as a mapping question.
     # One meter's raw readings / the meter master (10 Nov): before the cards, which would take 'voltage of meter X'.
-    if kind in {"data", "explain", "out_of_scope"} and (mt := meter_topic(asked)):
+    if kind in {"data", "explain", "out_of_scope"} and _KPI_ANOMALY_RE.search(state["question"]) \
+            and not _MDM_ANOMALY_RE.search(asked):
+        # 'When did KPI anomalies start / peak / return to normal' = the programme's own KPIs over time (17 Nov probe:
+        # routed to the MDM 'total anomalies detected' card, 3 stale months, first month called the start).
+        kind, domain = "data", "wfm"
+        d = {**d, "topics": ["installation", "om_closed_tickets"], "tables": []}
+    elif kind in {"data", "explain", "out_of_scope"} and (mt := meter_topic(asked)):
         kind, domain = ("data" if kind == "out_of_scope" else kind), "mdm"
         d = {**d, "topics": [mt], "tables": meter_tables(asked, mt)}
     elif kind in {"data", "explain", "out_of_scope"} and (pq_topic := technical_topic(asked)) \
@@ -212,6 +218,11 @@ def _parse_triage(d: dict, state: dict, model: str) -> dict:
         triage["tables"] = list(dict.fromkeys([*triage["tables"], *lookup]))[:8]
     return triage
 
+
+_KPI_ANOMALY_RE = re.compile(r"\bkpis?\b[^?]{0,40}\b(?:anomal\w*|abnormal\w*|unusual)|\b(?:anomal\w*|abnormal\w*)[^?]{0,30}"
+                             r"\b(?:in|of|across) (?:the |our |all )?(?:main |key )?kpis?\b", re.I)
+_MDM_ANOMALY_RE = re.compile(r"\btheft|\btotal anomal|\bdetectors?\b|\bmeter data\b|\bhes\b|\bmdm\b|\bvoltage|\bload\b|"
+                             r"\bpower factor|\bpf\b|\boutage|\breverse flow|\bconsumption spike", re.I)
 
 # A 'why' about a difference or a change needs the numbers behind it (kind=data), not a definition. Live 10 Nov:
 # 'Why is the voltage deviation in Kashi higher than in Agra?' and 'Why does the installation curve sag every seven

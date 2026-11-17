@@ -267,6 +267,43 @@ _ADVANCED_HINTS = [
      "WHAT-IF BASE: a scenario about a period ('next month', 'per day') starts from that period's recent RATE (e.g. "
      "the monthly or daily figure over recent complete periods), never from a cumulative all-time total; SAT completions "
      "per month come from SAT batches by sat_date (public.milestone_config)."),
+    # 17 Nov probe: '+15% daily capacity -> pending?' returned the inputs but no outcome; '+10% SAT rate -> non-SAT
+    # backlog' multiplied the BACKLOG by 10%.
+    (re.compile(r"(?=.*\b(?:if|what if|suppose|scenario|would|(?:after|with|by) (?:increasing|raising|improving|boosting|"
+                r"adding|reducing|cutting))\b)(?=.*(?:\bpending|backlog|\bclear|remaining|outstanding|"
+                r"non.?sat|\bleft\b))(?=.*(?:\d\s*%|\bpercent|\bdoubles?\b|\bhalve[sd]?\b|\b(?:add|adding|hire|deploy|remove|lose)"
+                r"\s+\d+|\d+\s+(?:more|extra|additional|fewer)\s+(?:technicians?|installers?)))", re.I | re.S),
+     "BACKLOG WHAT-IF: return the RATE as a series -- the main query one row per complete day for the last 30 days "
+     "(installs: gold_mi_installation_day_agg period_start; closures: closed_date) or per month for the last 6 months "
+     "(SAT completions = SAT batches by sat_date, public.milestone_config joined to the snapshot) -- and the CURRENT "
+     "backlog as a one-row extra query (column name containing 'pending' / 'backlog'). For extra technicians also return "
+     "productivity (installs per technician-day) and technicians per day in that one-row query. Code computes days to "
+     "clear before / after; never multiply the backlog by the % in SQL."),
+    # 17 Nov probe: relationships 'measured' across 3 projects (n = 3) and complaints taken from the open-ticket snapshot.
+    # Two (or more) programme KPIs against each other -- not a root-cause / 'what drove' / MDM question.
+    (re.compile(r"^(?!.*\b(?:root.?causes?|what (?:causes|drove|drives|could explain)|why|feeder loss|power factor|\bpf\b|"
+                r"voltage|mapping|feeders?, dts|graph between|autocorrel)).*(?:(?<!auto)correlat|\brelationship\b|"
+                r"\brelate[sd]? (?:to|with)\b|\bcause (?:more|less|fewer|higher|lower)\b|\bcausation\b|go together|"
+                r"move together|associat|depends? on each other)", re.I | re.S),
+     "KPI RELATIONSHIPS: measure them over TIME -- one row per complete month (at least 12 months, or one row per day "
+     "for the last 90 days), each KPI its own column, the KPI asked about first; never one row per project (3 projects "
+     "are too few to correlate). Monthly sources: installs gold_mi_installation_month_agg (period_start); SAT "
+     "completions = SAT batches by sat_date (public.milestone_config with the snapshot's batch sizes); O&M tickets "
+     "closed = gold_om_closed_tickets_day_agg by date_trunc('month', closed_date) (complete). Complaints RAISED have a "
+     "raised date only while still open (gold_om_open_ticket_detail_snapshot raised_month) -- older months are "
+     "undercounted, so prefer tickets closed for a complete series and name the column accordingly. Billing / "
+     "receivables (revenue_receivables) and the SAT / invoice snapshot have no monthly history: give their current level "
+     "in an extra query, not as a series."),
+    (re.compile(r"\bwhen\b.{0,80}\b(?:start(?:ed|s)?|beg[ai]n|peak(?:ed|s)?|recover(?:ed|s)?|return(?:ed|s)?|"
+                r"worst)\b|(?:back|return(?:ed)?) to normal|\bepisodes?\b", re.I),
+     "EPISODE TIMELINE (start / peak / back to normal): return the raw series -- one row per complete day for the last "
+     "120 days (or one row per month over all history when asked month-wise), today excluded, each measure its own "
+     "column, no Total row, no rolling averages or milestone rows (code finds the episodes against a weekday-aware "
+     "normal range). 'KPI anomalies' with no KPI named = the main WFM daily KPIs side by side on one date spine: meters "
+     "installed (gold_mi_installation_day_agg, has_meter_serial AND progress_category IS NOT NULL AND NOT is_replacement) "
+     "and O&M tickets closed (gold_om_closed_tickets_day_agg) -- not the MDM 'total anomalies detected' card. Open "
+     "complaints over time = gmr_wfm_silver.unified_active_complaints COUNT(*) by CAST(complaint_created_date AS date) "
+     "(Athena; tickets still open, by raised day) or gold_om_open_ticket_detail_snapshot by raised_month -- never refuse."),
 ]
 
 

@@ -44,6 +44,11 @@ _ASK = {
            r"bayes|ensemble",
     "pca": r"\bpca\b|principal component|dimension(?:ality)? reduc|fewer dimensions|few key dimensions|components? explain",
     "pareto": r"pareto|80/20|20 ?% of (?:the )?\w+ (?:cause|hold|make|account)",
+    # 'when did the anomaly start, peak and return to normal' (17 Nov probe: the first / last date of the data was
+    # called the start / recovery, and Diwali + a Sunday were 'the worst day').
+    "episode": r"\bwhen\b.{0,80}\b(?:start(?:ed|s)?|beg[ai]n|peak(?:ed|s)?|recover(?:ed|s)?|return(?:ed|s)?|end(?:ed|s)?|"
+               r"worst|settled?)\b|(?:back|return(?:ed)?|returning|came back) to normal|\bpeak(?:ed)?\b.{0,60}\b(?:normal|"
+               r"recover)|how long did .{0,50}\blast|\bepisodes?\b|\bspike .{0,30}\b(?:start|peak|recover)",
     "tiers": r"\bcluster(?:ing| (?:zones|circles|divisions|feeders|dts|technicians|meters|consumers)| by)\b|\bclusters\b|"
              r"segment|\btiers?\b|high, medium and low|group .{0,30}(?:high|low) performers",
 }
@@ -69,10 +74,13 @@ _NOT_RUN = [(re.compile(p, re.I), name) for p, name in _NOT_RUN]
 # absent', 'if SAT pace doubles'). 11 Nov pilot: the SQL hard-coded '(3.0 - 2.7) * tech-days' for a 20% rise and
 # answered 9,933 extra meters a month instead of ~20,000.
 _DOWN = r"drop|drops|dropped|fall|falls|fell|decrease[sd]?|reduce[sd]?|cut|cuts|down|absent|fewer|lower|less|slower|shrinks?|stops?"
-_UP = r"rise|rises|rose|raise[sd]?|increase[sd]?|grow|grows|improve[sd]?|boost(?:ed|s)?|up|more|higher|faster|add|adds|added"
-_SCEN_RE = re.compile(rf"\b(?P<verb>{_DOWN}|{_UP})\b[^%.?]{{0,30}}?(?P<p>\d+(?:\.\d+)?)\s*%"
+_UP = (r"rise|rises|rose|raise[sd]?|raising|increase[sd]?|increasing|grow|grows|improve[sd]?|improving|"
+       r"boost(?:ed|s|ing)?|up|more|higher|faster|add|adds|added|adding")
+_SCEN_RE = re.compile(rf"\b(?P<verb>{_DOWN}|{_UP})\b[^%.?]{{0,45}}?(?P<p>\d+(?:\.\d+)?)\s*%"
                       rf"|(?P<p2>\d+(?:\.\d+)?)\s*%[^.?]{{0,40}}?\b(?P<verb2>{_DOWN}|{_UP})\b", re.I)
-_WHATIF_RE = re.compile(r"\bif\b|what.?if|suppose|assum|scenario|stress|simulat|sensitiv|would\b", re.I)
+# 'after increasing capacity by 15%': the triage rewrite of 'if capacity increases by 15%' (17 Nov smoke test).
+_WHATIF_RE = re.compile(r"\bif\b|what.?if|suppose|assum|scenario|stress|simulat|sensitiv|would\b|"
+                        r"\b(?:after|with|by) (?:increasing|raising|improving|boosting|adding|reducing|cutting)\b", re.I)
 
 
 def scenario(question: str) -> float | None:
@@ -219,6 +227,270 @@ def _scenario_lines(df: pd.DataFrame, change: float) -> list[str]:
             + "; ".join(f"{c} {_fmt(float(row[c]))} -> {_fmt(float(row[c]) * (1 + change))} "
                         f"({sign}{_fmt(float(row[c]) * change)})" for c in nums)
             + ". Use the line(s) that match what was asked; convert per-day to per-month only by the days in RESULT."]
+
+
+_BACKLOG_ASK_RE = re.compile(r"\bpending|backlog|\bclear(?:ed|ing)?\b|\bleft\b|remaining|outstanding|non.?sat|"
+                             r"\bwork ?off\b|\bdays? to (?:finish|complete|clear)", re.I)
+_BACKLOG_COL_RE = re.compile(r"pending|backlog|remaining|outstanding|non_?sat|balance|\bleft\b|_left|stock", re.I)
+_RATE_COL_RE = re.compile(r"per_?day|daily|_rate$|per_day|/ ?day", re.I)
+_RATE_WINDOW = {"day": 30, "week": 8, "month": 6}
+_PER_DAY = {"day": 1.0, "week": 7.0, "month": 30.44}
+
+
+def _single_figures(frames: list) -> dict:
+    """Name -> value of every numeric column of the one-row frames (the 'current level' extra queries)."""
+    out = {}
+    for f in frames:
+        if isinstance(f, pd.DataFrame) and len(f) == 1:
+            for c in f.columns:
+                v = pd.to_numeric(pd.Series([f.iloc[0][c]]), errors="coerce").iloc[0]
+                if pd.notna(v):
+                    out.setdefault(str(c), float(v))
+    return out
+
+
+def _clearance_lines(question: str, frames: list, change: float | None, added: int | None,
+                     today: pd.Timestamp) -> list[str]:
+    """What-if on a backlog: the scenario changes the RATE (installs / SAT per day), never the backlog itself.
+    Days to clear before vs after, and what is left after the horizon. 17 Nov probe: '+15% daily capacity' answered
+    'would be reduced' with no figure; '+10% SAT rate' took 10% OF THE BACKLOG (26,325) as the reduction."""
+    if not _BACKLOG_ASK_RE.search(str(question)):
+        return []
+    singles = _single_figures(frames)
+    backlog = next(((k, v) for k, v in singles.items() if _BACKLOG_COL_RE.search(k) and v > 0), None)
+    if backlog is None:
+        return []
+    rate, how, prod = None, "", None
+    for f in frames:
+        if not isinstance(f, pd.DataFrame) or len(f) < 1:
+            continue
+        rows, _label, dates, _nums = _split(f)
+        if dates is None or dates.isna().any():
+            continue
+        # Batch-wise measures (SAT) have rows only for months with a batch: 1 or 2 rows must still give a rate.
+        cols = [c for c in rows.columns if c != _label and pd.api.types.is_numeric_dtype(rows[c])
+                and not _BACKLOG_COL_RE.search(str(c)) and not re.search(r"(^|_)(id|rank|year)$", str(c), re.I)]
+        if not cols:
+            continue
+        monthly = bool((dates.dt.day == 1).all()) and (dates.nunique() < 2 or pd.Series(sorted(dates.unique())).diff().min() >= pd.Timedelta(days=27))
+        if dates.nunique() < 3 and not monthly:
+            continue
+        rows, dates, _ = _drop_partial(rows, dates, today) if len(rows) >= 4 else (rows, dates, None)
+        y = pd.to_numeric(rows[cols[0]], errors="coerce").groupby(dates.to_numpy()).sum().sort_index()
+        note = ""
+        if monthly:
+            # Months with no row are months with nothing done (no SAT batch): count them as 0 over the last 6
+            # complete months, the window the planner is asked for.
+            last = (today.replace(day=1) - pd.DateOffset(months=1)).normalize()
+            y = y[y.index <= last]
+            idx = pd.date_range(min([last - pd.DateOffset(months=_RATE_WINDOW["month"] - 1), *y.index]), last, freq="MS")
+            missing = len(idx.difference(y.index))
+            y = y.reindex(idx, fill_value=0.0)
+            unit = "month"
+            if missing:
+                note = f" (the {missing} month(s) with no row counted as 0 -- the work is done in batches)"
+        else:
+            step = pd.Series(y.index).diff().median()
+            unit = "day" if step <= pd.Timedelta(days=1) else "week" if step <= pd.Timedelta(days=8) else "month"
+        if not len(y):
+            continue
+        w = min(len(y), _RATE_WINDOW[unit])
+        rate = float(y.iloc[-w:].mean()) / _PER_DAY[unit]
+        how = (f"{cols[0]} averaged {_fmt(float(y.iloc[-w:].mean()))} per {unit} over the last {w} complete {unit}s{note}"
+               + (f" = {_fmt(rate)} per day" if unit != "day" else ""))
+        break
+    low = {k.lower(): v for k, v in singles.items()}
+    prod = next((v for k, v in low.items() if "productivity" in k or "per_tech" in k), None)
+    techs = next((v for k, v in low.items() if re.search(r"technicians?(?:_per_day)?$|tech_per_day|technicians_per_day", k)), None)
+    if rate is None:
+        r1 = next((v for k, v in singles.items() if _RATE_COL_RE.search(k) and not _BACKLOG_COL_RE.search(k)), None)
+        if r1 is not None:
+            rate, how = r1, f"current rate {_fmt(r1)} per day"
+        elif prod is not None and techs is not None:
+            rate, how = prod * techs, (f"{_fmt(techs)} technicians a day x {_fmt(prod)} per technician-day = "
+                                       f"{_fmt(prod * techs)} per day")
+    if rate is None or rate < 0:
+        return []
+    if change is not None:
+        new_rate, what = rate * (1 + change), f"rate {'+' if change >= 0 else ''}{_fmt(change * 100)}%"
+    elif added is not None and prod is not None:
+        new_rate, what = rate + added * prod, f"{'+' if added > 0 else ''}{added} technicians x {_fmt(prod)} per technician-day"
+    else:
+        return []
+    name, b = backlog
+    hz = horizon(question, "day") or 30
+    days = lambda r: f"{_fmt(b / r)} days" if r > 0 else "never (no progress at this rate)"
+    now_left, new_left = max(0.0, b - rate * hz), max(0.0, b - new_rate * hz)
+    out = [f"- BACKLOG WHAT-IF (computed by code; the change applies to the RATE, never to the backlog itself): "
+           f"{name} now {_fmt(b)}; {how}. Scenario {what} -> {_fmt(new_rate)} per day "
+           f"({'+' if new_rate >= rate else ''}{_fmt(new_rate - rate)} per day).",
+           f"- Time to clear {_fmt(b)}: {days(rate)} at the current rate vs {days(new_rate)} with the change"
+           + (f" ({_fmt(b / rate - b / new_rate)} days sooner)" if rate > 0 and new_rate > rate else
+              f" ({_fmt(b / new_rate - b / rate)} days later)" if new_rate > 0 and rate > new_rate else "") + ".",
+           f"- Next {hz} days: {_fmt(min(b, rate * hz))} cleared at the current rate (left {_fmt(now_left)}) vs "
+           f"{_fmt(min(b, new_rate * hz))} with the change (left {_fmt(new_left)}) -- the change alone clears "
+           f"{_fmt(min(b, new_rate * hz) - min(b, rate * hz))} more.",
+           "- Assumes no new work joins the backlog and the rate holds; the backlog is today's snapshot, so new arrivals "
+           "make the real clearing time longer -- say so."]
+    if rate == 0:
+        out.append("- The recent rate is 0, so a % change of it is still 0: say that the rate itself must restart first.")
+    return out
+
+
+# A relationship between measures -- not 'because', 'what causes X' / 'root causes' (root-cause questions keep their
+# own format) or a 'relationship graph' of the network.
+_EXPLICIT_CORR_RE = re.compile(r"(?<!auto)correlat|\brelationships?\b(?! graph)|\brelate[sd]? (?:to|with)\b|\bcausation\b|"
+                               r"\bcausal|\bcause[sd]? (?:more|less|fewer|higher|lower)\b|associat|go together|"
+                               r"move together|depend(?:s|ent)? on|granger|cointegrat", re.I)
+
+
+def _lag_lines(rows: pd.DataFrame, nums: list[str], unit: str) -> list[str]:
+    """Correlation over time done properly: same-period r, the best lead/lag, and change-on-change r. Two programme
+    KPIs that both grow over the months correlate strongly whether or not one affects the other; the period-to-
+    period changes show whether they move together beyond that shared growth (17 Nov probe)."""
+    m = rows[nums[:4]].apply(pd.to_numeric, errors="coerce").dropna()
+    if len(m) < 8:
+        return []
+    out = []
+    y = m.iloc[:, 0]
+    for c in m.columns[1:3]:
+        x = m[c]
+        if x.std() == 0 or y.std() == 0:
+            continue
+        r0 = float(np.corrcoef(x, y)[0, 1])
+        best = (0, r0)
+        for k in (1, 2, 3):
+            if len(m) - k < 6:
+                break
+            for lead, (a, bb) in ((k, (x.iloc[:-k], y.iloc[k:])), (-k, (y.iloc[:-k], x.iloc[k:]))):
+                if a.std() and bb.std():
+                    rk = float(np.corrcoef(a, bb)[0, 1])
+                    if abs(rk) > abs(best[1]) + .05:
+                        best = (lead, rk)
+        dx, dy = x.diff().dropna(), y.diff().dropna()
+        rd = float(np.corrcoef(dx, dy)[0, 1]) if dx.std() and dy.std() else float("nan")
+        pd_ = _corr_p(rd, len(dx)) if np.isfinite(rd) else 1.0
+        lead_txt = ("same period fits best" if best[0] == 0 else
+                    f"best fit when {c} LEADS {y.name} by {best[0]} {unit}(s): r {_fmt(best[1])}" if best[0] > 0 else
+                    f"best fit when {y.name} LEADS {c} by {-best[0]} {unit}(s): r {_fmt(best[1])}")
+        shared = np.isfinite(rd) and abs(r0) >= .4 and abs(rd) < .3
+        out.append(f"- over time ({len(m)} {unit}s) {y.name} vs {c}: same-{unit} r {_fmt(r0)} ({_strength(r0)}); {lead_txt}; "
+                   f"change-on-change r {_fmt(rd)} (p {_fmt(pd_)}, {'significant' if pd_ < .05 else 'not significant'})"
+                   + (" -- the level correlation is mostly SHARED GROWTH of the programme over time, not the two moving "
+                      "together from one period to the next" if shared else "") + ".")
+    return out
+
+
+def _holidays() -> set:
+    try:
+        from gmr_agents.resolvers import festivals as _f
+        days = {pd.Timestamp(d) for v in _f._LUNAR.values() for d in v}
+        days |= {pd.Timestamp(year=y, month=m, day=d) for (m, d) in _f._FIXED.values() for y in range(2024, 2029)}
+        return days
+    except Exception:
+        return set()
+
+
+_DROP_RE = re.compile(r"\b(?:drop|drops|dropped|dip|dips|fall|fell|falls|declin\w*|slump\w*|slowdown|slow(?:ed)? down|"
+                      r"low(?:er)?|decreas\w*|sag\w*)\b", re.I)
+_SPIKE_RE = re.compile(r"\b(?:spike\w*|surge\w*|jump\w*|ris(?:e|es|ing)|rose|increas\w*|high(?:er)?|peak in|burst)\b", re.I)
+
+
+def episode_direction(question: str) -> int:
+    """-1 when the question asks about a drop, +1 for a spike, 0 for either / both."""
+    q = str(question or "")
+    down, up = bool(_DROP_RE.search(q)), bool(_SPIKE_RE.search(q))
+    return -1 if down and not up else 1 if up and not down else 0
+
+
+def _episode_lines(name: str, y: np.ndarray, dates: pd.Series, unit: str, want: int = 0) -> list[str]:
+    """Abnormal episodes in one series: start, peak, end and the first period back inside the normal range.
+
+    Normal = what the series' own recent history predicts: for daily data the median of the same weekday over the
+    previous 4 weeks (so every Sunday is not a 'drop'), else the median of the previous 3 periods. Points found
+    abnormal are replaced by their expected value before they feed later baselines, so a long episode does not
+    become the new normal. Abnormal = beyond 3 robust standard deviations (MAD) of the residuals AND at least 15% /
+    25% (daily) from normal. Festival days are reported apart, not as episodes."""
+    n = len(y)
+    if n < 10 or dates is None:
+        return []
+    hol = _holidays() if unit == "day" else set()
+    d = pd.to_datetime(dates).reset_index(drop=True)
+
+    def expected(clean: list, i: int) -> float | None:
+        if unit == "day":
+            same = [clean[i - k] for k in (7, 14, 21, 28) if i - k >= 0]
+            if len(same) >= 2:
+                return float(np.median(same))
+            return float(np.median(clean[max(0, i - 7):i])) if i >= 3 else None
+        return float(np.median(clean[max(0, i - 3):i])) if i >= 3 else None
+
+    raw = [expected(list(y), i) for i in range(n)]
+    res = np.array([y[i] - e for i, e in enumerate(raw) if e is not None])
+    if len(res) < 6:
+        return []
+    scale = 1.4826 * float(np.median(np.abs(res - np.median(res)))) or float(np.std(res)) or 1.0
+    rel = .25 if unit == "day" else .15
+    clean, flag, exp, holiday_hits = list(map(float, y)), [0] * n, [None] * n, []
+    for i in range(n):
+        e = expected(clean, i)
+        exp[i] = e
+        if e is None:
+            continue
+        dev = y[i] - e
+        # A drop can be at most 100% of normal: when 3 robust std devs exceed normal itself (volatile daily series),
+        # a fall to half of normal still counts -- else a day at ~0 could never be a drop.
+        thr = max(rel * abs(e), 3 * scale if dev > 0 else min(3 * scale, .5 * abs(e)))
+        if abs(dev) > thr:
+            if any(abs((d[i] - h).days) <= 1 for h in hol):
+                holiday_hits.append(i)
+            else:
+                flag[i] = 1 if dev > 0 else -1
+            clean[i] = e
+    lab = lambda i: str(d[i].date()) if unit == "day" else d[i].strftime("%b %Y") if unit == "month" else str(d[i].date())
+    eps, i = [], 0
+    while i < n:
+        if not flag[i]:
+            i += 1
+            continue
+        s, sign, j = i, flag[i], i
+        # one normal period inside a run does not end it
+        while j + 1 < n and (flag[j + 1] == sign or (j + 2 < n and not flag[j + 1] and flag[j + 2] == sign)):
+            j += 1
+        idx = [k for k in range(s, j + 1) if flag[k] == sign]
+        pk = max(idx, key=lambda k: abs(y[k] - exp[k]))
+        eps.append((len(idx) >= 2, abs(y[pk] - exp[pk]), s, pk, j, sign))
+        i = j + 1
+    other = []
+    if want:
+        # 'When did the DROP start': only below-normal episodes count. 17 Nov probe: with no abnormal drop found the
+        # answer picked 15 Aug (Independence Day) as the start and Diwali as the worst day.
+        other = [e for e in eps if e[-1] != want]
+        eps = [e for e in eps if e[-1] == want]
+    band = f"normal = {'the same weekday over the previous 4 weeks' if unit == 'day' else 'the previous 3 ' + unit + 's'}" \
+           f" (median), abnormal = more than {_fmt(3 * scale)} above it or below it by {_fmt(3 * scale)} or half of normal " \
+           f"(whichever is smaller), and always at least {int(rel * 100)}% away"
+    if not eps:
+        side = {-1: "BELOW", 1: "ABOVE"}.get(want, "outside")
+        out = [f"- EPISODES {name}: no {unit} {side} the normal range in {lab(0)}..{lab(n - 1)} ({band})"
+               + (f"; there were {len(other)} episode(s) on the other side, not what was asked" if other else "")
+               + (". Low days were Sundays / festival days, which are normal for this series" if want == -1 else "") + "."]
+    else:
+        multi = sum(1 for e in eps if e[0])
+        out = [f"- EPISODES {name} ({len(eps)} found -- {multi} lasting 2+ {unit}s, {len(eps) - multi} single-{unit} blips; "
+               f"{band}; the {min(3, len(eps))} most important listed (longer ones first, then largest), oldest first):"]
+        top = sorted(eps, key=lambda e: (e[0], e[1]), reverse=True)[:3]
+        for _, _, s, pk, j, sign in sorted(top, key=lambda e: e[2]):
+            back = next((k for k in range(j + 1, n) if not flag[k]), None)
+            out.append(f"  * {'above' if sign > 0 else 'below'} normal: started {lab(s)}, peaked {lab(pk)} at {_fmt(y[pk])} "
+                       f"vs normal {_fmt(exp[pk])} ({'+' if y[pk] >= exp[pk] else ''}{_fmt((y[pk] - exp[pk]) / exp[pk] * 100) if exp[pk] else 'n/a'}%), "
+                       f"last abnormal {lab(j)}, "
+                       + (f"back to normal {lab(back)} ({(j - s + 1)} {unit}(s) long)" if back is not None
+                          else "NOT yet back to normal at the latest data"))
+    if holiday_hits:
+        out.append(f"- {name} festival / holiday days outside the range (expected, not anomalies): "
+                   + ", ".join(f"{lab(k)} {_fmt(y[k])}" for k in holiday_hits[:5]))
+    return out
 
 
 def not_run(question: str) -> list[str]:
@@ -537,6 +809,10 @@ def _cross_stats(rows: pd.DataFrame, label: str | None, nums: list[str], asks: s
         q1, q3 = np.percentile(y, [25, 75])
         out.append(f"- {c} across {len(y)} items: mean {_fmt(mean)}, median {_fmt(np.median(y))}, std dev {_fmt(sd)}, "
                    f"CV {_fmt(sd / mean * 100) if mean else 'n/a'}%, IQR {_fmt(q1)}..{_fmt(q3)}")
+        if "corr" in asks and len(y) < 5 and c == nums[0]:
+            out.append(f"- only {len(y)} items ({', '.join(map(str, names[ok].tolist()))}) -- too few to measure a "
+                       "correlation: never say these measures correlate / associate / track each other on this basis; "
+                       "compare the items side by side and say a period-by-period series is needed to measure it.")
         if asks & {"outlier", "spread"} or not asks & {"corr", "pca"}:
             z = (y - mean) / sd if sd else np.zeros(len(y))
             iqr = q3 - q1
@@ -668,10 +944,13 @@ def analyse(question: str, df: pd.DataFrame | None, today: pd.Timestamp | None =
     today = today or pd.Timestamp.now().normalize()
     lines: list[str] = []
     change = scenario(question)
-    if change is not None and isinstance(df, pd.DataFrame) and len(df):
-        lines += _scenario_lines(df, change)
     added = technicians_added(question)
-    if added is not None and isinstance(df, pd.DataFrame) and len(df):
+    clear = _clearance_lines(question, [df, *(extras or [])], change, added, today) \
+        if (change is not None or added is not None) else []
+    lines += clear
+    if change is not None and isinstance(df, pd.DataFrame) and len(df) and not clear:
+        lines += _scenario_lines(df, change)
+    if added is not None and isinstance(df, pd.DataFrame) and len(df) and not clear:
         lines += _technician_lines(df, added)
     if asks & {"corr", "spread"}:
         lines += _joined_corr(df, extras or [])
@@ -712,15 +991,21 @@ def analyse(question: str, df: pd.DataFrame | None, today: pd.Timestamp | None =
                                             horizon(question, unit))
                         # Projection / simulation / change point for the headline measure only: the
                         # other columns get their summary line (keeps the prompt short).
+                        if "episode" in asks:
+                            # Start / peak / back-to-normal per measure: the summary line + its episodes only.
+                            lines += got[:1] + _episode_lines(c, y.to_numpy(float)[ok], dates[ok].reset_index(drop=True),
+                                                              unit, episode_direction(question))
+                            continue
                         lines += got if i == 0 else got[:1]
                         if i == 0 and "forecast" in asks:
                             lines += _multi_horizon_line(c, y.to_numpy(float)[ok], unit, question)
                 if len(nums) >= 2 and "corr" in asks:
                     lines += [l for l in _cross_stats(rows, None, nums, {"corr"}) if l.startswith("- correlation")
                               or l.startswith("- multiple")]
+                    lines += _lag_lines(rows, nums, unit)
         else:
             lines += _cross_stats(rows, label, nums, asks)
-        if len(lines) >= 14:
+        if len(lines) >= (22 if "episode" in asks else 14):
             break
     head = ("STATS (computed exactly by code from the rows -- quote these figures, never re-estimate them; name the "
             "method in plain words, e.g. 'a straight-line trend', 'correlation across 18 zones'; projections and "
@@ -730,12 +1015,36 @@ def analyse(question: str, df: pd.DataFrame | None, today: pd.Timestamp | None =
     if missing:
         tail.append("NOT RUN: " + "; ".join(missing) + ". Say plainly that this was not run (no such model exists in "
                     "this system) -- never present a figure as its output -- and give the nearest figures that WERE computed.")
+    if clear:
+        tail.append("WHAT-IF ANSWER: lead with the BACKLOG WHAT-IF figures -- days to clear now vs with the change, and "
+                    "what is left after the period -- never only say it 'would be reduced'; the % never applies to the "
+                    "backlog itself.")
+    # Instructions only when their figures exist and the question really asks (replay 17 Nov: 'low power FACTOR'
+    # and 'autoCORRELATION' would otherwise pay ~250 tokens for a causation instruction with nothing to apply it to).
+    if not _EXPLICIT_CORR_RE.search(str(question)):
+        # The 17 Nov additions (lead / lag, too-few-items) only for a real relationship ask; older lines unchanged.
+        lines = [l for l in lines if not re.match(r"- (?:over time \(|only \d+ items \()", l)]
+    corr_lines = any(re.search(r"^- (?:correlation|over time|only \d+ items|multiple regression)", l) for l in lines)
+    if "corr" in asks and corr_lines and _EXPLICIT_CORR_RE.search(str(question)):
+        tail.append("CORRELATION vs CAUSATION: answer in two labelled parts. 'What the data shows (correlation)': only the "
+                    "measured r / lag / change-on-change figures above, or -- with too few items -- a side-by-side "
+                    "comparison and no correlation claim. 'What it does not prove (causation)': correlation can come from "
+                    "both growing with the programme over time (see change-on-change), a third factor (project size, rollout "
+                    "phase, batch timing) or the reverse direction; give a plausible operational mechanism only as a "
+                    "hypothesis, with what would test it. Never state 'drives', 'causes', 'leads to' or 'results in' as a "
+                    "finding -- nor 'does not cause': this data can neither prove nor rule out a cause. Answer the causation part separately -- never repeat the correlation sentence as its answer.")
+    if any(l.startswith("- EPISODES") for l in lines):
+        tail.append("EPISODES: for each episode give when it started, when it peaked (value vs normal), and the date it was "
+                    "back to normal (or 'not yet back to normal'); say what 'normal' means in one short clause. Sundays and "
+                    "festival days are not anomalies. Never call the first or last date of the data, or a plain highest / "
+                    "lowest value, a start / peak / recovery unless an EPISODES line says so; if no episode was found, say "
+                    "the measure stayed within its normal range.")
     if not lines and not tail:
         return ""
     if not lines and asks - {"forecast", "whatif"}:
         tail.append("No statistic could be computed from these rows (too few items or periods) -- say what the numbers "
                     "show directly, without claiming a statistical method.")
-    return "\n".join([head, *lines[:20], *tail]) if lines else "\n".join(tail)
+    return "\n".join([head, *lines[:26], *tail]) if lines else "\n".join(tail)
 
 
 def line_up(df: pd.DataFrame | None, extras: list) -> str:
