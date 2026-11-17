@@ -114,6 +114,7 @@ const en = {
   exportDismiss: "Dismiss",
   hideSidebar: "Hide sidebar",
   showSidebar: "Show sidebar",
+  resizeSidebar: "Drag to resize sidebar (double-click to reset)",
   exportTitle: "Download this whole conversation as shown on screen",
   // response controls
   stopGenerating: "Stop generating",

@@ -102,6 +102,33 @@ function storeSidebarCollapsed(collapsed: boolean) {
   }
 }
 
+// Expanded sidebar width, dragged by the handle on its right edge (like ChatGPT); remembered across reloads.
+const SIDEBAR_WIDTH_KEY = "gmr-chat.sidebarWidth";
+const SIDEBAR_WIDTH_DEFAULT = 260;
+const SIDEBAR_WIDTH_MIN = 200;
+const SIDEBAR_WIDTH_MAX = 480;
+
+function clampSidebarWidth(w: number): number {
+  return Math.round(Math.min(SIDEBAR_WIDTH_MAX, Math.max(SIDEBAR_WIDTH_MIN, w)));
+}
+
+function readSidebarWidth(): number {
+  try {
+    const v = Number(window.localStorage.getItem(SIDEBAR_WIDTH_KEY));
+    return v ? clampSidebarWidth(v) : SIDEBAR_WIDTH_DEFAULT;
+  } catch {
+    return SIDEBAR_WIDTH_DEFAULT;
+  }
+}
+
+function storeSidebarWidth(w: number) {
+  try {
+    window.localStorage.setItem(SIDEBAR_WIDTH_KEY, String(w));
+  } catch {
+    // Non-fatal -- the sidebar just opens at the default width after a reload.
+  }
+}
+
 function scrollToElementStart(element: HTMLElement | null | undefined) {
   element?.scrollIntoView({ behavior: "smooth", block: "start" });
 }
@@ -133,6 +160,55 @@ export const AIWorkspace: React.FC<AIWorkspaceProps> = ({ filters }) => {
       storeSidebarCollapsed(!c);
       return !c;
     });
+  const [sidebarWidth, setSidebarWidth] = useState<number>(readSidebarWidth);
+  const layoutRef = useRef<HTMLDivElement>(null);
+  const setAndStoreSidebarWidth = (w: number) => {
+    const next = clampSidebarWidth(w);
+    setSidebarWidth(next);
+    storeSidebarWidth(next);
+  };
+  // Drag writes the CSS variable straight onto the layout element (once per animation frame) so
+  // the big chat tree is not re-rendered on every pointer move; React state is set once on release.
+  const startSidebarResize = (e: React.PointerEvent<HTMLDivElement>) => {
+    if (e.button !== 0) return;
+    const layout = layoutRef.current;
+    if (!layout) return;
+    e.preventDefault();
+    const startX = e.clientX;
+    const startW = sidebarWidth;
+    let latest = startW;
+    let frame = 0;
+    layout.classList.add("sidebar-resizing");
+    const onMove = (ev: PointerEvent) => {
+      latest = clampSidebarWidth(startW + ev.clientX - startX);
+      if (frame) return;
+      frame = window.requestAnimationFrame(() => {
+        frame = 0;
+        layout.style.setProperty("--chat-sidebar-width", `${latest}px`);
+      });
+    };
+    const onUp = () => {
+      window.removeEventListener("pointermove", onMove);
+      window.removeEventListener("pointerup", onUp);
+      window.removeEventListener("pointercancel", onUp);
+      if (frame) window.cancelAnimationFrame(frame);
+      layout.style.setProperty("--chat-sidebar-width", `${latest}px`);
+      layout.classList.remove("sidebar-resizing");
+      setAndStoreSidebarWidth(latest);
+    };
+    window.addEventListener("pointermove", onMove);
+    window.addEventListener("pointerup", onUp);
+    window.addEventListener("pointercancel", onUp);
+  };
+  const onSidebarResizeKey = (e: React.KeyboardEvent<HTMLDivElement>) => {
+    const step = e.shiftKey ? 40 : 16;
+    if (e.key === "ArrowLeft") setAndStoreSidebarWidth(sidebarWidth - step);
+    else if (e.key === "ArrowRight") setAndStoreSidebarWidth(sidebarWidth + step);
+    else if (e.key === "Home") setAndStoreSidebarWidth(SIDEBAR_WIDTH_MIN);
+    else if (e.key === "End") setAndStoreSidebarWidth(SIDEBAR_WIDTH_MAX);
+    else return;
+    e.preventDefault();
+  };
   const [loading, setLoading] = useState(false);
   const [sessions, setSessions] = useState<SessionSummary[]>([]);
   const [activeSession, setActiveSession] = useState<SessionDetail | null>(null);
@@ -826,8 +902,36 @@ export const AIWorkspace: React.FC<AIWorkspaceProps> = ({ filters }) => {
   );
 
   return (
-    <div className={`chat-app-layout${sidebarCollapsed ? " sidebar-collapsed" : ""}`} lang={langTag(uiLang)}>
+    <div
+      ref={layoutRef}
+      className={`chat-app-layout${sidebarCollapsed ? " sidebar-collapsed" : ""}`}
+      lang={langTag(uiLang)}
+      style={
+        sidebarCollapsed
+          ? undefined
+          : ({
+              "--chat-sidebar-width": `${sidebarWidth}px`,
+              "--chat-content-max": `min(1480px, calc(100vw - ${sidebarWidth}px - 48px))`,
+            } as React.CSSProperties)
+      }
+    >
       <aside className="chat-sidebar">
+        {sidebarCollapsed ? null : (
+          <div
+            className="chat-sidebar-resizer"
+            role="separator"
+            aria-orientation="vertical"
+            aria-label={t("resizeSidebar")}
+            title={t("resizeSidebar")}
+            aria-valuemin={SIDEBAR_WIDTH_MIN}
+            aria-valuemax={SIDEBAR_WIDTH_MAX}
+            aria-valuenow={sidebarWidth}
+            tabIndex={0}
+            onPointerDown={startSidebarResize}
+            onDoubleClick={() => setAndStoreSidebarWidth(SIDEBAR_WIDTH_DEFAULT)}
+            onKeyDown={onSidebarResizeKey}
+          />
+        )}
         <div className="chat-sidebar-top">
           <img className="chat-brand-logo" src={gmrLogo} alt="GMR" />
           <button

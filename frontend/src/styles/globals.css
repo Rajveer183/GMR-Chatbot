@@ -2742,9 +2742,58 @@ button {
   margin: var(--space-1) auto 0;
 }
 
+/* Drag handle on the expanded sidebar's right edge (width set inline from AIWorkspace). */
+.chat-sidebar {
+  position: relative;
+}
+
+.chat-sidebar-resizer {
+  position: absolute;
+  top: 0;
+  right: -4px;
+  width: 8px;
+  height: 100%;
+  cursor: col-resize;
+  z-index: calc(var(--z-composer) + 1);
+  touch-action: none;
+  outline: none;
+}
+
+.chat-sidebar-resizer::after {
+  content: "";
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  left: 3px;
+  width: 2px;
+  background: transparent;
+  transition: background 0.15s ease;
+}
+
+.chat-sidebar-resizer:hover::after,
+.chat-sidebar-resizer:focus-visible::after,
+.chat-app-layout.sidebar-resizing .chat-sidebar-resizer::after {
+  background: var(--accent, #0b3c6d);
+}
+
+/* While dragging: no width animation lag, no text selection, resize cursor everywhere. */
+.chat-app-layout.sidebar-resizing,
+.chat-app-layout.sidebar-resizing * {
+  cursor: col-resize !important;
+  user-select: none !important;
+}
+
+.chat-app-layout.sidebar-resizing .chat-sidebar {
+  transition: none;
+}
+
 @media (max-width: 768px) {
   .chat-app-layout.sidebar-collapsed .chat-sidebar {
     width: 56px;
+  }
+
+  .chat-sidebar-resizer {
+    display: none;
   }
 }
 
