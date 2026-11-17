@@ -57,6 +57,13 @@ def _now() -> str:
     return datetime.now(timezone.utc).isoformat()
 
 
+def _snippet(text: str, at: int, width: int = 90) -> str:
+    """About `width` characters of `text` around position `at`, on one line."""
+    start = max(0, at - width // 3)
+    piece = " ".join(text[start:start + width].split())
+    return ("\u2026" if start else "") + piece + ("\u2026" if start + width < len(text) else "")
+
+
 class SessionStore:
     def __init__(self, path: str) -> None:
         self.path = path
@@ -100,7 +107,7 @@ class SessionStore:
             self._data = data
             if changed is None:
                 self._frags.clear()
-            else:
+            elif changed:
                 self._dirty.add(changed)
         self._pending.set()
         if self._writer is None or not self._writer.is_alive():
@@ -134,8 +141,9 @@ class SessionStore:
             if len(self._frags) > len(parts):  # deleted sessions
                 live = {s.get("session_id") for s in self._data["sessions"]}
                 self._frags = {k: v for k, v in self._frags.items() if k in live}
-        # Same bytes as json.dumps({"sessions": [...]}) with its default separators.
-        text = '{"sessions": [' + ", ".join(parts) + "]}"
+            folders = json.dumps(self._data.get("folders") or [], ensure_ascii=False, default=str)
+        # Same bytes as json.dumps({"sessions": [...], "folders": [...]}) with its default separators.
+        text = '{"sessions": [' + ", ".join(parts) + '], "folders": ' + folders + "}"
         try:
             self._write_file(text)
         except OSError as exc:
@@ -235,20 +243,126 @@ class SessionStore:
                         # A copy: the in-memory list keeps growing while this one is sent.
                         "messages": list(session.get("messages", [])),
                         "last_question": self._last_question(session),
+                        "pinned": bool(session.get("pinned")),
+                        "archived": bool(session.get("archived")),
+                        "folder_id": session.get("folder_id"),
                     }
         return None
 
-    def patch_session(self, session_id: str, session_name: str | None) -> dict | None:
+    def patch_session(self, session_id: str, session_name: str | None = None, **changes: Any) -> dict | None:
+        """Rename and/or organise a chat. `changes` may hold pinned (bool), archived (bool) and
+        folder_id (str, or None to take it out of its folder); keys left out are untouched.
+        Only a rename counts as activity (moves it up the list) -- pinning, archiving and
+        filing do not reorder the history. KeyError when folder_id names no folder."""
         with self._lock:
             data = self._read()
             for session in data["sessions"]:
                 if session.get("session_id") == session_id:
+                    if "folder_id" in changes:
+                        fid = changes["folder_id"] or None
+                        if fid is not None and not any(f.get("folder_id") == fid for f in data.get("folders") or []):
+                            raise KeyError(fid)
+                        if fid is None:
+                            session.pop("folder_id", None)
+                        else:
+                            session["folder_id"] = fid
                     if session_name:
                         session["session_name"] = session_name
-                    session["updated_at"] = _now()
+                        session["updated_at"] = _now()
+                    if "pinned" in changes:
+                        session["pinned"] = bool(changes["pinned"])
+                        if session["pinned"]:
+                            session["pinned_at"] = _now()
+                        else:
+                            session.pop("pinned_at", None)
+                    if "archived" in changes:
+                        session["archived"] = bool(changes["archived"])
                     self._write(data, session_id)
                     return self._summarize(session)
         return None
+
+    # -- folders -------------------------------------------------------------
+
+    def list_folders(self) -> list[dict]:
+        with self._lock:
+            data = self._read()
+            counts: dict[str, int] = {}
+            for s in data["sessions"]:
+                if s.get("folder_id"):
+                    counts[s["folder_id"]] = counts.get(s["folder_id"], 0) + 1
+            return [{**f, "session_count": counts.get(f["folder_id"], 0)} for f in data.get("folders") or []]
+
+    def create_folder(self, name: str) -> dict:
+        folder = {"folder_id": uuid.uuid4().hex[:12], "name": (name or "").strip()[:60] or "New folder",
+                  "created_at": _now()}
+        with self._lock:
+            data = self._read()
+            data.setdefault("folders", []).append(folder)
+            self._write_meta(data)
+        return {**folder, "session_count": 0}
+
+    def rename_folder(self, folder_id: str, name: str) -> dict | None:
+        with self._lock:
+            data = self._read()
+            for f in data.get("folders") or []:
+                if f.get("folder_id") == folder_id:
+                    f["name"] = (name or "").strip()[:60] or f["name"]
+                    self._write_meta(data)
+                    return dict(f)
+        return None
+
+    def delete_folder(self, folder_id: str) -> bool:
+        """Remove the folder; its chats are kept and go back to the main list."""
+        with self._lock:
+            data = self._read()
+            folders = data.get("folders") or []
+            if not any(f.get("folder_id") == folder_id for f in folders):
+                return False
+            data["folders"] = [f for f in folders if f.get("folder_id") != folder_id]
+            for s in data["sessions"]:
+                if s.get("folder_id") == folder_id:
+                    s.pop("folder_id", None)
+                    self._dirty.add(s["session_id"])
+            self._write_meta(data)
+        return True
+
+    def _write_meta(self, data: dict) -> None:
+        """A folder-list change: no session's text changes (unless the caller marked it
+        dirty), so the next flush re-serialises only the small folder list."""
+        self._write(data, "")
+
+    # -- search --------------------------------------------------------------
+
+    def search(self, query: str, limit: int = 50) -> list[dict]:
+        """Chats whose title or any question/answer contains every word of `query`
+        (case-insensitive), most recent first, each with a snippet of the best-matching message."""
+        words = [w for w in (query or "").lower().split() if w]
+        if not words:
+            return []
+        hits: list[tuple[str, dict]] = []
+        # Scan a snapshot outside the lock (~0.1 s over 7.5k chats) so a search never holds up
+        # a question being answered; a message appended meanwhile just may not be matched.
+        with self._lock:
+            snapshot = list(self._read()["sessions"])
+        for session in snapshot:
+            name = session.get("session_name") or ""
+            texts = [(m.get("role"), m.get("content") or "") for m in session.get("messages", [])]
+            blob = (name + "\n" + "\n".join(t for _, t in texts)).lower()
+            if not all(w in blob for w in words):
+                continue
+            snippet, role, best = "", None, 0
+            for r, text in texts:  # the message holding the most query words (first wins a tie)
+                low = text.lower()
+                n = sum(1 for w in words if w in low)
+                if n > best:
+                    first = min(low.index(w) for w in words if w in low)
+                    snippet, role, best = _snippet(text, first), r, n
+                    if n == len(words):
+                        break
+            hits.append((session.get("updated_at", ""),
+                         {**self._summarize(session), "match_snippet": snippet, "match_role": role}))
+        hits.sort(key=lambda h: h[0], reverse=True)
+        return [h for _, h in hits[:limit]]
 
     def delete_session(self, session_id: str) -> bool:
         with self._lock:
@@ -301,6 +415,8 @@ class SessionStore:
                 if session.get("session_id") == session_id:
                     session.setdefault("messages", []).append(message)
                     session["updated_at"] = _now()
+                    if role == "user" and session.get("archived"):
+                        session["archived"] = False  # continuing an archived chat restores it
                     # Name a brand-new session after its first question so the
                     # sidebar isn't a wall of "New Session".
                     if role == "user" and session.get("session_name") in (
@@ -390,4 +506,8 @@ class SessionStore:
             "updated_at": session.get("updated_at", ""),
             "message_count": len(session.get("messages", [])),
             "last_question": self._last_question(session),
+            "pinned": bool(session.get("pinned")),
+            "pinned_at": session.get("pinned_at"),
+            "archived": bool(session.get("archived")),
+            "folder_id": session.get("folder_id"),
         }

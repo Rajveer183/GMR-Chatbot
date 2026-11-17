@@ -99,7 +99,15 @@ class SessionCreateRequest(BaseModel):
 
 
 class SessionPatchRequest(BaseModel):
+    """Only the fields sent are changed; folder_id: null takes the chat out of its folder."""
     session_name: str | None = None
+    pinned: bool | None = None
+    archived: bool | None = None
+    folder_id: str | None = None
+
+
+class FolderRequest(BaseModel):
+    name: str
 
 
 class SessionTruncateRequest(BaseModel):
@@ -1268,6 +1276,39 @@ def list_sessions() -> list[dict]:
     return sessions.list_sessions()
 
 
+@app.get("/api/sessions/search")
+def search_sessions(q: str = "", limit: int = 50) -> list[dict]:
+    """Full-text search over every chat's title, questions and answers (all words must match),
+    archived chats included; each hit carries a snippet of the matching message."""
+    return sessions.search(q, max(1, min(limit, 200)))
+
+
+@app.get("/api/folders")
+def list_folders() -> list[dict]:
+    return sessions.list_folders()
+
+
+@app.post("/api/folders")
+def create_folder(req: FolderRequest) -> dict:
+    return sessions.create_folder(req.name)
+
+
+@app.patch("/api/folders/{folder_id}")
+def rename_folder(folder_id: str, req: FolderRequest) -> dict:
+    folder = sessions.rename_folder(folder_id, req.name)
+    if folder is None:
+        raise HTTPException(status_code=404, detail="Folder not found.")
+    return folder
+
+
+@app.delete("/api/folders/{folder_id}")
+def delete_folder(folder_id: str) -> dict:
+    """Deletes only the folder; its chats move back to the main list."""
+    if not sessions.delete_folder(folder_id):
+        raise HTTPException(status_code=404, detail="Folder not found.")
+    return {"deleted": True, "folder_id": folder_id}
+
+
 @app.post("/api/sessions")
 def create_session(req: SessionCreateRequest) -> dict:
     return sessions.create_session(req.session_name or "New Session")
@@ -1283,7 +1324,13 @@ def get_session(session_id: str) -> dict:
 
 @app.patch("/api/sessions/{session_id}")
 def patch_session(session_id: str, req: SessionPatchRequest) -> dict:
-    updated = sessions.patch_session(session_id, req.session_name)
+    changes = {k: getattr(req, k) for k in ("pinned", "archived", "folder_id") if k in req.model_fields_set}
+    if any(changes.get(k) is None for k in ("pinned", "archived") if k in changes):
+        raise HTTPException(status_code=400, detail="pinned/archived must be true or false.")
+    try:
+        updated = sessions.patch_session(session_id, req.session_name, **changes)
+    except KeyError:
+        raise HTTPException(status_code=404, detail="Folder not found.")
     if updated is None:
         raise HTTPException(status_code=404, detail="Session not found.")
     return updated

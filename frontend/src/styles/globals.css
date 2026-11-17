@@ -3071,3 +3071,584 @@ button {
     break-inside: avoid;
   }
 }
+
+/* ==========================================================================
+   Chat history: pinned / folders / archived / full-text search
+   ========================================================================== */
+
+.chat-history {
+  flex: 1;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+}
+
+.chat-sessions-title.with-action {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+}
+
+.chat-sessions-title.with-action .chat-icon-btn {
+  width: 22px;
+  height: 22px;
+  border-color: transparent;
+}
+
+.chat-sessions-list > .chat-sessions-title:not(:first-child) {
+  margin-top: var(--space-2);
+}
+
+.chat-sessions-title.drop,
+.chat-folder-row.drop {
+  background: var(--accent-soft);
+  outline: 1px dashed var(--accent);
+  border-radius: var(--radius-sm);
+}
+
+/* Row actions appear on hover or focus, so long titles get the room otherwise. */
+.chat-session-item .chat-session-actions,
+.chat-folder-row .chat-session-actions {
+  opacity: 0;
+  transition: opacity var(--duration-fast) ease;
+}
+
+.chat-session-item:hover .chat-session-actions,
+.chat-session-item:focus-within .chat-session-actions,
+.chat-session-item.active .chat-session-actions,
+.chat-folder-row:hover .chat-session-actions,
+.chat-folder-row:focus-within .chat-session-actions {
+  opacity: 1;
+}
+
+@media (hover: none) {
+  .chat-session-item .chat-session-actions,
+  .chat-folder-row .chat-session-actions {
+    opacity: 1;
+  }
+}
+
+.chat-session-item .chat-icon-btn,
+.chat-folder-row .chat-icon-btn {
+  width: 22px;
+  height: 22px;
+  border-color: transparent;
+  background: transparent;
+}
+
+.chat-session-name {
+  text-align: left;
+  cursor: pointer;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.chat-session-title-row {
+  display: flex;
+  align-items: center;
+  gap: 5px;
+  min-width: 0;
+  max-width: 100%;
+}
+
+.chat-session-title {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.chat-session-pin {
+  flex-shrink: 0;
+  color: var(--accent);
+}
+
+.chat-session-item.is-archived .chat-session-title {
+  color: var(--text-muted);
+}
+
+.chat-session-item.is-hit {
+  align-items: flex-start;
+}
+
+.chat-session-snippet {
+  font-size: 11.5px;
+  line-height: 1.35;
+  color: var(--text-muted);
+  white-space: normal;
+  display: -webkit-box;
+  -webkit-line-clamp: 2;
+  -webkit-box-orient: vertical;
+  overflow: hidden;
+}
+
+.chat-session-meta {
+  font-size: 10.5px;
+  color: var(--text-subtle);
+}
+
+.chat-session-name mark {
+  background: rgba(217, 119, 6, 0.22);
+  color: inherit;
+  border-radius: 2px;
+  padding: 0 1px;
+}
+
+.chat-folder-row {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  min-height: 30px;
+  padding: 2px 6px 2px 4px;
+  border-radius: var(--radius-sm);
+  color: var(--text-muted);
+}
+
+.chat-folder-row:hover {
+  background: #f8fafc;
+}
+
+.chat-folder-row.new {
+  padding-left: 8px;
+}
+
+.chat-folder-row .chat-session-rename {
+  flex: 1;
+  min-width: 0;
+  font-size: 12.5px;
+  border: none;
+  border-bottom: 1px solid var(--accent);
+  outline: none;
+  background: transparent;
+  padding: 3px 2px;
+}
+
+.chat-folder-toggle {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  align-items: center;
+  gap: 5px;
+  border: none;
+  background: transparent;
+  cursor: pointer;
+  color: var(--text-main);
+  font-size: 12.5px;
+  font-weight: 550;
+  padding: 4px 2px;
+  text-align: left;
+}
+
+.chat-folder-toggle svg {
+  flex-shrink: 0;
+  color: var(--text-muted);
+}
+
+.chat-folder-name {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.chat-folder-count {
+  margin-left: auto;
+  font-size: 10.5px;
+  font-weight: 600;
+  color: var(--text-subtle);
+}
+
+.chat-folder-items {
+  margin-left: 12px;
+  padding-left: 4px;
+  border-left: 1px solid var(--border);
+  display: flex;
+  flex-direction: column;
+  gap: 1px;
+}
+
+.chat-folders-hint {
+  padding: 2px var(--space-3) 6px;
+  font-size: 11px;
+  color: var(--text-subtle);
+}
+
+.chat-archived-toggle {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  border: none;
+  background: transparent;
+  cursor: pointer;
+  text-align: left;
+  width: 100%;
+}
+
+.chat-archived-toggle:hover {
+  color: var(--bhel-navy);
+}
+
+.chat-newfolder-for {
+  border-top: 1px solid var(--border);
+  padding: var(--space-2) var(--space-2) var(--space-3);
+}
+
+/* Row menu: fixed so the scrolling list never clips it. */
+.chat-row-menu {
+  position: fixed;
+  z-index: 1000;
+  min-width: 190px;
+  max-width: 260px;
+  max-height: min(420px, calc(100vh - 16px));
+  overflow: auto;
+  background: var(--card-bg);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-md);
+  box-shadow: 0 10px 30px rgba(15, 23, 42, 0.14);
+  padding: 4px;
+  display: flex;
+  flex-direction: column;
+}
+
+.chat-row-menu button {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  border: none;
+  background: transparent;
+  padding: 7px 10px;
+  border-radius: var(--radius-sm);
+  font-size: 12.5px;
+  color: var(--text-main);
+  cursor: pointer;
+  text-align: left;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  flex-shrink: 0;
+}
+
+.chat-row-menu button:hover,
+.chat-row-menu button:focus-visible {
+  background: var(--active-bg);
+  outline: none;
+}
+
+.chat-row-menu button.indent {
+  padding-left: 22px;
+}
+
+.chat-row-menu button.danger {
+  color: var(--danger);
+}
+
+.chat-row-menu button.danger:hover {
+  background: var(--danger-soft);
+}
+
+.chat-row-menu-label {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 6px 10px 2px;
+  font-size: 10.5px;
+  font-weight: 700;
+  letter-spacing: 0.4px;
+  text-transform: uppercase;
+  color: var(--text-muted);
+}
+
+.chat-row-menu-sep {
+  height: 1px;
+  flex-shrink: 0;
+  background: var(--border);
+  margin: 4px 2px;
+}
+
+/* Continue-previous-analysis banner at the end of an older chat */
+.chat-continue-banner {
+  display: flex;
+  align-items: flex-start;
+  gap: 10px;
+  width: 100%;
+  box-sizing: border-box;
+  padding: 10px 12px;
+  border: 1px solid var(--border);
+  border-left: 3px solid var(--accent);
+  border-radius: var(--radius-md);
+  background: var(--card-bg);
+  color: var(--text-main);
+  font-size: 12.5px;
+}
+
+.chat-continue-banner > svg {
+  flex-shrink: 0;
+  margin-top: 1px;
+  color: var(--accent);
+}
+
+.chat-continue-text {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.chat-continue-text span {
+  color: var(--text-muted);
+}
+
+.chat-continue-actions {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  flex-wrap: wrap;
+  justify-content: flex-end;
+}
+
+.chat-continue-btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  border: 1px solid var(--border);
+  background: var(--card-bg);
+  color: var(--text-main);
+  border-radius: var(--radius-sm);
+  padding: 5px 10px;
+  font-size: 12px;
+  font-weight: 550;
+  cursor: pointer;
+}
+
+.chat-continue-btn:hover {
+  border-color: var(--accent);
+  background: var(--active-bg);
+}
+
+.chat-continue-btn.primary {
+  background: var(--accent);
+  border-color: var(--accent);
+  color: #fff;
+}
+
+.chat-continue-btn.primary:hover {
+  background: var(--accent-dark);
+}
+
+@media (max-width: 640px) {
+  .chat-continue-banner {
+    flex-wrap: wrap;
+  }
+  .chat-continue-actions {
+    width: 100%;
+    justify-content: flex-start;
+  }
+}
+
+/* The message a history search matched flashes once when the chat opens. */
+.chat-msg-row.search-flash > * {
+  animation: chat-search-flash 2.2s ease-out;
+  border-radius: var(--radius-md);
+}
+
+@keyframes chat-search-flash {
+  0%, 35% { box-shadow: 0 0 0 3px rgba(217, 119, 6, 0.45); }
+  100% { box-shadow: 0 0 0 3px transparent; }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .chat-msg-row.search-flash > * {
+    animation: none;
+    box-shadow: 0 0 0 2px rgba(217, 119, 6, 0.45);
+  }
+}
+
+/* Rows in the scrolling history keep their natural height (two-line search hits, folders). */
+.chat-sessions-list > *,
+.chat-folder-items > * {
+  flex-shrink: 0;
+}
+
+/* The continue banner sits in the fixed composer bar, so the thread needs more room below. */
+.chat-messages.has-banner {
+  padding-bottom: 170px;
+}
+
+.chat-input-inner > .chat-continue-banner {
+  margin-bottom: 8px;
+  box-shadow: 0 4px 14px rgba(15, 23, 42, 0.08);
+}
+
+/* Sidebar sections styled as plain labels ("Pinned ˅", "Folders", "Recent") over
+   plain-text rows with a rounded highlight -- replaces the uppercase titles. */
+.chat-section {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  flex-shrink: 0;
+  margin-top: 14px;
+}
+
+.chat-sessions-list > .chat-section:first-child,
+.chat-sessions-list > .chat-section-head:first-child {
+  margin-top: 4px;
+}
+
+.chat-section-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 6px;
+  min-height: 30px;
+  padding: 2px 6px 2px 10px;
+  border-radius: 10px;
+  flex-shrink: 0;
+}
+
+.chat-section-head.drop {
+  background: var(--accent-soft);
+  outline: 1px dashed var(--accent);
+}
+
+.chat-section-toggle,
+.chat-section-label {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  border: none;
+  background: transparent;
+  padding: 0;
+  font-size: 14px;
+  font-weight: 600;
+  color: var(--text-muted);
+  font-family: inherit;
+}
+
+.chat-section-toggle {
+  cursor: pointer;
+}
+
+.chat-section-toggle:hover {
+  color: var(--text-main);
+}
+
+.chat-section-toggle svg {
+  color: var(--text-subtle);
+}
+
+.chat-section-label {
+  padding: 4px 10px;
+}
+
+.chat-section-head > .chat-section-label {
+  padding: 0;
+}
+
+.chat-section-head .chat-section-action {
+  width: 24px;
+  height: 24px;
+  border-color: transparent;
+  background: transparent;
+  opacity: 0;
+}
+
+.chat-section-head:hover .chat-section-action,
+.chat-section-action:focus-visible {
+  opacity: 1;
+}
+
+@media (hover: none) {
+  .chat-section-head .chat-section-action {
+    opacity: 1;
+  }
+}
+
+.chat-section-empty {
+  padding: 6px 10px;
+  font-size: 14px;
+  color: var(--text-subtle);
+}
+
+/* Rows: plain text, rounded highlight, no accent bar. */
+.chat-sessions-list .chat-session-item {
+  border-left: none;
+  border-radius: 10px;
+  min-height: 38px;
+  padding: 3px 6px 3px 10px;
+}
+
+.chat-sessions-list .chat-session-item:hover {
+  background: rgba(15, 23, 42, 0.045);
+}
+
+.chat-sessions-list .chat-session-item.active {
+  background: var(--active-bg);
+}
+
+.chat-sessions-list .chat-session-name {
+  font-size: 14px;
+  color: var(--text-main);
+  padding: 4px 0;
+}
+
+.chat-sessions-list .chat-folder-row {
+  min-height: 38px;
+  border-radius: 10px;
+  padding: 3px 6px 3px 8px;
+}
+
+.chat-sessions-list .chat-folder-row:hover {
+  background: rgba(15, 23, 42, 0.045);
+}
+
+.chat-folder-toggle {
+  font-size: 14px;
+  font-weight: 400;
+}
+
+.chat-folder-items {
+  margin-left: 18px;
+  padding-left: 0;
+  border-left: none;
+}
+
+/* Pinned chats: the pin stays visible (filled) until unpinned; hovering the pin offers "unpin".
+   Only the other row actions hide until hover. */
+.chat-sessions-list .chat-session-item .chat-session-actions {
+  opacity: 1;
+}
+
+.chat-sessions-list .chat-session-item .chat-session-actions > * {
+  opacity: 0;
+  transition: opacity var(--duration-fast) ease;
+}
+
+.chat-sessions-list .chat-session-item:hover .chat-session-actions > *,
+.chat-sessions-list .chat-session-item:focus-within .chat-session-actions > *,
+.chat-sessions-list .chat-session-item.active .chat-session-actions > *,
+.chat-sessions-list .chat-session-item.is-pinned .chat-session-quickpin {
+  opacity: 1;
+}
+
+@media (hover: none) {
+  .chat-sessions-list .chat-session-item .chat-session-actions > * {
+    opacity: 1;
+  }
+}
+
+.chat-session-quickpin.on {
+  color: var(--accent);
+}
+
+.chat-session-quickpin .pin-off,
+.chat-session-quickpin.on:hover .pin-on {
+  display: none;
+}
+
+.chat-session-quickpin.on:hover .pin-off {
+  display: block;
+}
+
+.chat-session-quickpin.on:hover {
+  color: var(--danger);
+}

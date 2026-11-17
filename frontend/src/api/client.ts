@@ -376,6 +376,31 @@ export interface SessionSummary {
   updated_at: string;
   message_count: number;
   last_question: string;
+  pinned?: boolean;
+  pinned_at?: string | null;
+  archived?: boolean;
+  folder_id?: string | null;
+}
+
+/** A hit from GET /api/sessions/search: the chat plus a snippet of its best-matching message. */
+export interface SessionSearchHit extends SessionSummary {
+  match_snippet: string;
+  match_role: "user" | "assistant" | null;
+}
+
+export interface ChatFolder {
+  folder_id: string;
+  name: string;
+  created_at: string;
+  session_count: number;
+}
+
+/** Fields PATCH /api/sessions/{id} accepts; only the ones sent change (folder_id: null = no folder). */
+export interface SessionPatch {
+  session_name?: string;
+  pinned?: boolean;
+  archived?: boolean;
+  folder_id?: string | null;
 }
 
 export interface SessionDetail {
@@ -385,6 +410,9 @@ export interface SessionDetail {
   updated_at: string;
   messages: SessionMessage[];
   last_question?: string;
+  pinned?: boolean;
+  archived?: boolean;
+  folder_id?: string | null;
 }
 
 export const FilterRequest = {};
@@ -700,6 +728,30 @@ export const apiClient = {
 
   renameSession: async (session_id: string, session_name: string): Promise<SessionDetail> => {
     return patchJSON(`/api/sessions/${encodeURIComponent(session_id)}`, { session_name });
+  },
+
+  updateSession: async (session_id: string, patch: SessionPatch): Promise<SessionSummary> => {
+    return patchJSON(`/api/sessions/${encodeURIComponent(session_id)}`, patch);
+  },
+
+  searchSessions: async (q: string): Promise<SessionSearchHit[]> => {
+    return getJSON(`/api/sessions/search?q=${encodeURIComponent(q)}`);
+  },
+
+  listFolders: async (): Promise<ChatFolder[]> => {
+    return getJSON("/api/folders");
+  },
+
+  createFolder: async (name: string): Promise<ChatFolder> => {
+    return postJSON("/api/folders", { name });
+  },
+
+  renameFolder: async (folder_id: string, name: string): Promise<ChatFolder> => {
+    return patchJSON(`/api/folders/${encodeURIComponent(folder_id)}`, { name });
+  },
+
+  deleteFolder: async (folder_id: string): Promise<{ deleted: boolean }> => {
+    return deleteJSON(`/api/folders/${encodeURIComponent(folder_id)}`);
   },
 
   deleteSession: async (session_id: string): Promise<{ deleted: boolean; session_id: string }> => {

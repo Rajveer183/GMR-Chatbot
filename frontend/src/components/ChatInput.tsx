@@ -27,10 +27,12 @@ interface ChatInputProps {
   stopLabel?: string;
   /** Render in the page flow (inside the welcome card) instead of the fixed bottom bar. */
   inline?: boolean;
+  /** Shown just above the input box (the "continue previous analysis" banner). */
+  above?: React.ReactNode;
 }
 
 export const ChatInput = forwardRef<ChatInputHandle, ChatInputProps>(
-  ({ loading, onSubmit, onStop, stopLabel = "Stop", placeholder, micOnLabel, micOffLabel, speechLocale, inline = false }, ref) => {
+  ({ loading, onSubmit, onStop, stopLabel = "Stop", placeholder, micOnLabel, micOffLabel, speechLocale, inline = false, above }, ref) => {
     const [question, setQuestion] = useState("");
     const [speechError, setSpeechError] = useState<string | null>(null);
     const inputRef = useRef<HTMLTextAreaElement>(null);
@@ -93,6 +95,7 @@ export const ChatInput = forwardRef<ChatInputHandle, ChatInputProps>(
     return (
       <div className={`chat-input-bar${inline ? " inline" : ""}`}>
         <div className="chat-input-inner">
+          {above}
           <div className="chat-input-shell">
             <textarea
               ref={inputRef}

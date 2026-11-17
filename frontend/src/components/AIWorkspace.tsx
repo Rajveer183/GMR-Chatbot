@@ -1,8 +1,8 @@
 import React, { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { Menu, Plus, Pencil, Trash2, Search, X, User, Bot, Database, Download } from "lucide-react";
+import { Menu, Plus, Pencil, X, User, Bot, Database, Download, History, RefreshCw, ArchiveRestore } from "lucide-react";
 import { apiClient, QueryStoppedError } from "../api/client";
 import type { FeedbackRating } from "../api/client";
-import type { AIQueryResponse, AIStreamEvent, DatasetSummary, FilterRequest, SessionSummary, SessionDetail, SessionMessage, TranslatedAnswer } from "../api/client";
+import type { AIQueryResponse, AIStreamEvent, ChatFolder, DatasetSummary, FilterRequest, SessionPatch, SessionSummary, SessionDetail, SessionMessage, TranslatedAnswer } from "../api/client";
 import { LanguageSelect } from "./LanguageSelect";
 import { langTag, readStoredLanguage, screenLanguage, speechLocale, statusText, storeLanguage, uiText } from "../i18n/languages";
 import type { LanguagePreference } from "../i18n/languages";
@@ -10,6 +10,7 @@ import { ResultRenderer } from "./ResultRenderer";
 import { LoadingStatus } from "./LoadingStatus";
 import { TypingIndicator } from "./TypingIndicator";
 import { ConfirmDialog } from "./ConfirmDialog";
+import { ChatHistory } from "./ChatHistory";
 import { EmptyState } from "./EmptyState";
 import { DataSourcesPanel } from "./DataSourcesPanel";
 import { ChatInput } from "./ChatInput";
@@ -32,7 +33,18 @@ const LOADING_STATUS_MESSAGES = [
 // only has to be larger than that cap.
 const ALL_ROWS = 1000;
 
-type ScrollIntent = "none" | "new-response" | "session-open";
+type ScrollIntent = "none" | "new-response" | "session-open" | "search-hit";
+
+// "Continue previous analysis": a chat whose last message is older than this opens with a
+// banner saying follow-ups still use its context, plus a one-click re-run on today's data.
+const CONTINUE_AFTER_MS = 30 * 60 * 1000;
+
+function longDate(iso: string | undefined): string {
+  if (!iso) return "";
+  const d = new Date(iso);
+  if (Number.isNaN(d.getTime())) return "";
+  return d.toLocaleString(undefined, { day: "numeric", month: "short", year: "numeric", hour: "numeric", minute: "2-digit" });
+}
 
 type SnapshotFormat = "png" | "pdf" | "html";
 const SNAPSHOT_FORMATS: SnapshotFormat[] = ["pdf", "png", "html"];
@@ -129,15 +141,18 @@ export const AIWorkspace: React.FC<AIWorkspaceProps> = ({ filters }) => {
   // answer so far (numbers first, then the summary growing word by word).
   const [streamStatus, setStreamStatus] = useState<string | null>(null);
   const [streamDraft, setStreamDraft] = useState<AIQueryResponse | null>(null);
-  const [renamingSessionId, setRenamingSessionId] = useState<string | null>(null);
-  const [renameValue, setRenameValue] = useState("");
+  const [folders, setFolders] = useState<ChatFolder[]>([]);
+  // session ids whose "continue" banner was closed (this page load only)
+  const [dismissedBanners, setDismissedBanners] = useState<Set<string>>(() => new Set());
+  // words of the history search that opened the chat -- scroll to the message they match
+  const jumpQueryRef = useRef<string | null>(null);
+  const [flashMessageId, setFlashMessageId] = useState<string | null>(null);
   const [confirmDelete, setConfirmDelete] = useState<{ open: boolean; sessionId: string | null; sessionName: string | null }>({
     open: false,
     sessionId: null,
     sessionName: null,
   });
   const [datasets, setDatasets] = useState<DatasetSummary[]>([]);
-  const [sessionSearch, setSessionSearch] = useState("");
   const chatMessagesRef = useRef<HTMLDivElement>(null);
   const chatThreadRef = useRef<HTMLDivElement>(null);
   const assistantResponseRefs = useRef<Map<string, HTMLDivElement>>(new Map());
@@ -158,6 +173,14 @@ export const AIWorkspace: React.FC<AIWorkspaceProps> = ({ filters }) => {
   // message index -> the language that answer is shown in (absent / "auto" = as written)
   const [shownLanguage, setShownLanguage] = useState<Record<number, LanguagePreference>>({});
   const translationsInFlight = useRef<Set<string>>(new Set());
+
+  const loadFolders = async () => {
+    try {
+      setFolders(await apiClient.listFolders());
+    } catch {
+      // Non-fatal -- an older backend has no folders; the history still lists every chat.
+    }
+  };
 
   const loadSessions = async () => {
     const list = await apiClient.listSessions();
@@ -187,8 +210,11 @@ export const AIWorkspace: React.FC<AIWorkspaceProps> = ({ filters }) => {
     []
   );
 
-  const openSession = async (sessionId: string, scrollToLatest = true) => {
-    if (scrollToLatest) {
+  const openSession = async (sessionId: string, scrollToLatest = true, jumpTo?: string) => {
+    if (jumpTo) {
+      jumpQueryRef.current = jumpTo;
+      scrollIntentRef.current = "search-hit";
+    } else if (scrollToLatest) {
       scrollIntentRef.current = "session-open";
     }
     const detail = await apiClient.getSession(sessionId);
@@ -275,6 +301,29 @@ export const AIWorkspace: React.FC<AIWorkspaceProps> = ({ filters }) => {
       return;
     }
 
+    if (intent === "search-hit" && activeSession?.messages?.length) {
+      const words = (jumpQueryRef.current || "").toLowerCase().split(/\s+/).filter(Boolean);
+      jumpQueryRef.current = null;
+      const messages = activeSession.messages;
+      const has = (m: SessionMessage, all: boolean) => {
+        const text = (m.content || "").toLowerCase();
+        return all ? words.every((w) => text.includes(w)) : words.some((w) => text.includes(w));
+      };
+      const match = messages.find((m) => has(m, true)) ?? messages.find((m) => has(m, false));
+      window.requestAnimationFrame(() => {
+        const el = match && (match.role === "user" ? userMessageRefs.current.get(match.id) : assistantResponseRefs.current.get(match.id));
+        if (el && match) {
+          scrollToElementStart(el);
+          setFlashMessageId(match.id);
+          window.setTimeout(() => setFlashMessageId((id) => (id === match.id ? null : id)), 2200);
+        } else {
+          chatMessagesRef.current?.scrollTo({ top: chatMessagesRef.current.scrollHeight });
+        }
+        scrollIntentRef.current = "none";
+      });
+      return;
+    }
+
     if (intent === "session-open" && activeSession?.messages?.length) {
       const messages = activeSession.messages;
       const lastAssistant = [...messages].reverse().find((m) => m.role === "assistant");
@@ -311,6 +360,7 @@ export const AIWorkspace: React.FC<AIWorkspaceProps> = ({ filters }) => {
   useEffect(() => {
     const init = async () => {
       try {
+        loadFolders();
         const list = await loadSessions();
         if (list.length === 0) {
           await createNewSession();
@@ -582,22 +632,49 @@ export const AIWorkspace: React.FC<AIWorkspaceProps> = ({ filters }) => {
   );
   const onSubmitQuestion = useCallback((text: string) => runQueryRef.current(text), []);
 
-  const beginRename = (s: SessionSummary) => {
-    setRenamingSessionId(s.session_id);
-    setRenameValue(s.session_name);
+  /** Rename / pin / archive / move a chat, then refresh the sidebar (and the open chat's header). */
+  const updateSession = async (sessionId: string, patch: SessionPatch) => {
+    try {
+      const updated = await apiClient.updateSession(sessionId, patch);
+      setSessions((prev) => prev.map((s) => (s.session_id === sessionId ? { ...s, ...updated } : s)));
+      setActiveSession((prev) =>
+        prev && prev.session_id === sessionId
+          ? { ...prev, session_name: updated.session_name, pinned: updated.pinned, archived: updated.archived, folder_id: updated.folder_id }
+          : prev
+      );
+      await Promise.all([loadSessions(), patch.folder_id !== undefined ? loadFolders() : Promise.resolve()]);
+    } catch (err: any) {
+      setError(err.message || "Failed to update chat");
+    }
   };
 
-  const commitRename = async () => {
-    if (!renamingSessionId) return;
+  const createFolder = async (name: string): Promise<ChatFolder | null> => {
     try {
-      await apiClient.renameSession(renamingSessionId, renameValue.trim() || "New Session");
-      setRenamingSessionId(null);
-      await loadSessions();
-      if (activeSession?.session_id === renamingSessionId) {
-        await openSession(renamingSessionId, false);
-      }
+      const folder = await apiClient.createFolder(name);
+      await loadFolders();
+      return folder;
     } catch (err: any) {
-      setError(err.message || "Failed to rename session");
+      setError(err.message || "Failed to create folder");
+      return null;
+    }
+  };
+
+  const renameFolder = async (folderId: string, name: string) => {
+    try {
+      await apiClient.renameFolder(folderId, name);
+      await loadFolders();
+    } catch (err: any) {
+      setError(err.message || "Failed to rename folder");
+    }
+  };
+
+  const deleteFolder = async (folderId: string) => {
+    try {
+      await apiClient.deleteFolder(folderId);
+      await Promise.all([loadFolders(), loadSessions()]);
+      setActiveSession((prev) => (prev && prev.folder_id === folderId ? { ...prev, folder_id: null } : prev));
+    } catch (err: any) {
+      setError(err.message || "Failed to delete folder");
     }
   };
 
@@ -649,15 +726,51 @@ export const AIWorkspace: React.FC<AIWorkspaceProps> = ({ filters }) => {
 
   const activeSessionName = useMemo(() => activeSession?.session_name || "Project Workspace", [activeSession]);
 
-  const filteredSessions = useMemo(() => {
-    const q = sessionSearch.trim().toLowerCase();
-    if (!q) return sessions;
-    return sessions.filter((s) => {
-      const name = (s.session_name || "New Session").toLowerCase();
-      const lastQuestion = (s.last_question || "").toLowerCase();
-      return name.includes(q) || lastQuestion.includes(q);
-    });
-  }, [sessions, sessionSearch]);
+
+  // "Continue previous analysis": an older (or archived) chat opens with a note that follow-ups
+  // still use its context, and a one-click re-run of its last question on today's data.
+  const continueBanner = (() => {
+    const msgs = activeSession?.messages ?? [];
+    if (!activeSession || !msgs.length || loading || pendingQuery || dismissedBanners.has(activeSession.session_id)) return null;
+    const lastAt = msgs[msgs.length - 1].timestamp;
+    const old = lastAt ? Date.now() - new Date(lastAt).getTime() > CONTINUE_AFTER_MS : false;
+    if (!old && !activeSession.archived) return null;
+    const lastQuestion = [...msgs].reverse().find((m) => m.role === "user")?.content;
+    return { lastAt, lastQuestion, archived: !!activeSession.archived, old };
+  })();
+  const dismissBanner = () =>
+    activeSession && setDismissedBanners((prev) => new Set(prev).add(activeSession.session_id));
+  const continueBannerEl = continueBanner ? (
+    <div className="chat-continue-banner" role="status">
+      {continueBanner.archived ? <ArchiveRestore size={15} /> : <History size={15} />}
+      <div className="chat-continue-text">
+        <strong>
+          {continueBanner.archived ? t("archivedBanner") : t("continueTitle", { when: longDate(continueBanner.lastAt) })}
+        </strong>
+        {continueBanner.old ? <span>{t("continueBody")}</span> : null}
+      </div>
+      <div className="chat-continue-actions">
+        {continueBanner.archived ? (
+          <button type="button" className="chat-continue-btn" onClick={() => updateSession(activeSession!.session_id, { archived: false })}>
+            {t("unarchive")}
+          </button>
+        ) : null}
+        {continueBanner.old && continueBanner.lastQuestion ? (
+          <button
+            type="button"
+            className="chat-continue-btn primary"
+            onClick={() => runQuery(continueBanner.lastQuestion!)}
+            title={continueBanner.lastQuestion}
+          >
+            <RefreshCw size={13} /> {t("rerunLatest")}
+          </button>
+        ) : null}
+        <button type="button" className="chat-icon-btn" onClick={dismissBanner} title={t("dismiss")} aria-label={t("dismiss")}>
+          <X size={13} />
+        </button>
+      </div>
+    </div>
+  ) : null;
 
   // On a fresh chat the question box sits inside the welcome card; once the
   // conversation starts it moves back to the fixed bar at the bottom.
@@ -674,6 +787,7 @@ export const AIWorkspace: React.FC<AIWorkspaceProps> = ({ filters }) => {
       micOnLabel={t("micOn")}
       micOffLabel={t("micOff")}
       speechLocale={speechLocale(responseLanguage)}
+      above={inline ? undefined : continueBannerEl}
     />
   );
 
@@ -704,68 +818,18 @@ export const AIWorkspace: React.FC<AIWorkspaceProps> = ({ filters }) => {
           <Plus size={14} /> {t("newChat")}
         </button>
 
-        <div className="chat-session-search">
-          <Search size={13} />
-          <input
-            type="text"
-            value={sessionSearch}
-            onChange={(e) => setSessionSearch(e.target.value)}
-            placeholder={t("searchHistory")}
-            aria-label={t("searchHistory")}
-          />
-          {sessionSearch ? (
-            <button
-              type="button"
-              className="chat-session-search-clear"
-              onClick={() => setSessionSearch("")}
-              aria-label={t("clearSearch")}
-              title={t("clearSearch")}
-            >
-              <X size={12} />
-            </button>
-          ) : null}
-        </div>
-        <div className="chat-sessions-title">{t("recentSessions")}</div>
-        <div className="chat-sessions-list">
-          {filteredSessions.length === 0 ? (
-            <div className="chat-sessions-empty">
-              {sessionSearch ? t("noChatsMatch", { q: sessionSearch }) : t("noSessions")}
-            </div>
-          ) : (
-            filteredSessions.map((s) => (
-            <div
-              key={s.session_id}
-              className={`chat-session-item ${activeSession?.session_id === s.session_id ? "active" : ""}`}
-              title={s.session_name}
-            >
-              {renamingSessionId === s.session_id ? (
-                <input
-                  className="chat-session-rename"
-                  value={renameValue}
-                  onChange={(e) => setRenameValue(e.target.value)}
-                  onBlur={commitRename}
-                  onKeyDown={(e) => {
-                    if (e.key === "Enter") commitRename();
-                  }}
-                  autoFocus
-                />
-              ) : (
-                <button className="chat-session-name" type="button" onClick={() => openSession(s.session_id)}>
-                  {s.session_name || "New Session"}
-                </button>
-              )}
-              <div className="chat-session-actions">
-                <button className="chat-icon-btn" type="button" onClick={() => beginRename(s)}>
-                  <Pencil size={12} />
-                </button>
-                <button className="chat-icon-btn danger" type="button" onClick={() => deleteSession(s.session_id)}>
-                  <Trash2 size={12} />
-                </button>
-              </div>
-            </div>
-            ))
-          )}
-        </div>
+        <ChatHistory
+          sessions={sessions}
+          folders={folders}
+          activeId={activeSession?.session_id ?? null}
+          t={t}
+          onOpen={(id, query) => openSession(id, true, query)}
+          onUpdate={updateSession}
+          onDelete={deleteSession}
+          onCreateFolder={createFolder}
+          onRenameFolder={renameFolder}
+          onDeleteFolder={deleteFolder}
+        />
 
         <div className="chat-sidebar-footer">
           <div className="role">
@@ -828,7 +892,7 @@ export const AIWorkspace: React.FC<AIWorkspaceProps> = ({ filters }) => {
         </header>
         <DataSourcesPanel open={insightsOpen} onClose={() => setInsightsOpen(false)} datasets={datasets} />
 
-        <div className={`chat-messages${isEmptyChat ? " is-empty" : ""}`} ref={chatMessagesRef}>
+        <div className={`chat-messages${isEmptyChat ? " is-empty" : ""}${continueBannerEl && !isEmptyChat ? " has-banner" : ""}`} ref={chatMessagesRef}>
           <div className="chat-thread chat-thread-enter" key={activeSession?.session_id || "none"} ref={chatThreadRef}>
             {(() => {
               const assistantMessages = (activeSession?.messages || []).filter((m) => m.role === "assistant");
@@ -837,7 +901,7 @@ export const AIWorkspace: React.FC<AIWorkspaceProps> = ({ filters }) => {
                 const shown = msg.response ? displayed(index, msg.response) : null;
                 const answerLanguage = shown?.result.answer_language;
                 return (
-                <div key={msg.id} className={`chat-msg-row ${msg.role}`}>
+                <div key={msg.id} className={`chat-msg-row ${msg.role}${flashMessageId === msg.id ? " search-flash" : ""}`}>
                   {msg.role === "user" ? (
                     <div
                       className="chat-msg-col user"
