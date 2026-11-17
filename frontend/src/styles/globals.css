@@ -2862,8 +2862,7 @@ button {
   transition: width 0.18s ease;
 }
 
-.chat-app-layout.sidebar-collapsed .chat-new-btn,
-.chat-app-layout.sidebar-collapsed .chat-history {
+.chat-app-layout.sidebar-collapsed .chat-new-btn {
   display: none;
 }
 
@@ -2878,29 +2877,12 @@ button {
   min-height: 0;
 }
 
-.chat-rail-logo {
-  margin-bottom: 10px;
-}
-
 .chat-rail-logo-img {
   display: block;
-  width: 34px;
+  width: 38px;
   height: auto;
   object-fit: contain;
-}
-
-.chat-rail-logo-toggle {
-  display: none;
-}
-
-.chat-rail-logo:hover .chat-rail-logo-img,
-.chat-rail-logo:focus-visible .chat-rail-logo-img {
-  display: none;
-}
-
-.chat-rail-logo:hover .chat-rail-logo-toggle,
-.chat-rail-logo:focus-visible .chat-rail-logo-toggle {
-  display: block;
+  margin: 6px 0 8px;
 }
 
 .chat-sidebar-rail-btn {
@@ -2915,60 +2897,17 @@ button {
   position: absolute;
   top: -6px;
   left: calc(100% + 8px);
-  width: 300px;
-  max-height: min(520px, 70vh);
+  width: 320px;
+  /* A definite height so the history's own scroll list (flex: 1, overflow: auto) works. */
+  height: min(560px, calc(100vh - 180px));
   display: flex;
   flex-direction: column;
   background: var(--card-bg, #fff);
   border: 1px solid var(--border);
   border-radius: 16px;
   box-shadow: 0 12px 36px rgba(15, 23, 42, 0.16);
-  padding: 8px 6px;
+  padding: 6px 2px;
   z-index: 1000;
-}
-
-.chat-rail-flyout-head {
-  padding: 8px 12px 6px;
-  font-size: 13px;
-  color: var(--text-muted);
-}
-
-.chat-rail-flyout-list {
-  overflow-y: auto;
-  min-height: 0;
-}
-
-.chat-rail-flyout-item {
-  display: block;
-  width: 100%;
-  border: none;
-  background: transparent;
-  text-align: left;
-  padding: 9px 12px;
-  border-radius: 10px;
-  font-size: 14px;
-  color: var(--text-main);
-  cursor: pointer;
-  white-space: nowrap;
-  overflow: hidden;
-  text-overflow: ellipsis;
-}
-
-.chat-rail-flyout-item:hover,
-.chat-rail-flyout-item:focus-visible {
-  background: var(--active-bg, rgba(15, 23, 42, 0.06));
-  outline: none;
-}
-
-.chat-rail-flyout-item.active {
-  background: var(--active-bg, rgba(15, 23, 42, 0.06));
-  font-weight: 600;
-}
-
-.chat-rail-flyout-empty {
-  padding: 8px 12px;
-  color: var(--text-muted);
-  font-size: 13px;
 }
 
 /* Profile in the rail: avatar only, menu opens to the right of the rail. */

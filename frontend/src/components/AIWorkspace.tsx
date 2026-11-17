@@ -916,6 +916,26 @@ export const AIWorkspace: React.FC<AIWorkspaceProps> = ({ filters }) => {
     />
   );
 
+  // Chat history (pinned, folders, recents + row actions): in the expanded sidebar, or in the
+  // collapsed rail's flyout (afterOpen closes the flyout once a chat is opened).
+  const historyEl = (afterOpen?: () => void) => (
+    <ChatHistory
+      sessions={sessions}
+      folders={folders}
+      activeId={activeSession?.session_id ?? null}
+      t={t}
+      onOpen={(id) => {
+        openSession(id, true);
+        afterOpen?.();
+      }}
+      onUpdate={updateSession}
+      onDelete={deleteSession}
+      onCreateFolder={createFolder}
+      onUpdateFolder={updateFolder}
+      onDeleteFolder={deleteFolder}
+    />
+  );
+
   return (
     <div
       ref={layoutRef}
@@ -949,17 +969,16 @@ export const AIWorkspace: React.FC<AIWorkspaceProps> = ({ filters }) => {
         )}
         {sidebarCollapsed ? (
           <nav className="chat-sidebar-rail" aria-label={t("showSidebar")}>
-            {/* GMR logo; on hover it turns into the sidebar icon, click expands (like ChatGPT). */}
+            <img className="chat-rail-logo-img" src={gmrLogo} alt="GMR" />
             <button
-              className="chat-sidebar-icon chat-rail-logo"
+              className="chat-sidebar-icon chat-sidebar-rail-btn"
               type="button"
               onClick={toggleSidebar}
               aria-expanded={false}
               aria-label={t("showSidebar")}
               title={t("showSidebar")}
             >
-              <img className="chat-rail-logo-img" src={gmrLogo} alt="GMR" />
-              <PanelLeft className="chat-rail-logo-toggle" size={18} />
+              <PanelLeft size={18} />
             </button>
             <button className="chat-sidebar-icon chat-sidebar-rail-btn" onClick={createNewSession} type="button"
                     title={t("newChat")} aria-label={t("newChat")}>
@@ -975,12 +994,7 @@ export const AIWorkspace: React.FC<AIWorkspaceProps> = ({ filters }) => {
             >
               <Search size={18} />
             </button>
-            <RailRecents
-              sessions={sessions}
-              activeId={activeSession?.session_id ?? null}
-              t={t}
-              onOpen={(id) => openSession(id, true)}
-            />
+            <RailRecents t={t} renderHistory={(close) => historyEl(close)} />
           </nav>
         ) : (
         <div className="chat-sidebar-top">
@@ -1012,18 +1026,7 @@ export const AIWorkspace: React.FC<AIWorkspaceProps> = ({ filters }) => {
           <SquarePen size={17} /> {t("newChat")}
         </button>
 
-        <ChatHistory
-          sessions={sessions}
-          folders={folders}
-          activeId={activeSession?.session_id ?? null}
-          t={t}
-          onOpen={(id) => openSession(id, true)}
-          onUpdate={updateSession}
-          onDelete={deleteSession}
-          onCreateFolder={createFolder}
-          onUpdateFolder={updateFolder}
-          onDeleteFolder={deleteFolder}
-        />
+        {sidebarCollapsed ? null : historyEl()}
 
         <ChatSearchDialog
           open={historySearchOpen}
