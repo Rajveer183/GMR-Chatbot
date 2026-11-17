@@ -39,6 +39,7 @@ type ScrollIntent = "none" | "new-response" | "session-open" | "search-hit";
 // "Continue previous analysis": a chat whose last message is older than this opens with a
 // banner saying follow-ups still use its context, plus a one-click re-run on today's data.
 const CONTINUE_AFTER_MS = 30 * 60 * 1000;
+const SHOW_CONTINUE_BANNER = false;
 
 function longDate(iso: string | undefined): string {
   if (!iso) return "";
@@ -746,7 +747,9 @@ export const AIWorkspace: React.FC<AIWorkspaceProps> = ({ filters }) => {
     const msgs = activeSession?.messages ?? [];
     if (!activeSession || !msgs.length || loading || pendingQuery || dismissedBanners.has(activeSession.session_id)) return null;
     const lastAt = msgs[msgs.length - 1].timestamp;
-    const old = lastAt ? Date.now() - new Date(lastAt).getTime() > CONTINUE_AFTER_MS : false;
+    // Disabled for now (17 Nov): the "Continuing from …" / re-run banner is hidden; only the
+    // archived-chat notice still shows. Flip SHOW_CONTINUE_BANNER to bring it back.
+    const old = SHOW_CONTINUE_BANNER && lastAt ? Date.now() - new Date(lastAt).getTime() > CONTINUE_AFTER_MS : false;
     if (!old && !activeSession.archived) return null;
     const lastQuestion = [...msgs].reverse().find((m) => m.role === "user")?.content;
     return { lastAt, lastQuestion, archived: !!activeSession.archived, deleteAt: activeSession.delete_at, old };
