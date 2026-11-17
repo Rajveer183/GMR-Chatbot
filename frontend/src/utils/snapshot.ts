@@ -4,7 +4,7 @@
  * as-is), so it needs no backend call and no query re-run.
  *
  * Tables export the page currently shown; the full table is the CSV / Excel download. */
-import { toPng } from "html-to-image";
+import { getFontEmbedCSS, toBlob, toSvg } from "html-to-image";
 
 /** Controls that make no sense in a saved copy. Other buttons that carry text (e.g. the table's
  * sortable column headers) are kept as plain text -- see stripControls. */
@@ -211,7 +211,11 @@ ${TOOLTIP_SCRIPT}
 </html>`;
 }
 
-function triggerDownload(blob: Blob, filename: string) {
+/** Saves a file through a link click. Browsers trust a download only while the click that asked
+ * for it is still recent (user activation, about 5 s in Chrome); a later one counts as automatic.
+ * A slow PNG is still saved directly (the user asked for no extra click): if Chrome asks once
+ * "Download multiple files?", Allow is remembered for the site. */
+export function triggerDownload(blob: Blob, filename: string) {
   const url = URL.createObjectURL(blob);
   const link = document.createElement("a");
   link.href = url;
@@ -263,24 +267,112 @@ export function printSnapshot(title: string, parts: SnapshotPart[]): Promise<voi
   });
 }
 
-/** A PNG picture of the copy (2x for sharp text). */
-export async function downloadSnapshotPng(title: string, parts: SnapshotPart[]): Promise<void> {
-  const clone = buildClone(title, parts);
+function withTimeout<T>(work: Promise<T>, ms: number, message: string): Promise<T> {
+  let timer = 0;
+  const limit = new Promise<never>((_, reject) => { timer = window.setTimeout(() => reject(new Error(message)), ms); });
+  return Promise.race([work, limit]).finally(() => window.clearTimeout(timer));
+}
+
+/** html-to-image rejects with the bare `error` Event of the <img> it loads its SVG copy into when
+ * the browser refuses that copy -- no message at all. Name what failed instead. */
+function describe(err: unknown): string {
+  if (typeof Event !== "undefined" && err instanceof Event) return `the browser refused the page copy (image ${err.type})`;
+  if (err instanceof Error) return err.message || err.name;
+  return String(err || "unknown error");
+}
+
+const XML_NAME = /^[A-Za-z_][\w.-]*$/;
+const XML_KEEP = new Set(["xlink:href", "xml:space", "xml:lang", "xmlns:xlink"]);
+const FOREIGN_TAGS = new Set(["IFRAME", "VIDEO", "AUDIO", "OBJECT", "EMBED", "CANVAS"]);
+
+/** Makes the copy safe to put in an SVG image: drops what does not belong to the answer (elements a
+ * browser extension adds, custom / shadow-DOM elements, embedded media) and attributes that are not
+ * plain XML names (ApexCharts' `data:realIndex`, extension markers), any of which can make the
+ * browser reject the whole image. Only the picture uses this; the screen is untouched. */
+function sanitiseForImage(root: HTMLElement) {
+  root.querySelectorAll("*").forEach((el) => {
+    if (FOREIGN_TAGS.has(el.tagName.toUpperCase()) || el.tagName.includes("-")) {
+      el.remove();
+      return;
+    }
+    for (const attr of Array.from(el.attributes)) {
+      if (!XML_NAME.test(attr.name) && !XML_KEEP.has(attr.name)) el.removeAttribute(attr.name);
+    }
+  });
+}
+
+/** Why the copy cannot be drawn, for the error message and the console: whether the SVG
+ * html-to-image builds is well-formed, and how big it is. */
+async function diagnose(node: HTMLElement): Promise<string> {
+  try {
+    const url = await toSvg(node, { skipFonts: true });
+    const svg = decodeURIComponent(url.slice(url.indexOf(",") + 1));
+    const parseError = new DOMParser().parseFromString(svg, "image/svg+xml").querySelector("parsererror");
+    const size = `${(svg.length / 1_048_576).toFixed(1)} MB`;
+    console.error("[ui] PNG export diagnosis:", { size, parseError: parseError?.textContent ?? null, svgStart: svg.slice(0, 400) });
+    return parseError ? `invalid markup in the page copy (${parseError.textContent?.trim().split("\n")[0].slice(0, 160)})` : `page copy ${size}`;
+  } catch (err) {
+    return `copy could not be built: ${describe(err)}`;
+  }
+}
+
+let fontCss: Promise<string> | null = null;
+
+/** The page's web fonts as embeddable CSS (each font file fetched and inlined). The same for every
+ * export, so it is built once per page load -- the export menu starts it when it opens, and a
+ * PNG export then skips the slowest step. Empty when the fonts cannot be fetched (the picture is
+ * then drawn with the fallback font); a failure is retried on the next export. */
+export function prepareSnapshotFonts(): Promise<string> {
+  if (!fontCss) {
+    fontCss = withTimeout(getFontEmbedCSS(document.body), 15_000, "timed out").catch((err) => {
+      console.warn("[ui] PNG export: web font not embedded:", describe(err));
+      fontCss = null;
+      return "";
+    });
+  }
+  return fontCss;
+}
+
+type PngOptions = Parameters<typeof toBlob>[1];
+
+/** A PNG picture of the copy (2x for sharp text; html-to-image scales a very long chat down to
+ * the browser's canvas limit). Returns the file; the caller saves it (triggerDownload).
+ *
+ * The copy is cleaned first (sanitiseForImage): a browser extension's attribute in the page made
+ * every uncleaned attempt fail, and cleaning changes nothing visible. Tried in turn, stopping at
+ * the first that works: with the web font; without it; at 1x. If none works the error says which
+ * step failed and why (see diagnose). */
+export async function renderSnapshotPng(title: string, parts: SnapshotPart[]): Promise<{ blob: Blob; filename: string }> {
+  const fonts = await prepareSnapshotFonts();
   const holder = document.createElement("div");
   Object.assign(holder.style, { position: "fixed", left: "-100000px", top: "0", pointerEvents: "none" });
-  holder.appendChild(clone);
   document.body.appendChild(holder);
+  const background = getComputedStyle(document.body).getPropertyValue("--page-bg").trim() || "#f8fafc";
+  const clone = buildClone(title, parts);
+  sanitiseForImage(clone);
+  holder.appendChild(clone);
+  const attempts: [string, PngOptions][] = [
+    ...(fonts ? [["with font", { pixelRatio: 2, backgroundColor: background, fontEmbedCSS: fonts }] as [string, PngOptions]] : []),
+    ["without font", { pixelRatio: 2, backgroundColor: background, skipFonts: true }],
+    ["at 1x", { pixelRatio: 1, backgroundColor: background, skipFonts: true }],
+  ];
+  const failures: string[] = [];
   try {
-    const background = getComputedStyle(document.body).getPropertyValue("--page-bg").trim() || "#f8fafc";
-    let dataUrl: string;
-    try {
-      dataUrl = await toPng(clone, { pixelRatio: 2, backgroundColor: background, cacheBust: true });
-    } catch {
-      // Web-font embedding can fail (offline / blocked); the picture is still right without it.
-      dataUrl = await toPng(clone, { pixelRatio: 2, backgroundColor: background, skipFonts: true });
+    for (const [label, options] of attempts) {
+      try {
+        const blob = await withTimeout(toBlob(clone, options), 45_000, "timed out");
+        if (blob && blob.size) {
+          if (failures.length) console.warn("[ui] PNG export recovered:", label, "after", failures);
+          return { blob, filename: snapshotFilename(title, "png") };
+        }
+        failures.push(`${label}: empty image (too large for the browser)`);
+      } catch (err) {
+        console.error(`[ui] PNG export attempt failed (${label}):`, err);
+        failures.push(`${label}: ${describe(err)}`);
+      }
     }
-    const blob = await (await fetch(dataUrl)).blob();
-    triggerDownload(blob, snapshotFilename(title, "png"));
+    const why = await diagnose(clone);
+    throw new Error(`Could not draw the image -- ${why}. Tried: ${failures.join("; ")}.`);
   } finally {
     holder.remove();
   }

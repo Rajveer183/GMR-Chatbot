@@ -3856,3 +3856,40 @@ button {
     opacity: 1;
   }
 }
+
+/* PNG export progress / failure (AIWorkspace exportNotice). Fixed at the top
+   of the screen so it is seen wherever the chat is scrolled. */
+.export-notice {
+  position: fixed;
+  top: 16px;
+  left: 50%;
+  transform: translateX(-50%);
+  z-index: var(--z-modal);
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  max-width: min(560px, calc(100vw - 32px));
+  padding: 10px 12px 10px 16px;
+  background: var(--card-bg);
+  color: var(--text-main);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-md);
+  box-shadow: var(--shadow-float);
+  font-size: 14px;
+}
+.export-notice.error {
+  background: var(--danger-soft);
+  border-color: #fecaca;
+  color: #991b1b;
+}
+.export-notice-close {
+  border: 0;
+  background: transparent;
+  color: inherit;
+  font-size: 18px;
+  line-height: 1;
+  padding: 2px 4px;
+  cursor: pointer;
+  opacity: .7;
+}
+.export-notice-close:hover { opacity: 1; }

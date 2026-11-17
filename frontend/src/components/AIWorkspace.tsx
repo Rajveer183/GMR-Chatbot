@@ -17,7 +17,7 @@ import { DataSourcesPanel } from "./DataSourcesPanel";
 import { ChatInput } from "./ChatInput";
 import type { ChatInputHandle } from "./ChatInput";
 import gmrLogo from "../assets/gmr_logo.png";
-import { downloadSnapshotHtml, downloadSnapshotPng, printSnapshot } from "../utils/snapshot";
+import { downloadSnapshotHtml, prepareSnapshotFonts, printSnapshot, renderSnapshotPng, triggerDownload } from "../utils/snapshot";
 import type { SnapshotPart } from "../utils/snapshot";
 
 const LOADING_STATUS_MESSAGES = [
@@ -137,6 +137,10 @@ export const AIWorkspace: React.FC<AIWorkspaceProps> = ({ filters }) => {
   const [sessions, setSessions] = useState<SessionSummary[]>([]);
   const [activeSession, setActiveSession] = useState<SessionDetail | null>(null);
   const [error, setError] = useState("");
+  /** PNG export progress, shown in a fixed notice so it is seen wherever the chat is scrolled. */
+  const [exportNotice, setExportNotice] = useState<
+    { kind: "working" } | { kind: "error"; text: string } | null
+  >(null);
   const [pendingQuery, setPendingQuery] = useState<string | null>(null);
   const [loadingStatus, setLoadingStatus] = useState<string | null>(null);
   // Streaming answer in progress: the server's live status line, and the
@@ -595,13 +599,24 @@ export const AIWorkspace: React.FC<AIWorkspaceProps> = ({ filters }) => {
     if (!parts.length) return;
     // Let the menu close first so it is not in the copy.
     window.setTimeout(() => {
-      const run =
-        format === "png" ? downloadSnapshotPng(title, parts)
-        : format === "pdf" ? printSnapshot(title, parts)
-        : Promise.resolve(downloadSnapshotHtml(title, parts));
+      if (format === "png") {
+        // Drawing the image takes a second or more; it is saved as soon as it is ready.
+        setExportNotice({ kind: "working" });
+        renderSnapshotPng(title, parts)
+          .then(({ blob, filename }) => {
+            triggerDownload(blob, filename);
+            setExportNotice(null);
+          })
+          .catch((err: any) => {
+            console.error("[ui] export failed:", err);
+            setExportNotice({ kind: "error", text: err?.message || "Export failed" });
+          });
+        return;
+      }
+      const run = format === "pdf" ? printSnapshot(title, parts) : Promise.resolve(downloadSnapshotHtml(title, parts));
       run.catch((err: any) => {
         console.error("[ui] export failed:", err);
-        setError(err?.message || "Export failed");
+        setExportNotice({ kind: "error", text: err?.message || "Export failed" });
       });
     }, 0);
   };
@@ -896,7 +911,7 @@ export const AIWorkspace: React.FC<AIWorkspaceProps> = ({ filters }) => {
                 <button
                   type="button"
                   className="summary-audio-btn"
-                  onClick={() => setExportOpen((o) => !o)}
+                  onClick={() => { void prepareSnapshotFonts(); setExportOpen((o) => !o); }}
                   aria-expanded={exportOpen}
                   title={t("exportTitle")}
                 >
@@ -1058,7 +1073,7 @@ export const AIWorkspace: React.FC<AIWorkspaceProps> = ({ filters }) => {
                               <button
                                 type="button"
                                 className="answer-action-btn"
-                                onClick={() => setAnswerExportOpen((o) => (o === msg.id ? null : msg.id))}
+                                onClick={() => { void prepareSnapshotFonts(); setAnswerExportOpen((o) => (o === msg.id ? null : msg.id)); }}
                                 aria-expanded={answerExportOpen === msg.id}
                                 title={t("exportAnswerTitle")}
                               >
@@ -1159,6 +1174,19 @@ export const AIWorkspace: React.FC<AIWorkspaceProps> = ({ filters }) => {
         </div>
 
         {isEmptyChat ? null : composer(false)}
+        {exportNotice ? (
+          <div className={`export-notice ${exportNotice.kind}`} role="status" aria-live="polite">
+            {exportNotice.kind === "working" ? (
+              <span>{t("exportPreparing")}</span>
+            ) : (
+              <span><strong>{t("exportFailed")}</strong> {exportNotice.text}</span>
+            )}
+            {exportNotice.kind !== "working" ? (
+              <button type="button" className="export-notice-close" aria-label={t("exportDismiss")} title={t("exportDismiss")}
+                      onClick={() => setExportNotice(null)}>×</button>
+            ) : null}
+          </div>
+        ) : null}
         <ArchivedChatsDialog
           open={showArchivedDialog}
           sessions={sessions}
