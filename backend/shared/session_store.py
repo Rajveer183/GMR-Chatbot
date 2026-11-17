@@ -42,7 +42,7 @@ import os
 import threading
 import time
 import uuid
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from typing import Any
 
 from shared import config, redis_client
@@ -51,6 +51,11 @@ log = logging.getLogger(__name__)
 
 # Changes within this window share one write (a question and its answer).
 _WRITE_DELAY_SECONDS = 0.5
+
+# An archived chat that is not unarchived (or continued) within this many days is deleted.
+ARCHIVE_RETENTION_DAYS = int(os.environ.get("GMR_ARCHIVE_RETENTION_DAYS", "30"))
+# How often list_sessions sweeps for expired archived chats.
+_PURGE_INTERVAL_SECONDS = 3600
 
 
 def _now() -> str:
@@ -75,6 +80,7 @@ class SessionStore:
         self._dirty: set[str] = set()
         self._pending = threading.Event()
         self._writer: threading.Thread | None = None
+        self._last_purge = 0.0
         os.makedirs(os.path.dirname(path), exist_ok=True)
         if not os.path.exists(path):
             self._write_file(json.dumps({"sessions": []}))
@@ -222,7 +228,45 @@ class SessionStore:
             "last_question": "",
         }
 
+    def purge_expired_archives(self, now: datetime | None = None) -> list[str]:
+        """Delete archived chats archived more than ARCHIVE_RETENTION_DAYS ago; returns their ids.
+        An archived chat with no archived_at (archived before the date was kept) starts its
+        30 days now rather than being deleted on sight."""
+        now = now or datetime.now(timezone.utc)
+        cutoff = now - timedelta(days=ARCHIVE_RETENTION_DAYS)
+        expired: list[str] = []
+        with self._lock:
+            data = self._read()
+            keep = []
+            for s in data["sessions"]:
+                if s.get("archived"):
+                    if not s.get("archived_at"):
+                        s["archived_at"] = now.isoformat()
+                        self._dirty.add(s["session_id"])
+                    else:
+                        try:
+                            at = datetime.fromisoformat(s["archived_at"])
+                        except (TypeError, ValueError):
+                            at = now
+                        if at.tzinfo is None:
+                            at = at.replace(tzinfo=timezone.utc)
+                        if at <= cutoff:
+                            expired.append(s["session_id"])
+                            continue
+                keep.append(s)
+            if expired or self._dirty:
+                data["sessions"] = keep
+                self._write(data, "")
+            self._last_purge = time.monotonic()
+        for sid in expired:
+            redis_client.delete(self._mirror_key(sid))
+        if expired:
+            log.info("Deleted %d archived chat(s) older than %d days.", len(expired), ARCHIVE_RETENTION_DAYS)
+        return expired
+
     def list_sessions(self) -> list[dict]:
+        if time.monotonic() - self._last_purge > _PURGE_INTERVAL_SECONDS or not self._last_purge:
+            self.purge_expired_archives()
         with self._lock:
             data = self._read()
             sessions = sorted(
@@ -245,6 +289,8 @@ class SessionStore:
                         "last_question": self._last_question(session),
                         "pinned": bool(session.get("pinned")),
                         "archived": bool(session.get("archived")),
+                        "archived_at": session.get("archived_at"),
+                        "delete_at": self._delete_at(session),
                         "folder_id": session.get("folder_id"),
                     }
         return None
@@ -276,6 +322,10 @@ class SessionStore:
                         else:
                             session.pop("pinned_at", None)
                     if "archived" in changes:
+                        if changes["archived"] and not session.get("archived"):
+                            session["archived_at"] = _now()  # starts the auto-delete clock
+                        elif not changes["archived"]:
+                            session.pop("archived_at", None)
                         session["archived"] = bool(changes["archived"])
                     self._write(data, session_id)
                     return self._summarize(session)
@@ -431,6 +481,7 @@ class SessionStore:
                     session["updated_at"] = _now()
                     if role == "user" and session.get("archived"):
                         session["archived"] = False  # continuing an archived chat restores it
+                        session.pop("archived_at", None)
                     # Name a brand-new session after its first question so the
                     # sidebar isn't a wall of "New Session".
                     if role == "user" and session.get("session_name") in (
@@ -523,5 +574,18 @@ class SessionStore:
             "pinned": bool(session.get("pinned")),
             "pinned_at": session.get("pinned_at"),
             "archived": bool(session.get("archived")),
+            "archived_at": session.get("archived_at"),
+            "delete_at": self._delete_at(session),
             "folder_id": session.get("folder_id"),
         }
+
+    @staticmethod
+    def _delete_at(session: dict) -> str | None:
+        """When an archived chat will be auto-deleted (None when it is not archived)."""
+        if not session.get("archived") or not session.get("archived_at"):
+            return None
+        try:
+            at = datetime.fromisoformat(session["archived_at"])
+        except (TypeError, ValueError):
+            return None
+        return (at + timedelta(days=ARCHIVE_RETENTION_DAYS)).isoformat()

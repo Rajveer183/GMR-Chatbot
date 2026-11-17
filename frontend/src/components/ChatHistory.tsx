@@ -27,10 +27,12 @@ interface ChatHistoryProps {
   /** Rename and/or pin a folder. */
   onUpdateFolder: (folderId: string, patch: { name?: string; pinned?: boolean }) => Promise<void>;
   onDeleteFolder: (folderId: string) => Promise<void>;
+  /** The search box shows only while open (the sidebar header's search icon), like ChatGPT. */
+  searchOpen: boolean;
+  onSearchClose: () => void;
 }
 
 const OPEN_FOLDERS_KEY = "gmr-chat.openFolders";
-const SHOW_ARCHIVED_KEY = "gmr-chat.showArchived";
 const CLOSED_SECTIONS_KEY = "gmr-chat.closedSections";
 
 type Section = "pinned" | "folders";
@@ -105,8 +107,17 @@ interface MenuState {
 
 export const ChatHistory: React.FC<ChatHistoryProps> = ({
   sessions, folders, activeId, t, onOpen, onUpdate, onDelete, onCreateFolder, onUpdateFolder, onDeleteFolder,
+  searchOpen, onSearchClose,
 }) => {
   const [query, setQuery] = useState("");
+  const searchRef = useRef<HTMLInputElement>(null);
+  useEffect(() => {
+    if (searchOpen) searchRef.current?.focus();
+  }, [searchOpen]);
+  const closeSearch = () => {
+    setQuery("");
+    onSearchClose();
+  };
   const [hits, setHits] = useState<SessionSearchHit[] | null>(null);
   const [searching, setSearching] = useState(false);
   const [renamingId, setRenamingId] = useState<string | null>(null);
@@ -118,7 +129,6 @@ export const ChatHistory: React.FC<ChatHistoryProps> = ({
   const [newFolderFor, setNewFolderFor] = useState<string | null | undefined>(undefined); // undefined = closed; string = move that chat in
   const [newFolderName, setNewFolderName] = useState("");
   const [openFolders, setOpenFolders] = useState<string[]>(() => readJSON<string[]>(OPEN_FOLDERS_KEY, []));
-  const [showArchived, setShowArchived] = useState<boolean>(() => readJSON<boolean>(SHOW_ARCHIVED_KEY, false));
   const [closedSections, setClosedSections] = useState<Section[]>(() => readJSON<Section[]>(CLOSED_SECTIONS_KEY, []));
   const sectionOpen = (s: Section) => !closedSections.includes(s);
   const toggleSection = (s: Section) =>
@@ -198,13 +208,8 @@ export const ChatHistory: React.FC<ChatHistoryProps> = ({
       return next;
     });
 
-  const toggleArchived = () =>
-    setShowArchived((v) => {
-      writeJSON(SHOW_ARCHIVED_KEY, !v);
-      return !v;
-    });
-
-  const { pinned, byFolder, recent, archived } = useMemo(() => {
+  // Archived chats are not listed here -- they open from the profile menu (ProfileMenu.tsx).
+  const { pinned, byFolder, recent } = useMemo(() => {
     const live = sessions.filter((s) => !s.archived);
     const folderIds = new Set(folders.map((f) => f.folder_id));
     // A pinned chat that is in a folder is listed in both places -- it is the same chat,
@@ -224,7 +229,6 @@ export const ChatHistory: React.FC<ChatHistoryProps> = ({
       pinned,
       byFolder,
       recent: live.filter((s) => !s.pinned && !(s.folder_id && folderIds.has(s.folder_id))),
-      archived: sessions.filter((s) => s.archived),
     };
   }, [sessions, folders]);
 
@@ -477,22 +481,23 @@ export const ChatHistory: React.FC<ChatHistoryProps> = ({
 
   return (
     <div className="chat-history">
+      {searchOpen || query ? (
       <div className="chat-session-search">
         <Search size={13} />
         <input
+          ref={searchRef}
           type="text"
           value={query}
           onChange={(e) => setQuery(e.target.value)}
-          onKeyDown={(e) => e.key === "Escape" && setQuery("")}
+          onKeyDown={(e) => e.key === "Escape" && (query ? setQuery("") : closeSearch())}
           placeholder={t("searchHistory")}
           aria-label={t("searchHistory")}
         />
-        {query ? (
-          <button type="button" className="chat-session-search-clear" onClick={() => setQuery("")} aria-label={t("clearSearch")} title={t("clearSearch")}>
-            <X size={12} />
-          </button>
-        ) : null}
+        <button type="button" className="chat-session-search-clear" onClick={closeSearch} aria-label={t("clearSearch")} title={t("clearSearch")}>
+          <X size={12} />
+        </button>
       </div>
+      ) : null}
 
       <div className="chat-sessions-list">
         {q ? (
@@ -555,12 +560,6 @@ export const ChatHistory: React.FC<ChatHistoryProps> = ({
               {recent.length === 0 ? <div className="chat-section-empty">{t("noSessions")}</div> : recent.map((s) => renderItem(s))}
             </section>
 
-            {archived.length ? (
-              <section className="chat-section">
-                <SectionHead label={t("archivedChats", { n: archived.length })} open={showArchived} onToggle={toggleArchived} />
-                {showArchived ? archived.map((s) => renderItem(s)) : null}
-              </section>
-            ) : null}
           </>
         )}
       </div>

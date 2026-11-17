@@ -63,9 +63,10 @@ const en = {
   askPlaceholder: "Ask anything about your data... (e.g., 'What percentage of supplied meters has been installed?')",
   micOn: "Turn mic on",
   micOff: "Turn mic off",
-  confirmDelete: "Confirm Delete",
-  deleteMessage: "Delete the session \"{name}\"? This action cannot be undone.",
+  confirmDelete: "Delete chat?",
+  deleteMessage: "This will permanently delete \"{name}\". This can't be undone.",
   del: "Delete",
+  delChat: "Delete chat",
   cancel: "Cancel",
   // progress (backend status messages and the fallback rotation)
   st_understanding: "Understanding your question",
@@ -149,6 +150,16 @@ const en = {
   rerunLatest: "Re-run last question on latest data",
   archivedBanner: "This chat is archived. Asking a question brings it back to Recent.",
   dismiss: "Dismiss",
+  // profile menu + archived chats
+  profile: "Profile",
+  archivedChatsTitle: "Archived chats",
+  archivedChatsHint: "Archived chats are deleted automatically {days} days after archiving unless you unarchive them.",
+  noArchived: "You have no archived chats.",
+  archivedOn: "Archived {date}",
+  deletesIn: "deletes in {n} days",
+  deletesInOne: "deletes tomorrow",
+  deletesToday: "deletes today",
+  archivedBannerExpiry: "Unless it is unarchived, it will be deleted on {date}.",
 };
 
 export type UIKey = keyof typeof en;

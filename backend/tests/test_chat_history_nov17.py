@@ -171,3 +171,46 @@ def test_api_pin_folder(tmp_path, monkeypatch):
     r = c.patch(f"/api/folders/{fid}", json={"name": "KPI pack"}).json()
     assert r["name"] == "KPI pack" and r["pinned"] is True
     assert c.patch("/api/folders/nope", json={"pinned": True}).status_code == 404
+
+
+# -- archived chats auto-delete after ARCHIVE_RETENTION_DAYS (17 Nov) --------------------
+
+def test_archive_sets_and_clears_archived_at(store):
+    sid = store.create_session("a")["session_id"]
+    out = store.patch_session(sid, archived=True)
+    assert out["archived_at"] and out["delete_at"]
+    out = store.patch_session(sid, archived=False)
+    assert out["archived_at"] is None and out["delete_at"] is None
+
+
+def test_continuing_archived_chat_clears_clock(store):
+    sid = store.create_session("a")["session_id"]
+    store.patch_session(sid, archived=True)
+    store.append_message(sid, role="user", content="hi")
+    s = store.get_session(sid)
+    assert not s["archived"] and s["archived_at"] is None
+
+
+def test_purge_deletes_only_expired_archives(store):
+    from datetime import datetime, timedelta, timezone
+    from shared.session_store import ARCHIVE_RETENTION_DAYS
+    old = store.create_session("old")["session_id"]
+    fresh = store.create_session("fresh")["session_id"]
+    live = store.create_session("live")["session_id"]
+    legacy = store.create_session("legacy")["session_id"]
+    store.patch_session(old, archived=True)
+    store.patch_session(fresh, archived=True)
+    store.patch_session(legacy, archived=True)
+    with store._lock:
+        for s in store._read()["sessions"]:
+            if s["session_id"] == old:
+                s["archived_at"] = (datetime.now(timezone.utc) - timedelta(days=ARCHIVE_RETENTION_DAYS + 1)).isoformat()
+            if s["session_id"] == legacy:
+                s.pop("archived_at")
+    assert store.purge_expired_archives() == [old]
+    ids = {s["session_id"] for s in store.list_sessions()}
+    assert ids == {fresh, live, legacy}
+    assert store.get_session(legacy)["archived_at"]  # legacy archive starts its clock now
+    store.flush()
+    again = type(store)(store.path)
+    assert {s["session_id"] for s in again.list_sessions()} == {fresh, live, legacy}

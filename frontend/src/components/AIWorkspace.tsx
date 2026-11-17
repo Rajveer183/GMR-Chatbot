@@ -1,5 +1,5 @@
 import React, { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { Menu, Plus, Pencil, X, User, Bot, Database, Download, History, RefreshCw, ArchiveRestore } from "lucide-react";
+import { PanelLeft, Search, SquarePen, Pencil, X, User, Bot, Database, Download, History, RefreshCw, ArchiveRestore } from "lucide-react";
 import { apiClient, QueryStoppedError } from "../api/client";
 import type { FeedbackRating } from "../api/client";
 import type { AIQueryResponse, AIStreamEvent, ChatFolder, DatasetSummary, FilterRequest, SessionPatch, SessionSummary, SessionDetail, SessionMessage, TranslatedAnswer } from "../api/client";
@@ -11,6 +11,7 @@ import { LoadingStatus } from "./LoadingStatus";
 import { TypingIndicator } from "./TypingIndicator";
 import { ConfirmDialog } from "./ConfirmDialog";
 import { ChatHistory } from "./ChatHistory";
+import { ArchivedChatsDialog, ProfileMenu } from "./ProfileMenu";
 import { EmptyState } from "./EmptyState";
 import { DataSourcesPanel } from "./DataSourcesPanel";
 import { ChatInput } from "./ChatInput";
@@ -152,6 +153,8 @@ export const AIWorkspace: React.FC<AIWorkspaceProps> = ({ filters }) => {
     sessionId: null,
     sessionName: null,
   });
+  const [showArchivedDialog, setShowArchivedDialog] = useState(false);
+  const [historySearchOpen, setHistorySearchOpen] = useState(false);
   const [datasets, setDatasets] = useState<DatasetSummary[]>([]);
   const chatMessagesRef = useRef<HTMLDivElement>(null);
   const chatThreadRef = useRef<HTMLDivElement>(null);
@@ -639,7 +642,15 @@ export const AIWorkspace: React.FC<AIWorkspaceProps> = ({ filters }) => {
       setSessions((prev) => prev.map((s) => (s.session_id === sessionId ? { ...s, ...updated } : s)));
       setActiveSession((prev) =>
         prev && prev.session_id === sessionId
-          ? { ...prev, session_name: updated.session_name, pinned: updated.pinned, archived: updated.archived, folder_id: updated.folder_id }
+          ? {
+              ...prev,
+              session_name: updated.session_name,
+              pinned: updated.pinned,
+              archived: updated.archived,
+              archived_at: updated.archived_at,
+              delete_at: updated.delete_at,
+              folder_id: updated.folder_id,
+            }
           : prev
       );
       await Promise.all([loadSessions(), patch.folder_id !== undefined ? loadFolders() : Promise.resolve()]);
@@ -738,7 +749,7 @@ export const AIWorkspace: React.FC<AIWorkspaceProps> = ({ filters }) => {
     const old = lastAt ? Date.now() - new Date(lastAt).getTime() > CONTINUE_AFTER_MS : false;
     if (!old && !activeSession.archived) return null;
     const lastQuestion = [...msgs].reverse().find((m) => m.role === "user")?.content;
-    return { lastAt, lastQuestion, archived: !!activeSession.archived, old };
+    return { lastAt, lastQuestion, archived: !!activeSession.archived, deleteAt: activeSession.delete_at, old };
   })();
   const dismissBanner = () =>
     activeSession && setDismissedBanners((prev) => new Set(prev).add(activeSession.session_id));
@@ -749,6 +760,9 @@ export const AIWorkspace: React.FC<AIWorkspaceProps> = ({ filters }) => {
         <strong>
           {continueBanner.archived ? t("archivedBanner") : t("continueTitle", { when: longDate(continueBanner.lastAt) })}
         </strong>
+        {continueBanner.archived && continueBanner.deleteAt ? (
+          <span>{t("archivedBannerExpiry", { date: longDate(continueBanner.deleteAt) })}</span>
+        ) : null}
         {continueBanner.old ? <span>{t("continueBody")}</span> : null}
       </div>
       <div className="chat-continue-actions">
@@ -799,25 +813,35 @@ export const AIWorkspace: React.FC<AIWorkspaceProps> = ({ filters }) => {
         <div className="chat-sidebar-top">
           <img className="chat-brand-logo" src={gmrLogo} alt="GMR" />
           <button
-            className="chat-icon-btn chat-sidebar-toggle"
+            className="chat-sidebar-icon chat-sidebar-search-btn"
+            type="button"
+            onClick={() => setHistorySearchOpen((v) => !v)}
+            aria-pressed={historySearchOpen}
+            aria-label={t("searchHistory")}
+            title={t("searchHistory")}
+          >
+            <Search size={18} />
+          </button>
+          <button
+            className="chat-sidebar-icon chat-sidebar-toggle"
             type="button"
             onClick={toggleSidebar}
             aria-expanded={!sidebarCollapsed}
             aria-label={t(sidebarCollapsed ? "showSidebar" : "hideSidebar")}
             title={t(sidebarCollapsed ? "showSidebar" : "hideSidebar")}
           >
-            <Menu size={14} />
+            <PanelLeft size={18} />
           </button>
         </div>
         {sidebarCollapsed ? (
-          <button className="chat-icon-btn chat-sidebar-rail-btn" onClick={createNewSession} type="button"
+          <button className="chat-sidebar-icon chat-sidebar-rail-btn" onClick={createNewSession} type="button"
                   title={t("newChat")} aria-label={t("newChat")}>
-            <Plus size={14} />
+            <SquarePen size={18} />
           </button>
         ) : null}
 
         <button className="chat-new-btn" onClick={createNewSession} type="button">
-          <Plus size={14} /> {t("newChat")}
+          <SquarePen size={17} /> {t("newChat")}
         </button>
 
         <ChatHistory
@@ -831,14 +855,15 @@ export const AIWorkspace: React.FC<AIWorkspaceProps> = ({ filters }) => {
           onCreateFolder={createFolder}
           onUpdateFolder={updateFolder}
           onDeleteFolder={deleteFolder}
+          searchOpen={historySearchOpen}
+          onSearchClose={() => setHistorySearchOpen(false)}
         />
 
-        <div className="chat-sidebar-footer">
-          <div className="role">
-            {uiLang === "en" ? `${datasets.length} file${datasets.length === 1 ? "" : "s"} loaded` : t("filesLoaded", { n: datasets.length })}
-          </div>
-          <div className="subrole">{t("refreshedAuto")}</div>
-        </div>
+        <ProfileMenu
+          archivedCount={sessions.filter((s) => s.archived).length}
+          t={t}
+          onOpenArchived={() => setShowArchivedDialog(true)}
+        />
       </aside>
 
       <main className="chat-main">
@@ -854,7 +879,6 @@ export const AIWorkspace: React.FC<AIWorkspaceProps> = ({ filters }) => {
             </p>
           </div>
           <div className="chat-header-controls">
-            <span className="chat-active-badge">{t("activeSession")}</span>
             <button
               type="button"
               className="summary-audio-btn"
@@ -1132,11 +1156,21 @@ export const AIWorkspace: React.FC<AIWorkspaceProps> = ({ filters }) => {
         </div>
 
         {isEmptyChat ? null : composer(false)}
+        <ArchivedChatsDialog
+          open={showArchivedDialog}
+          sessions={sessions}
+          t={t}
+          blocked={confirmDelete.open}
+          onClose={() => setShowArchivedDialog(false)}
+          onOpenChat={(id) => openSession(id, true)}
+          onUnarchive={(id) => updateSession(id, { archived: false })}
+          onDelete={deleteSession}
+        />
         <ConfirmDialog
           open={confirmDelete.open}
           title={t("confirmDelete")}
           message={t("deleteMessage", { name: confirmDelete.sessionName ?? "this chat" })}
-          confirmLabel={t("del")}
+          confirmLabel={t("delChat")}
           cancelLabel={t("cancel")}
           onCancel={cancelDeleteSession}
           onConfirm={() => confirmDeleteSession(confirmDelete.sessionId)}

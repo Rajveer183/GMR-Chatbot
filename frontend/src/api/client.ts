@@ -379,6 +379,9 @@ export interface SessionSummary {
   pinned?: boolean;
   pinned_at?: string | null;
   archived?: boolean;
+  /** when it was archived; the backend deletes it at delete_at (30 days later) unless unarchived */
+  archived_at?: string | null;
+  delete_at?: string | null;
   folder_id?: string | null;
 }
 
@@ -414,6 +417,8 @@ export interface SessionDetail {
   last_question?: string;
   pinned?: boolean;
   archived?: boolean;
+  archived_at?: string | null;
+  delete_at?: string | null;
   folder_id?: string | null;
 }
 
