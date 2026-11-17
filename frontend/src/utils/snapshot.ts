@@ -46,8 +46,9 @@ function stripControls(clone: HTMLElement) {
   });
 }
 
-/** A detached copy: header + cloned content, controls removed, at the on-screen width. */
-function buildClone(title: string, parts: SnapshotPart[]): HTMLElement {
+/** A detached copy: header + cloned content, controls removed, at the on-screen width. Chart
+ * hover data is kept only for the HTML page (`withTips`); a picture or a print cannot hover. */
+function buildClone(title: string, parts: SnapshotPart[], withTips = false): HTMLElement {
   const width = Math.max(...parts.map((p) => p.node.getBoundingClientRect().width), 640);
   const root = document.createElement("div");
   root.className = "snapshot-root";
@@ -73,6 +74,7 @@ function buildClone(title: string, parts: SnapshotPart[]): HTMLElement {
     }
     const clone = part.node.cloneNode(true) as HTMLElement;
     stripControls(clone);
+    if (!withTips) clone.querySelectorAll("[data-chart-tip]").forEach((el) => el.removeAttribute("data-chart-tip"));
     root.appendChild(clone);
   }
   return root;
@@ -95,8 +97,92 @@ function collectCss(): string {
   return [...imports, ...rules].join("\n");
 }
 
-function buildHtml(title: string, parts: SnapshotPart[]): string {
-  const clone = buildClone(title, parts);
+/** The saved page's chart tooltips. The live ones are drawn by ApexCharts on mouse move, and the
+ * saved page has no chart library, so this shows the figures the chart wrapper carries as JSON
+ * (`data-chart-tip`, built by components/charts/exportTip.ts). The hovered point is the mark under
+ * the mouse (bar, slice, heatmap cell, which ApexCharts tags with its data index `j`), or, on
+ * line / area / column charts, the category nearest the mouse across the plot. The plot's size is
+ * read from the chart's own clip rectangle (`gridRectMask`): its width is the grid width + 4 +
+ * stroke, offset by -(stroke / 2 + 2). */
+const TOOLTIP_SCRIPT = `(function () {
+  var tip = document.createElement("div");
+  tip.className = "snapshot-tip";
+  tip.style.display = "none";
+  document.body.appendChild(tip);
+  function esc(s) { return String(s).replace(/&/g, "&amp;").replace(/</g, "&lt;"); }
+  function hide() { tip.style.display = "none"; }
+  function attr(el, name) { return el.getAttribute(name) != null ? el.getAttribute(name) : el.getAttribute(name.toLowerCase()); }
+  function seriesIndexOf(mark) {
+    var group = mark.closest(".apexcharts-series");
+    var v = group ? attr(group, "data:realIndex") : null;
+    if (v == null) v = mark.getAttribute("i");
+    return v == null ? 0 : parseInt(v, 10) || 0;
+  }
+  function plotIndex(host, data, ev) {
+    var inner = host.querySelector(".apexcharts-inner");
+    var clip = host.querySelector('clipPath[id^="gridRectMask"] rect');
+    if (!inner || !clip || !inner.getScreenCTM()) return -1;
+    var x = parseFloat(clip.getAttribute("x")) || 0, y = parseFloat(clip.getAttribute("y")) || 0;
+    var w = (parseFloat(clip.getAttribute("width")) || 0) + 2 * x;
+    var h = (parseFloat(clip.getAttribute("height")) || 0) + 2 * y;
+    var svg = inner.ownerSVGElement, pt = svg.createSVGPoint();
+    pt.x = ev.clientX; pt.y = ev.clientY;
+    var p = pt.matrixTransform(inner.getScreenCTM().inverse());
+    var n = data.cats.length;
+    var pad = 10;  // the end points' markers sit on the plot edge and spill past it
+    if (w <= 0 || n === 0 || p.x < -pad || p.x > w + pad || p.y < -pad || p.y > h + pad) return -1;
+    var px = Math.max(0, Math.min(w, p.x));
+    if (data.mode === "on") return n === 1 ? 0 : Math.round(px / (w / (n - 1)));
+    return Math.min(n - 1, Math.floor(px / (w / n)));
+  }
+  function row(s, j) {
+    var dot = s.color ? '<span class="snapshot-tip-dot" style="background:' + esc(s.color) + '"></span>' : "";
+    var name = s.name ? esc(s.name) + ": " : "";
+    return '<div class="snapshot-tip-row">' + dot + name + "<b>" + esc(s.values[j]) + "</b></div>";
+  }
+  function show(ev) {
+    var host = ev.target.closest && ev.target.closest("[data-chart-tip]");
+    if (!host) return hide();
+    var data;
+    try { data = JSON.parse(host.getAttribute("data-chart-tip")); } catch (e) { return hide(); }
+    var html = "";
+    if (data.mode === "on" || data.mode === "between") {
+      var j = plotIndex(host, data, ev);
+      if (j < 0) return hide();
+      html = data.series.filter(function (s) { return s.values[j] != null; }).map(function (s) { return row(s, j); }).join("");
+      html = '<div class="snapshot-tip-title">' + esc(data.cats[j] || "") + "</div>" + html;
+    } else {
+      var mark = ev.target.closest("[j]");
+      if (!mark || !host.contains(mark)) return hide();
+      var k = parseInt(mark.getAttribute("j"), 10);
+      var s = data.series[data.mode === "slice" ? 0 : seriesIndexOf(mark)];
+      if (!s || s.values[k] == null) return hide();
+      html = '<div class="snapshot-tip-title">' + esc(data.cats[k] || "") + "</div>" + row(s, k);
+    }
+    tip.innerHTML = html;
+    tip.style.display = "block";
+    var left = ev.clientX + 14, top = ev.clientY + 14;
+    if (left + tip.offsetWidth > window.innerWidth - 8) left = ev.clientX - tip.offsetWidth - 14;
+    if (top + tip.offsetHeight > window.innerHeight - 8) top = ev.clientY - tip.offsetHeight - 14;
+    tip.style.left = Math.max(8, left) + "px";
+    tip.style.top = Math.max(8, top) + "px";
+  }
+  document.addEventListener("mousemove", show);
+  document.addEventListener("mouseleave", hide);
+  window.addEventListener("scroll", hide, { passive: true });
+})();`;
+
+const TOOLTIP_CSS = `
+.snapshot-tip { position: fixed; z-index: 1000; pointer-events: none; max-width: 320px;
+  background: var(--card-bg, #fff); color: var(--text-main, #0f172a); border: 1px solid var(--border, #e2e8f0);
+  border-radius: 8px; box-shadow: 0 6px 20px rgba(15, 23, 42, .14); padding: 8px 10px; font-size: 12px; line-height: 1.5; }
+.snapshot-tip-title { font-weight: 600; margin-bottom: 4px; }
+.snapshot-tip-row { display: flex; align-items: center; gap: 6px; white-space: nowrap; }
+.snapshot-tip-dot { width: 8px; height: 8px; border-radius: 50%; flex: none; }
+@media print { .snapshot-tip { display: none !important; } }`;
+
+function buildHtml(title: string, parts: SnapshotPart[], withTips = false): string {
+  const clone = buildClone(title, parts, withTips);
   const esc = (s: string) => s.replace(/&/g, "&amp;").replace(/</g, "&lt;");
   return `<!doctype html>
 <html lang="${document.documentElement.lang || "en"}">
@@ -113,11 +199,14 @@ body { display: flex; justify-content: center; padding: 24px 0; }
   @page { margin: 12mm; }
   body { padding: 0; display: block; }
   .snapshot-root { width: auto !important; box-shadow: none; }
-}
+}${withTips ? TOOLTIP_CSS : ""}
 </style>
 </head>
 <body>
-${clone.outerHTML}
+${clone.outerHTML}${withTips ? `
+<script>
+${TOOLTIP_SCRIPT}
+</script>` : ""}
 </body>
 </html>`;
 }
@@ -136,7 +225,7 @@ function triggerDownload(blob: Blob, filename: string) {
 
 /** A self-contained web page that looks like the screen (opens offline in any browser). */
 export function downloadSnapshotHtml(title: string, parts: SnapshotPart[]) {
-  const html = buildHtml(title, parts);
+  const html = buildHtml(title, parts, true);
   triggerDownload(new Blob([html], { type: "text/html;charset=utf-8" }), snapshotFilename(title, "html"));
 }
 

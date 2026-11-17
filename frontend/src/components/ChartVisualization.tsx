@@ -2,6 +2,7 @@ import React, { useEffect, useMemo, useRef, useState } from "react";
 import ReactApexChart from "react-apexcharts";
 import type { AIChartSpec } from "../api/client";
 import { buildChartOptions, buildChartSeries, chartCategories, resolveKind } from "./chartOptions";
+import { chartTipData } from "./charts/exportTip";
 
 interface ChartVisualizationProps {
   chart: AIChartSpec;
@@ -25,6 +26,11 @@ export const ChartVisualization: React.FC<ChartVisualizationProps> = ({ chart, h
     const reduced = typeof window !== "undefined" && window.matchMedia?.("(prefers-reduced-motion: reduce)").matches;
     return animate && !reduced ? built : { ...built, chart: { ...built.chart, animations: { enabled: false } } };
   }, [chart, layout, onPointClick, animate]);
+  // Hover figures for the downloaded HTML copy, which has no chart library (utils/snapshot.ts).
+  const tip = useMemo(() => {
+    const data = chartTipData(chartCategories(chart), layout, series as any, options);
+    return data ? JSON.stringify(data) : undefined;
+  }, [chart, layout, series, options]);
 
   if (!chartCategories(chart).length || !chart.y?.length) {
     return <div className="table-empty">No data for this chart.</div>;
@@ -37,7 +43,7 @@ export const ChartVisualization: React.FC<ChartVisualizationProps> = ({ chart, h
   const h = layout.horizontal && !layout.funnel ? Math.max(height, rows * 30 + 60) : height;
 
   return (
-    <div className={onPointClick ? "chart-clickable" : undefined}>
+    <div className={onPointClick ? "chart-clickable" : undefined} data-chart-tip={tip}>
       <ReactApexChart options={options} series={series as any} type={layout.kind} height={h} width="100%" />
     </div>
   );
