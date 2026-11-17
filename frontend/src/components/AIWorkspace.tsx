@@ -1014,13 +1014,13 @@ export const AIWorkspace: React.FC<AIWorkspaceProps> = ({ filters }) => {
         <header className="chat-header">
           <div>
             <h2>{activeSessionName}</h2>
-            <p>
-              {datasets.length > 1
-                ? t("filesRouted", { n: datasets.length })
-                : datasets.length === 1
-                ? t("connectedTo", { name: datasets[0].display_name })
-                : t("noData")}
-            </p>
+            {datasets.length <= 1 && (
+              <p>
+                {datasets.length === 1
+                  ? t("connectedTo", { name: datasets[0].display_name })
+                  : t("noData")}
+              </p>
+            )}
           </div>
           <div className="chat-header-controls">
             <button
