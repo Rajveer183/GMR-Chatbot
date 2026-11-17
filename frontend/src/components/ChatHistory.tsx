@@ -1,15 +1,14 @@
 import React, { useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import {
   Archive, ArchiveRestore, Check, ChevronDown, ChevronRight, Folder, FolderInput, FolderMinus, FolderOpen,
-  FolderPlus, MoreHorizontal, Pencil, Pin, PinOff, Search, Trash2, X,
+  FolderPlus, MoreHorizontal, Pencil, Pin, PinOff, Trash2,
 } from "lucide-react";
-import { apiClient } from "../api/client";
-import type { ChatFolder, SessionPatch, SessionSearchHit, SessionSummary } from "../api/client";
+import type { ChatFolder, SessionPatch, SessionSummary } from "../api/client";
 import type { UIKey } from "../i18n/uiStrings";
 import { ConfirmDialog } from "./ConfirmDialog";
 
-// The sidebar's chat history: pinned chats, folders, recent chats, archived chats, and a
-// full-text search over every question and answer (server-side, debounced). All changes go
+// The sidebar's chat history: pinned chats, folders and recent chats. Searching is the
+// ChatSearchDialog (the sidebar header's search icon). All changes go
 // through PATCH /api/sessions/{id} and /api/folders; the parent reloads the lists afterwards.
 
 type T = (key: UIKey, vars?: Record<string, string | number>) => string;
@@ -19,17 +18,13 @@ interface ChatHistoryProps {
   folders: ChatFolder[];
   activeId: string | null;
   t: T;
-  /** query = the search that found it, so the chat can scroll to the matching message */
-  onOpen: (sessionId: string, query?: string) => void;
+  onOpen: (sessionId: string) => void;
   onUpdate: (sessionId: string, patch: SessionPatch) => Promise<void>;
   onDelete: (sessionId: string) => void;
   onCreateFolder: (name: string) => Promise<ChatFolder | null>;
   /** Rename and/or pin a folder. */
   onUpdateFolder: (folderId: string, patch: { name?: string; pinned?: boolean }) => Promise<void>;
   onDeleteFolder: (folderId: string) => Promise<void>;
-  /** The search box shows only while open (the sidebar header's search icon), like ChatGPT. */
-  searchOpen: boolean;
-  onSearchClose: () => void;
 }
 
 const OPEN_FOLDERS_KEY = "gmr-chat.openFolders";
@@ -74,30 +69,6 @@ function writeJSON(key: string, value: unknown) {
   }
 }
 
-/** "Today" / "Yesterday" / "Mon 12 Nov" -- shown under a chat's title in search results. */
-function shortDate(iso: string): string {
-  const d = new Date(iso);
-  if (Number.isNaN(d.getTime())) return "";
-  const now = new Date();
-  const days = Math.floor((new Date(now.toDateString()).getTime() - new Date(d.toDateString()).getTime()) / 86400000);
-  if (days <= 0) return d.toLocaleTimeString(undefined, { hour: "numeric", minute: "2-digit" });
-  if (days === 1) return "Yesterday";
-  return d.toLocaleDateString(undefined, { day: "numeric", month: "short", year: d.getFullYear() === now.getFullYear() ? undefined : "numeric" });
-}
-
-/** The snippet with every query word wrapped in <mark>. */
-function Highlight({ text, query }: { text: string; query: string }) {
-  const words = query.toLowerCase().split(/\s+/).filter(Boolean);
-  if (!words.length || !text) return <>{text}</>;
-  const escaped = words.map((w) => w.replace(/[.*+?^${}()|[\]\\]/g, "\\$&"));
-  const parts = text.split(new RegExp(`(${escaped.join("|")})`, "gi"));
-  return (
-    <>
-      {parts.map((p, i) => (words.includes(p.toLowerCase()) ? <mark key={i}>{p}</mark> : <React.Fragment key={i}>{p}</React.Fragment>))}
-    </>
-  );
-}
-
 interface MenuState {
   session: SessionSummary;
   place: string;
@@ -107,19 +78,7 @@ interface MenuState {
 
 export const ChatHistory: React.FC<ChatHistoryProps> = ({
   sessions, folders, activeId, t, onOpen, onUpdate, onDelete, onCreateFolder, onUpdateFolder, onDeleteFolder,
-  searchOpen, onSearchClose,
 }) => {
-  const [query, setQuery] = useState("");
-  const searchRef = useRef<HTMLInputElement>(null);
-  useEffect(() => {
-    if (searchOpen) searchRef.current?.focus();
-  }, [searchOpen]);
-  const closeSearch = () => {
-    setQuery("");
-    onSearchClose();
-  };
-  const [hits, setHits] = useState<SessionSearchHit[] | null>(null);
-  const [searching, setSearching] = useState(false);
   const [renamingId, setRenamingId] = useState<string | null>(null);
   const [renameValue, setRenameValue] = useState("");
   // A chat or folder can be listed twice (under Pinned and in its usual place); the rename
@@ -141,35 +100,6 @@ export const ChatHistory: React.FC<ChatHistoryProps> = ({
   const [confirmFolder, setConfirmFolder] = useState<ChatFolder | null>(null);
   const [dropTarget, setDropTarget] = useState<string | null>(null);
   const menuRef = useRef<HTMLDivElement>(null);
-
-  // Full-text search: debounced, last request wins.
-  const searchSeq = useRef(0);
-  useEffect(() => {
-    const q = query.trim();
-    if (!q) {
-      setHits(null);
-      setSearching(false);
-      return;
-    }
-    const seq = ++searchSeq.current;
-    setSearching(true);
-    const timer = window.setTimeout(() => {
-      apiClient
-        .searchSessions(q)
-        .then((res) => seq === searchSeq.current && setHits(res))
-        .catch(() => seq === searchSeq.current && setHits(null))
-        .finally(() => seq === searchSeq.current && setSearching(false));
-    }, 250);
-    return () => window.clearTimeout(timer);
-  }, [query]);
-
-  // The search results also follow renames/pins made while searching.
-  useEffect(() => {
-    if (!hits) return;
-    const byId = new Map(sessions.map((s) => [s.session_id, s]));
-    setHits((prev) => prev && prev.filter((h) => byId.has(h.session_id)).map((h) => ({ ...h, ...byId.get(h.session_id)! })));
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [sessions]);
 
   // Close the row menu on outside click / Escape / scroll.
   useEffect(() => {
@@ -295,14 +225,14 @@ export const ChatHistory: React.FC<ChatHistoryProps> = ({
     onDrop: (e: React.DragEvent) => onDrop(e, folderId),
   });
 
-  const renderItem = (s: SessionSummary, hit?: SessionSearchHit, place = "list") => {
+  const renderItem = (s: SessionSummary, place = "list") => {
     const renaming = renamingId === s.session_id && renamePlace === place;
     return (
     <div
       key={`${place}:${s.session_id}`}
-      className={`chat-session-item${activeId === s.session_id ? " active" : ""}${hit ? " is-hit" : ""}${s.archived ? " is-archived" : ""}${s.pinned ? " is-pinned" : ""}`}
+      className={`chat-session-item${activeId === s.session_id ? " active" : ""}${s.archived ? " is-archived" : ""}${s.pinned ? " is-pinned" : ""}`}
       title={s.session_name}
-      draggable={!hit && !renaming}
+      draggable={!renaming}
       onDragStart={(e) => {
         e.dataTransfer.setData("text/x-gmr-session", s.session_id);
         e.dataTransfer.effectAllowed = "move";
@@ -322,24 +252,10 @@ export const ChatHistory: React.FC<ChatHistoryProps> = ({
           autoFocus
         />
       ) : (
-        <button className="chat-session-name" type="button" onClick={() => onOpen(s.session_id, hit ? query.trim() : undefined)}>
+        <button className="chat-session-name" type="button" onClick={() => onOpen(s.session_id)}>
           <span className="chat-session-title-row">
-            <span className="chat-session-title">{hit ? <Highlight text={s.session_name || "New Session"} query={query} /> : s.session_name || "New Session"}</span>
+            <span className="chat-session-title">{s.session_name || "New Session"}</span>
           </span>
-          {hit ? (
-            <>
-              {hit.match_snippet ? (
-                <span className="chat-session-snippet">
-                  <Highlight text={hit.match_snippet} query={query} />
-                </span>
-              ) : null}
-              <span className="chat-session-meta">
-                {shortDate(s.updated_at)}
-                {s.folder_id && folderName(s.folder_id) ? ` · ${folderName(s.folder_id)}` : ""}
-                {s.archived ? ` · ${t("archivedTag")}` : ""}
-              </span>
-            </>
-          ) : null}
         </button>
       )}
       <div className="chat-session-actions">
@@ -439,7 +355,7 @@ export const ChatHistory: React.FC<ChatHistoryProps> = ({
         </div>
         {open ? (
           <div className="chat-folder-items">
-            {items.length ? items.map((s) => renderItem(s, undefined, dropKey)) : <div className="chat-folders-hint">{t("folderEmpty")}</div>}
+            {items.length ? items.map((s) => renderItem(s, dropKey)) : <div className="chat-folders-hint">{t("folderEmpty")}</div>}
           </div>
         ) : null}
       </div>
@@ -468,54 +384,15 @@ export const ChatHistory: React.FC<ChatHistoryProps> = ({
     </div>
   );
 
-  const q = query.trim();
-  // Until the server answers, filter titles/last questions locally so typing feels instant.
-  const localHits: SessionSearchHit[] = useMemo(() => {
-    if (!q) return [];
-    const words = q.toLowerCase().split(/\s+/);
-    return sessions
-      .filter((s) => words.every((w) => `${s.session_name} ${s.last_question}`.toLowerCase().includes(w)))
-      .map((s) => ({ ...s, match_snippet: s.last_question, match_role: "user" as const }));
-  }, [q, sessions]);
-  const results = hits ?? localHits;
-
   return (
     <div className="chat-history">
-      {searchOpen || query ? (
-      <div className="chat-session-search">
-        <Search size={13} />
-        <input
-          ref={searchRef}
-          type="text"
-          value={query}
-          onChange={(e) => setQuery(e.target.value)}
-          onKeyDown={(e) => e.key === "Escape" && (query ? setQuery("") : closeSearch())}
-          placeholder={t("searchHistory")}
-          aria-label={t("searchHistory")}
-        />
-        <button type="button" className="chat-session-search-clear" onClick={closeSearch} aria-label={t("clearSearch")} title={t("clearSearch")}>
-          <X size={12} />
-        </button>
-      </div>
-      ) : null}
-
       <div className="chat-sessions-list">
-        {q ? (
-          <>
-            <SectionHead label={searching && !hits ? t("searching") : t("searchResults", { n: results.length })} />
-            {results.length === 0 && !searching ? (
-              <div className="chat-section-empty">{t("noChatsMatch", { q })}</div>
-            ) : (
-              results.map((h) => renderItem(h, h, "search"))
-            )}
-          </>
-        ) : (
-          <>
+        <>
             {pinned.length ? (
               <section className="chat-section">
                 <SectionHead label={t("pinnedChats")} open={sectionOpen("pinned")} onToggle={() => toggleSection("pinned")} />
                 {sectionOpen("pinned")
-                  ? pinned.map((p) => (p.kind === "chat" ? renderItem(p.chat, undefined, "pinned") : renderFolder(p.folder, "pinned")))
+                  ? pinned.map((p) => (p.kind === "chat" ? renderItem(p.chat, "pinned") : renderFolder(p.folder, "pinned")))
                   : null}
               </section>
             ) : null}
@@ -560,8 +437,7 @@ export const ChatHistory: React.FC<ChatHistoryProps> = ({
               {recent.length === 0 ? <div className="chat-section-empty">{t("noSessions")}</div> : recent.map((s) => renderItem(s))}
             </section>
 
-          </>
-        )}
+        </>
       </div>
 
       {menu ? (
@@ -576,7 +452,6 @@ export const ChatHistory: React.FC<ChatHistoryProps> = ({
               setRenameValue(menu.session.session_name);
               setRenamePlace(menu.place);
               setRenamingId(menu.session.session_id);
-              setQuery("");
             })}
           >
             <Pencil size={13} /> {t("rename")}
@@ -600,7 +475,6 @@ export const ChatHistory: React.FC<ChatHistoryProps> = ({
             role="menuitem"
             className="indent"
             onClick={act(() => {
-              setQuery("");
               setNewFolderName("");
               setNewFolderFor(menu.session.session_id);
             })}

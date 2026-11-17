@@ -149,6 +149,10 @@ const en = {
   archivedChats: "Archived ({n})",
   searching: "Searching…",
   searchResults: "{n} matching chats",
+  searchChats: "Search...",
+  lastOpened: "Last opened",
+  recentChats: "Recent chats",
+  close: "Close",
   continueTitle: "Continuing from {when}",
   continueBody: "Follow-up questions use this chat's earlier questions and answers. Figures shown above are as of when they were asked.",
   rerunLatest: "Re-run last question on latest data",
@@ -170,6 +174,7 @@ export type UIKey = keyof typeof en;
 type Strings = Partial<Record<UIKey, string>>;
 
 const hinglish: Strings = {
+  searchChats: "Dhundho...", lastOpened: "Pichhli kholi gayi", recentChats: "Recent chats", close: "Band karo",
   pin: "Pin karo", unpin: "Pin hatao", rename: "Naam badlo", moveTo: "Folder mein daalo", removeFromFolder: "Folder se hatao",
   newFolder: "Naya folder", folderEmpty: "Abhi koi chat nahi", deleteFolder: "Folder delete karo", archive: "Archive karo",
   unarchive: "Archive se nikalo", continueTitle: "{when} se aage", rerunLatest: "Pichhla sawaal naye data par chalao",
@@ -240,6 +245,7 @@ const hi: Strings = {
   newFolder: "नया फ़ोल्डर", folderName: "फ़ोल्डर का नाम", folderEmpty: "अभी कोई चैट नहीं", renameFolder: "फ़ोल्डर का नाम बदलें",
   deleteFolder: "फ़ोल्डर हटाएँ", archive: "संग्रहित करें", unarchive: "संग्रह से निकालें", archivedTag: "संग्रहित",
   archivedChats: "संग्रहित ({n})", searching: "खोज रहे हैं…", searchResults: "{n} चैट मिलीं",
+  searchChats: "खोजें...", lastOpened: "पिछली खोली गई", recentChats: "हाल की चैट", close: "बंद करें",
   continueTitle: "{when} से आगे", rerunLatest: "पिछला सवाल नए डेटा पर दोबारा चलाएँ", dismiss: "बंद करें",
   archivedBanner: "यह चैट संग्रहित है। सवाल पूछने पर यह फिर से हाल की चैट में आ जाएगी।",
   helpful: "उपयोगी", notHelpful: "उपयोगी नहीं", feedbackThanks: "प्रतिक्रिया के लिए धन्यवाद",

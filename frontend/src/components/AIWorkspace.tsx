@@ -11,6 +11,7 @@ import { LoadingStatus } from "./LoadingStatus";
 import { TypingIndicator } from "./TypingIndicator";
 import { ConfirmDialog } from "./ConfirmDialog";
 import { ChatHistory } from "./ChatHistory";
+import { ChatSearchDialog, recordOpened } from "./ChatSearchDialog";
 import { ArchivedChatsDialog, ProfileMenu } from "./ProfileMenu";
 import { EmptyState } from "./EmptyState";
 import { DataSourcesPanel } from "./DataSourcesPanel";
@@ -470,8 +471,21 @@ export const AIWorkspace: React.FC<AIWorkspaceProps> = ({ filters }) => {
 
   useEffect(() => {
     if (activeSession?.session_id) storeSessionId(activeSession.session_id);
+    recordOpened(activeSession?.session_id ?? null);  // feeds the search dialog's "Last opened"
     setShownLanguage({});  // another chat: every answer as written
   }, [activeSession?.session_id]);
+
+  // Ctrl/Cmd+K opens the chat search (like ChatGPT).
+  useEffect(() => {
+    const onKey = (e: KeyboardEvent) => {
+      if ((e.ctrlKey || e.metaKey) && !e.shiftKey && !e.altKey && e.key.toLowerCase() === "k") {
+        e.preventDefault();
+        setHistorySearchOpen(true);
+      }
+    };
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, []);
 
   useEffect(() => {
     const id = activeSession?.session_id;
@@ -937,10 +951,10 @@ export const AIWorkspace: React.FC<AIWorkspaceProps> = ({ filters }) => {
           <button
             className="chat-sidebar-icon chat-sidebar-search-btn"
             type="button"
-            onClick={() => setHistorySearchOpen((v) => !v)}
-            aria-pressed={historySearchOpen}
+            onClick={() => setHistorySearchOpen(true)}
+            aria-haspopup="dialog"
             aria-label={t("searchHistory")}
-            title={t("searchHistory")}
+            title={`${t("searchHistory")} (Ctrl+K)`}
           >
             <Search size={18} />
           </button>
@@ -971,14 +985,22 @@ export const AIWorkspace: React.FC<AIWorkspaceProps> = ({ filters }) => {
           folders={folders}
           activeId={activeSession?.session_id ?? null}
           t={t}
-          onOpen={(id, query) => openSession(id, true, query)}
+          onOpen={(id) => openSession(id, true)}
           onUpdate={updateSession}
           onDelete={deleteSession}
           onCreateFolder={createFolder}
           onUpdateFolder={updateFolder}
           onDeleteFolder={deleteFolder}
-          searchOpen={historySearchOpen}
-          onSearchClose={() => setHistorySearchOpen(false)}
+        />
+
+        <ChatSearchDialog
+          open={historySearchOpen}
+          sessions={sessions}
+          folders={folders}
+          activeId={activeSession?.session_id ?? null}
+          t={t}
+          onOpen={(id, query) => openSession(id, true, query)}
+          onClose={() => setHistorySearchOpen(false)}
         />
 
         <ProfileMenu
