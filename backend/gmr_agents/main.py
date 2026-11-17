@@ -96,6 +96,8 @@ class AIQueryRequest(BaseModel):
 
 class SessionCreateRequest(BaseModel):
     session_name: str | None = None
+    # Temporary chat: kept in memory only -- not saved to history, listed or searched.
+    temporary: bool = False
 
 
 class SessionPatchRequest(BaseModel):
@@ -1325,7 +1327,7 @@ def delete_folder(folder_id: str) -> dict:
 
 @app.post("/api/sessions")
 def create_session(req: SessionCreateRequest) -> dict:
-    return sessions.create_session(req.session_name or "New Session")
+    return sessions.create_session(req.session_name or "New Session", temporary=req.temporary)
 
 
 @app.get("/api/sessions/{session_id}")

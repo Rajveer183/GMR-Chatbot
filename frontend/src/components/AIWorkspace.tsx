@@ -1,5 +1,5 @@
 import React, { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { PanelLeft, Search, SquarePen, Pencil, X, User, Bot, Database, Download, History, RefreshCw, ArchiveRestore } from "lucide-react";
+import { PanelLeft, Search, SquarePen, MessageCircleDashed, Pencil, X, User, Bot, Database, Download, History, RefreshCw, ArchiveRestore } from "lucide-react";
 import { apiClient, QueryStoppedError } from "../api/client";
 import type { FeedbackRating } from "../api/client";
 import type { AIQueryResponse, AIStreamEvent, ChatFolder, DatasetSummary, FilterRequest, SessionPatch, SessionSummary, SessionDetail, SessionMessage, TranslatedAnswer } from "../api/client";
@@ -82,6 +82,28 @@ function storeSessionId(sessionId: string | null) {
     else window.localStorage.removeItem(ACTIVE_SESSION_KEY);
   } catch {
     // Non-fatal -- the session just won't be restored after a reload.
+  }
+}
+
+// Temporary chats not yet confirmed deleted on the server. Kept so a refresh or a closed tab
+// that lost its DELETE still clears them on the next load (and they never show in the list).
+const PENDING_TEMP_KEY = "gmr-chat.pendingTemporaryChats";
+
+function readPendingTemp(): string[] {
+  try {
+    const v = JSON.parse(window.localStorage.getItem(PENDING_TEMP_KEY) || "[]");
+    return Array.isArray(v) ? v.filter((x) => typeof x === "string") : [];
+  } catch {
+    return [];
+  }
+}
+
+function writePendingTemp(ids: string[]) {
+  try {
+    if (ids.length) window.localStorage.setItem(PENDING_TEMP_KEY, JSON.stringify(ids));
+    else window.localStorage.removeItem(PENDING_TEMP_KEY);
+  } catch {
+    // Non-fatal -- the server still drops idle temporary chats on its own.
   }
 }
 
@@ -268,8 +290,15 @@ export const AIWorkspace: React.FC<AIWorkspaceProps> = ({ filters }) => {
     }
   };
 
+  // Temporary chat (dashed-bubble toggle in the sidebar): the open one's id -- state so the toggle
+  // and header re-render, ref for handlers. Never listed, and discarded once the chat is left.
+  const tempSessionRef = useRef<string | null>(null);
+  const [tempId, setTempId] = useState<string | null>(null);
+
   const loadSessions = async () => {
-    const list = await apiClient.listSessions();
+    // A temporary chat never appears in the list, even on a server that does not know the flag.
+    const hidden = new Set([...readPendingTemp(), ...(tempSessionRef.current ? [tempSessionRef.current] : [])]);
+    const list = (await apiClient.listSessions()).filter((s) => !hidden.has(s.session_id));
     setSessions(list);
     return list;
   };
@@ -304,13 +333,43 @@ export const AIWorkspace: React.FC<AIWorkspaceProps> = ({ filters }) => {
       scrollIntentRef.current = "session-open";
     }
     const detail = await apiClient.getSession(sessionId);
+    leaveTemporary(sessionId);
     setActiveSession(detail);
   };
 
-  const createNewSession = async () => {
-    const created = await apiClient.createSession("New Session");
-    await loadSessions();
+  // Temporary chats are kept in server memory only; leaving one (another chat, new chat, toggle
+  // off, refresh) deletes it.
+  const discardTemporary = (id: string) =>
+    apiClient.discardTemporarySession(id).then((ok) => {
+      if (ok) writePendingTemp(readPendingTemp().filter((x) => x !== id));
+    });
+  const leaveTemporary = (nextId?: string) => {
+    const leaving = tempSessionRef.current;
+    if (leaving && leaving !== nextId) {
+      tempSessionRef.current = null;
+      setTempId(null);
+      void discardTemporary(leaving);
+    }
+  };
+  useEffect(() => {
+    const onHide = () => {
+      if (tempSessionRef.current) apiClient.discardTemporarySession(tempSessionRef.current);
+    };
+    window.addEventListener("pagehide", onHide);
+    return () => window.removeEventListener("pagehide", onHide);
+  }, []);
+
+  const createNewSession = async (temporary = false) => {
+    const created = await apiClient.createSession("New Session", temporary);
+    leaveTemporary(created.session_id);
+    if (temporary) {
+      tempSessionRef.current = created.session_id;
+      setTempId(created.session_id);
+      writePendingTemp([...readPendingTemp(), created.session_id]);
+    }
+    if (!temporary) await loadSessions();
     setActiveSession(created);
+    setError("");
     chatInputRef.current?.clear();
     scrollIntentRef.current = "none";
     window.setTimeout(() => chatInputRef.current?.focus(), 0);
@@ -447,6 +506,8 @@ export const AIWorkspace: React.FC<AIWorkspaceProps> = ({ filters }) => {
     const init = async () => {
       try {
         loadFolders();
+        // Temporary chats left by a refresh or closed tab: delete them now (they stay hidden meanwhile).
+        await Promise.all(readPendingTemp().map((id) => discardTemporary(id)));
         const list = await loadSessions();
         if (list.length === 0) {
           await createNewSession();
@@ -471,8 +532,10 @@ export const AIWorkspace: React.FC<AIWorkspaceProps> = ({ filters }) => {
   }, []);
 
   useEffect(() => {
-    if (activeSession?.session_id) storeSessionId(activeSession.session_id);
-    recordOpened(activeSession?.session_id ?? null);  // feeds the search dialog's "Last opened"
+    // A temporary chat is never reopened after a reload, so it is not remembered.
+    const temp = !!activeSession?.session_id && activeSession.session_id === tempSessionRef.current;
+    if (activeSession?.session_id && !temp) storeSessionId(activeSession.session_id);
+    if (!temp) recordOpened(activeSession?.session_id ?? null);  // feeds the search dialog's "Last opened"
     setShownLanguage({});  // another chat: every answer as written
   }, [activeSession?.session_id]);
 
@@ -844,7 +907,16 @@ export const AIWorkspace: React.FC<AIWorkspaceProps> = ({ filters }) => {
   const uiLang = screenLanguage(responseLanguage, latestAnswerLanguage);
   const t = (key: Parameters<typeof uiText>[1], vars?: Record<string, string | number>) => uiText(uiLang, key, vars);
 
-  const activeSessionName = useMemo(() => activeSession?.session_name || "Project Workspace", [activeSession]);
+  const isTemporary = !!activeSession && (activeSession.session_id === tempId || !!activeSession.temporary);
+  const activeSessionName = useMemo(
+    () => (isTemporary ? t("temporaryChat") : activeSession?.session_name || "Project Workspace"),
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    [activeSession, isTemporary, uiLang]
+  );
+  const toggleTemporary = () => {
+    if (loading) return;
+    void createNewSession(!isTemporary);
+  };
 
 
   // "Continue previous analysis": an older (or archived) chat opens with a note that follow-ups
@@ -980,9 +1052,20 @@ export const AIWorkspace: React.FC<AIWorkspaceProps> = ({ filters }) => {
             >
               <PanelLeft size={18} />
             </button>
-            <button className="chat-sidebar-icon chat-sidebar-rail-btn" onClick={createNewSession} type="button"
+            <button className="chat-sidebar-icon chat-sidebar-rail-btn" onClick={() => createNewSession()} type="button"
                     data-tip={t("newChat")} aria-label={t("newChat")}>
               <SquarePen size={18} />
+            </button>
+            <button
+              className={`chat-sidebar-icon chat-sidebar-rail-btn chat-temp-toggle${isTemporary ? " is-on" : ""}`}
+              type="button"
+              onClick={toggleTemporary}
+              disabled={loading}
+              aria-pressed={isTemporary}
+              aria-label={t(isTemporary ? "temporaryChatOff" : "temporaryChatOn")}
+              data-tip={t(isTemporary ? "temporaryChatOff" : "temporaryChatOn")}
+            >
+              <MessageCircleDashed size={18} />
             </button>
             <button
               className="chat-sidebar-icon chat-sidebar-rail-btn"
@@ -1022,9 +1105,25 @@ export const AIWorkspace: React.FC<AIWorkspaceProps> = ({ filters }) => {
         </div>
         )}
 
-        <button className="chat-new-btn" onClick={createNewSession} type="button">
-          <SquarePen size={17} /> {t("newChat")}
-        </button>
+        {sidebarCollapsed ? null : (
+          <div className="chat-new-row">
+            <button className="chat-new-btn" onClick={() => createNewSession()} type="button">
+              <SquarePen size={17} /> {t("newChat")}
+            </button>
+            <button
+              className={`chat-sidebar-icon chat-temp-toggle${isTemporary ? " is-on" : ""}`}
+              type="button"
+              onClick={toggleTemporary}
+              disabled={loading}
+              aria-pressed={isTemporary}
+              aria-label={t(isTemporary ? "temporaryChatOff" : "temporaryChatOn")}
+              data-tip-pos="below"
+              data-tip={t(isTemporary ? "temporaryChatOff" : "temporaryChatOn")}
+            >
+              <MessageCircleDashed size={18} />
+            </button>
+          </div>
+        )}
 
         {sidebarCollapsed ? null : historyEl()}
 
@@ -1048,8 +1147,13 @@ export const AIWorkspace: React.FC<AIWorkspaceProps> = ({ filters }) => {
       <main className="chat-main">
         <header className="chat-header">
           <div>
-            <h2>{activeSessionName}</h2>
-            {datasets.length <= 1 && (
+            <h2 className={isTemporary ? "chat-temp-title" : undefined}>
+              {isTemporary ? <MessageCircleDashed size={16} aria-hidden="true" /> : null}
+              {activeSessionName}
+            </h2>
+            {isTemporary ? (
+              <p>{t("temporaryChatNote")}</p>
+            ) : datasets.length <= 1 && (
               <p>
                 {datasets.length === 1
                   ? t("connectedTo", { name: datasets[0].display_name })
@@ -1318,7 +1422,7 @@ export const AIWorkspace: React.FC<AIWorkspaceProps> = ({ filters }) => {
             {isEmptyChat ? (
               <div className="chat-msg-row empty">
                 <EmptyState
-                  title="GMR AI Intelligence"
+                  title={isTemporary ? t("temporaryChat") : "GMR AI Intelligence"}
                   lang={uiLang}
                   onSuggestedQuestion={(q, canonical) => runQuery(q, 1, ALL_ROWS, true, canonical)}
                   composer={composer(true)}

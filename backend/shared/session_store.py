@@ -56,6 +56,8 @@ _WRITE_DELAY_SECONDS = 0.5
 ARCHIVE_RETENTION_DAYS = int(os.environ.get("GMR_ARCHIVE_RETENTION_DAYS", "30"))
 # How often list_sessions sweeps for expired archived chats.
 _PURGE_INTERVAL_SECONDS = 3600
+# A temporary chat left idle this long (tab closed without leaving it) is dropped from memory.
+TEMP_IDLE_SECONDS = int(os.environ.get("GMR_TEMP_CHAT_IDLE_SECONDS", str(6 * 3600)))
 
 
 def _now() -> str:
@@ -140,12 +142,14 @@ class SessionStore:
             self._dirty.clear()
             parts = []
             for s in self._data["sessions"]:
+                if s.get("temporary"):  # temporary chats live in memory only, never on disk
+                    continue
                 sid = s.get("session_id")
                 if sid not in self._frags:
                     self._frags[sid] = json.dumps(s, ensure_ascii=False, default=str)
                 parts.append(self._frags[sid])
             if len(self._frags) > len(parts):  # deleted sessions
-                live = {s.get("session_id") for s in self._data["sessions"]}
+                live = {s.get("session_id") for s in self._data["sessions"] if not s.get("temporary")}
                 self._frags = {k: v for k, v in self._frags.items() if k in live}
             folders = json.dumps(self._data.get("folders") or [], ensure_ascii=False, default=str)
         # Same bytes as json.dumps({"sessions": [...], "folders": [...]}) with its default separators.
@@ -186,7 +190,7 @@ class SessionStore:
     def _mirror_payload(self, session: dict) -> str | None:
         """The lean mirror text, built while the caller holds self._lock (a snapshot);
         None when Redis is unavailable."""
-        if not redis_client.available():
+        if session.get("temporary") or not redis_client.available():
             return None
         messages = session.get("messages", [])[-config.REDIS_HISTORY_MAX_MESSAGES:]
         return json.dumps([self._lean_message(m) for m in messages], ensure_ascii=False, default=str)
@@ -207,7 +211,10 @@ class SessionStore:
 
     # -- sessions -----------------------------------------------------------
 
-    def create_session(self, session_name: str = "New Session") -> dict:
+    def create_session(self, session_name: str = "New Session", temporary: bool = False) -> dict:
+        """A new chat. A temporary chat is kept in memory only: it is never written to the
+        file or Redis, never listed or searched, and is gone once deleted, after
+        TEMP_IDLE_SECONDS idle, or when the server restarts. Follow-ups still work in it."""
         with self._lock:
             data = self._read()
             session = {
@@ -218,8 +225,12 @@ class SessionStore:
                 "messages": [],
             }
             data["sessions"].insert(0, session)
-            self._write(data, session["session_id"])
+            if temporary:
+                session["temporary"] = True  # nothing to write
+            else:
+                self._write(data, session["session_id"])
         return {
+            "temporary": bool(temporary),
             "session_id": session["session_id"],
             "session_name": session["session_name"],
             "created_at": session["created_at"],
@@ -264,13 +275,35 @@ class SessionStore:
             log.info("Deleted %d archived chat(s) older than %d days.", len(expired), ARCHIVE_RETENTION_DAYS)
         return expired
 
+    def purge_idle_temporary(self, now: datetime | None = None) -> list[str]:
+        """Drop temporary chats idle longer than TEMP_IDLE_SECONDS (memory only, no write)."""
+        cutoff = (now or datetime.now(timezone.utc)) - timedelta(seconds=TEMP_IDLE_SECONDS)
+        with self._lock:
+            data = self._read()
+            gone = set()
+            for s in data["sessions"]:
+                if s.get("temporary"):
+                    try:
+                        at = datetime.fromisoformat(s.get("updated_at") or "")
+                    except ValueError:
+                        at = cutoff
+                    if at.tzinfo is None:
+                        at = at.replace(tzinfo=timezone.utc)
+                    if at <= cutoff:
+                        gone.add(s["session_id"])
+            if gone:
+                data["sessions"] = [s for s in data["sessions"] if s.get("session_id") not in gone]
+        return sorted(gone)
+
     def list_sessions(self) -> list[dict]:
         if time.monotonic() - self._last_purge > _PURGE_INTERVAL_SECONDS or not self._last_purge:
             self.purge_expired_archives()
+        self.purge_idle_temporary()
         with self._lock:
             data = self._read()
             sessions = sorted(
-                data["sessions"], key=lambda s: s.get("updated_at", ""), reverse=True
+                (s for s in data["sessions"] if not s.get("temporary")),
+                key=lambda s: s.get("updated_at", ""), reverse=True,
             )
             return [self._summarize(s) for s in sessions]
 
@@ -292,6 +325,7 @@ class SessionStore:
                         "archived_at": session.get("archived_at"),
                         "delete_at": self._delete_at(session),
                         "folder_id": session.get("folder_id"),
+                        "temporary": bool(session.get("temporary")),
                     }
         return None
 
@@ -327,7 +361,8 @@ class SessionStore:
                         elif not changes["archived"]:
                             session.pop("archived_at", None)
                         session["archived"] = bool(changes["archived"])
-                    self._write(data, session_id)
+                    if not session.get("temporary"):
+                        self._write(data, session_id)
                     return self._summarize(session)
         return None
 
@@ -338,7 +373,7 @@ class SessionStore:
             data = self._read()
             counts: dict[str, int] = {}
             for s in data["sessions"]:
-                if s.get("folder_id"):
+                if s.get("folder_id") and not s.get("temporary"):
                     counts[s["folder_id"]] = counts.get(s["folder_id"], 0) + 1
             return [{**f, "pinned": bool(f.get("pinned")), "pinned_at": f.get("pinned_at"),
                      "session_count": counts.get(f["folder_id"], 0)} for f in data.get("folders") or []]
@@ -407,7 +442,7 @@ class SessionStore:
         # Scan a snapshot outside the lock (~0.1 s over 7.5k chats) so a search never holds up
         # a question being answered; a message appended meanwhile just may not be matched.
         with self._lock:
-            snapshot = list(self._read()["sessions"])
+            snapshot = [s for s in self._read()["sessions"] if not s.get("temporary")]
         for session in snapshot:
             name = session.get("session_name") or ""
             texts = [(m.get("role"), m.get("content") or "") for m in session.get("messages", [])]
@@ -432,11 +467,14 @@ class SessionStore:
         with self._lock:
             data = self._read()
             before = len(data["sessions"])
+            temporary = any(s.get("temporary") for s in data["sessions"] if s.get("session_id") == session_id)
             data["sessions"] = [
                 s for s in data["sessions"] if s.get("session_id") != session_id
             ]
             if len(data["sessions"]) == before:
                 return False
+            if temporary:
+                return True  # it was never on disk or in Redis
             self._write(data, session_id)
         redis_client.delete(self._mirror_key(session_id))
         return True
@@ -490,7 +528,8 @@ class SessionStore:
                         "New Session",
                     ):
                         session["session_name"] = content.strip()[:60] or "New Session"
-                    self._write(data, session_id)
+                    if not session.get("temporary"):
+                        self._write(data, session_id)
                     payload = self._mirror_payload(session)
                     break
             else:
@@ -509,7 +548,8 @@ class SessionStore:
                     if keep < len(messages):
                         del messages[max(keep, 0):]
                         session["updated_at"] = _now()
-                        self._write(data, session_id)
+                        if not session.get("temporary"):
+                            self._write(data, session_id)
                     payload = self._mirror_payload(session)
                     break
             else:
@@ -577,6 +617,7 @@ class SessionStore:
             "archived_at": session.get("archived_at"),
             "delete_at": self._delete_at(session),
             "folder_id": session.get("folder_id"),
+            "temporary": bool(session.get("temporary")),
         }
 
     @staticmethod

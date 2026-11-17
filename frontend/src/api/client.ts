@@ -420,6 +420,8 @@ export interface SessionDetail {
   archived_at?: string | null;
   delete_at?: string | null;
   folder_id?: string | null;
+  /** Temporary chat: kept in server memory only, never saved to history. */
+  temporary?: boolean;
 }
 
 export const FilterRequest = {};
@@ -725,8 +727,15 @@ export const apiClient = {
     return getJSON("/api/sessions");
   },
 
-  createSession: async (session_name: string = "New Session"): Promise<SessionDetail> => {
-    return postJSON("/api/sessions", { session_name });
+  createSession: async (session_name: string = "New Session", temporary = false): Promise<SessionDetail> => {
+    return postJSON("/api/sessions", temporary ? { session_name, temporary } : { session_name });
+  },
+
+  /** Drop a temporary chat; keepalive so it still goes out while the tab is closing. */
+  discardTemporarySession: (session_id: string): Promise<boolean> => {
+    return fetch(`${API_BASE}/api/sessions/${encodeURIComponent(session_id)}`, { method: "DELETE", keepalive: true })
+      .then((r) => r.ok || r.status === 404)  // 404: already gone
+      .catch(() => false);
   },
 
   getSession: async (session_id: string): Promise<SessionDetail> => {

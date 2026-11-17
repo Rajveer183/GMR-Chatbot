@@ -248,6 +248,41 @@ button {
   background: rgba(15, 23, 42, 0.06);
 }
 
+/* New chat + the temporary-chat toggle on one row (toggle at the right end, like ChatGPT). */
+.chat-new-row {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  margin: var(--space-1) var(--space-2) var(--space-2);
+}
+
+.chat-new-row .chat-new-btn {
+  flex: 1;
+  margin: 0;
+}
+
+.chat-temp-toggle {
+  flex-shrink: 0;
+}
+
+.chat-temp-toggle:disabled {
+  opacity: 0.45;
+  cursor: not-allowed;
+}
+
+.chat-sidebar-icon.chat-temp-toggle.is-on,
+.chat-sidebar-icon.chat-temp-toggle.is-on:hover {
+  background: var(--accent-soft);
+  color: var(--accent);
+  box-shadow: inset 0 0 0 1px var(--accent);
+}
+
+.chat-header h2.chat-temp-title {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+}
+
 .chat-menu {
   padding: 0 var(--space-2);
   display: flex;
