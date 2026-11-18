@@ -4560,42 +4560,249 @@ button {
 :root[data-theme="dark"] .apexcharts-menu-item:hover { background: var(--active-bg); }
 
 /* ==========================================================================
-   Temporary chat: the chat area takes the .temp-mode surfaces (theme.css) --
-   light grey, or neutral charcoal in dark mode.
+   Temporary chat -- a whole-app mode (.chat-app-layout.temp-mode), not a
+   recoloured panel: one flat graphite surface (tokens in theme.css), history
+   hidden, no card around the welcome, a quiet neutral heading and a large
+   soft composer whose send button turns neutral instead of brand navy.
    ========================================================================== */
-.chat-main.temp-mode {
+.chat-app-layout.temp-mode,
+:root[data-theme] .chat-app-layout.temp-mode {
   background: var(--page-bg);
 }
 
-.chat-main.temp-mode .empty-state-glow {
-  display: none;
+/* Sidebar: no history, search or footer panel -- only logo, New chat, the toggle, Settings. */
+.temp-mode .chat-sidebar-search-btn {
+  visibility: hidden;
 }
 
-/* Only the mark, the title and the question box: keep them together in the middle. */
-.chat-main.temp-mode .empty-state {
-  justify-content: center;
-  gap: 8px;
+.chat-temp-sidebar-fill {
+  flex: 1;
 }
 
-.chat-main.temp-mode .empty-state-composer {
-  margin-top: 24px;
+.temp-mode .chat-sidebar-footer {
+  background: transparent;
 }
 
-.empty-state-temp-mark {
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  width: 56px;
-  height: 56px;
-  border-radius: 50%;
-  border: 1.5px dashed var(--border-strong);
-  background: var(--surface-3);
-  color: var(--text-main);
+.temp-mode .chat-sidebar-icon.chat-temp-toggle.is-on,
+.temp-mode .chat-sidebar-icon.chat-temp-toggle.is-on:hover {
+  background: var(--text-main);
+  color: var(--page-bg);
+  box-shadow: none;
 }
 
 .chat-sidebar-icon.chat-temp-toggle.is-on,
 .chat-sidebar-icon.chat-temp-toggle.is-on:hover {
   background: var(--surface-3);
   color: var(--text-main);
-  box-shadow: inset 0 0 0 1px var(--border-strong);
+}
+
+/* Header melts into the page. */
+.temp-mode .chat-header {
+  border-bottom-color: transparent;
+}
+
+.temp-mode .chat-header h2.chat-temp-title {
+  color: var(--text-muted);
+  font-weight: 500;
+}
+
+/* Welcome: no card. A faint engineering dot grid fades out from a soft light
+   pool behind the headline; logo, spaced caps label, two-tone headline, composer. */
+.temp-mode .empty-state {
+  background: transparent;
+  border: none;
+  box-shadow: none;
+  justify-content: center;
+  padding-bottom: 9vh;
+}
+
+.temp-mode .empty-state::before {
+  content: "";
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+  background:
+    radial-gradient(ellipse 520px 300px at 50% 40%, var(--tc-pool), transparent 70%),
+    radial-gradient(circle at 1px 1px, var(--tc-dot) 1px, transparent 1.5px) 0 0 / 22px 22px;
+  -webkit-mask-image: radial-gradient(ellipse 75% 70% at 50% 42%, #000 30%, transparent 78%);
+  mask-image: radial-gradient(ellipse 75% 70% at 50% 42%, #000 30%, transparent 78%);
+}
+
+.temp-mode .empty-state-glow {
+  display: none;
+}
+
+.tc-hero {
+  position: relative;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  text-align: center;
+  animation: temp-rise 480ms var(--ease) both;
+}
+
+.tc-logo {
+  display: block;
+  height: 30px;
+  width: auto;
+  margin-bottom: 28px;
+}
+
+.tc-eyebrow {
+  display: inline-flex;
+  align-items: center;
+  gap: 7px;
+  padding: 5px 12px 5px 10px;
+  border: 1px dashed var(--border-strong);
+  border-radius: 999px;
+  font-size: 11px;
+  font-weight: 650;
+  letter-spacing: 0.14em;
+  text-transform: uppercase;
+  color: var(--text-muted);
+}
+
+.tc-title {
+  margin: 18px 0 0;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  font-family: var(--font-display);
+  font-size: 40px;
+  font-weight: 600;
+  letter-spacing: -0.03em;
+  line-height: 1.12;
+  color: var(--text-main);
+}
+
+.tc-subline {
+  font-weight: 500;
+  color: var(--tc-sub);
+}
+
+.temp-mode .empty-state-composer {
+  max-width: 700px;
+  margin-top: 40px;
+  animation: temp-rise 480ms 80ms var(--ease) both;
+}
+
+/* The welcome composer is a two-row box (text on top, tools bottom-right), as in
+   Claude / ChatGPT / Gemini; the bottom bar during a conversation stays a pill. */
+.temp-mode .chat-input-bar.inline .chat-input-shell {
+  flex-wrap: wrap;
+  align-items: center;
+  row-gap: 6px;
+  border-radius: 22px;
+  padding: 16px 12px 10px 20px;
+}
+
+.temp-mode .chat-input-bar.inline .chat-textarea {
+  flex: 1 0 100%;
+  min-height: 48px;
+  padding: 2px 8px 0 0;
+}
+
+.temp-mode .chat-input-bar.inline .mic-btn {
+  margin-left: auto;
+}
+
+.temp-mode .chat-textarea {
+  scrollbar-width: none;
+}
+
+.temp-mode .chat-textarea::-webkit-scrollbar {
+  display: none;
+}
+
+/* Composer: larger soft pill, lighter than the page, neutral send button. */
+.temp-mode .chat-input-shell {
+  background: var(--temp-input-bg);
+  border: 1px solid var(--border);
+  border-radius: 28px;
+  padding: 9px 9px 9px 22px;
+  box-shadow: 0 1px 2px rgba(15, 23, 42, 0.05), 0 14px 34px -14px rgba(15, 23, 42, 0.22);
+}
+
+.temp-mode .chat-input-shell:focus-within {
+  border-color: var(--border-strong);
+  box-shadow: 0 1px 2px rgba(15, 23, 42, 0.05), 0 14px 34px -14px rgba(15, 23, 42, 0.22),
+    0 0 0 4px rgba(24, 24, 27, 0.06);
+}
+
+.temp-mode .chat-textarea {
+  font-size: 15px;
+}
+
+.temp-mode .chat-send-btn {
+  width: 36px;
+  height: 36px;
+  background: #27272a;
+  color: #fafafa;
+  box-shadow: none;
+}
+
+.temp-mode .chat-send-btn:hover:not(:disabled) {
+  background: #18181b;
+  box-shadow: none;
+}
+
+:root[data-theme="dark"] .temp-mode .chat-send-btn {
+  background: #f4f4f5;
+  color: #18181b;
+}
+
+:root[data-theme="dark"] .temp-mode .chat-send-btn:hover:not(:disabled) {
+  background: #ffffff;
+}
+
+:root[data-theme="dark"] .temp-mode .chat-input-shell,
+:root[data-theme="dark"] .temp-mode .chat-input-shell:focus-within {
+  box-shadow: 0 14px 34px -14px rgba(0, 0, 0, 0.7);
+}
+
+@keyframes temp-rise {
+  from {
+    opacity: 0;
+    transform: translateY(6px);
+  }
+  to {
+    opacity: 1;
+    transform: none;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .tc-hero,
+  .temp-mode .empty-state-composer {
+    animation: none;
+  }
+}
+
+@media (max-width: 560px) {
+  }
+
+:root[data-theme="dark"] .tc-logo {
+  height: 42px;
+  box-sizing: border-box;
+  padding: 6px 12px;
+  border-radius: 10px;
+  background: #f4f4f5;
+}
+
+/* Temporary chat on/off (utils/modeTransition.ts): the snapshots are revealed or folded by a
+   clip-path circle from the toggle, so the default cross-fade is switched off. */
+html.tc-vt-in::view-transition-old(root),
+html.tc-vt-in::view-transition-new(root),
+html.tc-vt-out::view-transition-old(root),
+html.tc-vt-out::view-transition-new(root) {
+  animation: none;
+  mix-blend-mode: normal;
+}
+
+html.tc-vt-out::view-transition-old(root) {
+  z-index: 2;
+}
+
+html.tc-vt-out::view-transition-new(root) {
+  z-index: 1;
 }

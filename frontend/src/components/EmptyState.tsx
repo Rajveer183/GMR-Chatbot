@@ -14,8 +14,11 @@ interface EmptyStateProps {
   lang?: string;
   /** The question box, shown inside the card under the intro line. */
   composer?: React.ReactNode;
-  /** Temporary chat: a dashed-bubble mark in place of the logo. */
+  /** Temporary chat: GMR logo, a small "Temporary chat" label (title), a two-tone headline and
+   * the question box -- nothing else. */
   temporary?: boolean;
+  temporaryHeadline?: string;
+  temporarySubline?: string;
 }
 
 /* Starters verified against the live backend (WFM KPI tables + MDM feeder
@@ -64,23 +67,35 @@ export const EmptyState: React.FC<EmptyStateProps> = ({
   lang = "en",
   composer,
   temporary = false,
+  temporaryHeadline,
+  temporarySubline,
 }) => {
   // Starters verified in English: shown in the screen language, a click runs the English one.
   const starters = STARTERS.map(({ key, icon }) => ({ icon, shown: uiText(lang, key), verified: uiText("en", key) }));
   return (
     <div className="empty-state">
       <div className="empty-state-glow" aria-hidden="true" />
-      <div className="empty-state-icon">
-        {temporary ? (
-          <span className="empty-state-temp-mark">
-            <MessageCircleDashed size={30} aria-hidden="true" />
-          </span>
-        ) : (
-          <img src={gmrLogo} alt="GMR" />
-        )}
-      </div>
-      <h3 className="empty-state-title">{title}</h3>
-      {/* A temporary chat shows only the mark, the title and the question box. */}
+      {temporary ? (
+        // A temporary chat shows only the GMR logo, the title and the question box.
+        <div className="tc-hero">
+          <img className="tc-logo" src={gmrLogo} alt="GMR" />
+          <div className="tc-eyebrow">
+            <MessageCircleDashed size={13} aria-hidden="true" />
+            {title}
+          </div>
+          <h3 className="tc-title">
+            {temporaryHeadline}
+            <span className="tc-subline">{temporarySubline}</span>
+          </h3>
+        </div>
+      ) : (
+        <>
+          <div className="empty-state-icon">
+            <img src={gmrLogo} alt="GMR" />
+          </div>
+          <h3 className="empty-state-title">{title}</h3>
+        </>
+      )}
       {temporary ? null : <p className="empty-state-message">{message ?? uiText(lang, "es_message")}</p>}
 
       {onSuggestedQuestion && !temporary ? (

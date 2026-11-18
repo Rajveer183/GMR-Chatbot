@@ -18,6 +18,8 @@ import { EmptyState } from "./EmptyState";
 import { CopyButton } from "./CopyButton";
 import { SourcesButton } from "./SourcesNote";
 import { ChatInput } from "./ChatInput";
+import { modeTransition, originOf, runNow } from "../utils/modeTransition";
+import type { Wrap } from "../utils/modeTransition";
 import type { ChatInputHandle } from "./ChatInput";
 import gmrLogo from "../assets/gmr_logo.png";
 import { downloadSnapshotHtml, prepareSnapshotFonts, printSnapshot, renderSnapshotPng, triggerDownload } from "../utils/snapshot";
@@ -325,7 +327,7 @@ export const AIWorkspace: React.FC<AIWorkspaceProps> = ({ filters }) => {
     []
   );
 
-  const openSession = async (sessionId: string, scrollToLatest = true, jumpTo?: string) => {
+  const openSession = async (sessionId: string, scrollToLatest = true, jumpTo?: string, wrap: Wrap = runNow) => {
     if (jumpTo) {
       jumpQueryRef.current = jumpTo;
       scrollIntentRef.current = "search-hit";
@@ -333,8 +335,10 @@ export const AIWorkspace: React.FC<AIWorkspaceProps> = ({ filters }) => {
       scrollIntentRef.current = "session-open";
     }
     const detail = await apiClient.getSession(sessionId);
-    leaveTemporary(sessionId);
-    setActiveSession(detail);
+    wrap(() => {
+      leaveTemporary(sessionId);
+      setActiveSession(detail);
+    });
   };
 
   // Temporary chats are kept in server memory only; leaving one (another chat, new chat, toggle
@@ -359,17 +363,20 @@ export const AIWorkspace: React.FC<AIWorkspaceProps> = ({ filters }) => {
     return () => window.removeEventListener("pagehide", onHide);
   }, []);
 
-  const createNewSession = async (temporary = false) => {
+  const createNewSession = async (temporary = false, wrap: Wrap = runNow) => {
     const created = await apiClient.createSession("New Session", temporary);
-    leaveTemporary(created.session_id);
-    if (temporary) {
-      tempSessionRef.current = created.session_id;
-      setTempId(created.session_id);
-      writePendingTemp([...readPendingTemp(), created.session_id]);
-    }
     if (!temporary) await loadSessions();
-    setActiveSession(created);
-    setError("");
+    // One synchronous switch, so the mode transition (wrap) animates a single change.
+    wrap(() => {
+      leaveTemporary(created.session_id);
+      if (temporary) {
+        tempSessionRef.current = created.session_id;
+        setTempId(created.session_id);
+        writePendingTemp([...readPendingTemp(), created.session_id]);
+      }
+      setActiveSession(created);
+      setError("");
+    });
     chatInputRef.current?.clear();
     scrollIntentRef.current = "none";
     window.setTimeout(() => chatInputRef.current?.focus(), 0);
@@ -544,6 +551,7 @@ export const AIWorkspace: React.FC<AIWorkspaceProps> = ({ filters }) => {
     const onKey = (e: KeyboardEvent) => {
       if ((e.ctrlKey || e.metaKey) && !e.shiftKey && !e.altKey && e.key.toLowerCase() === "k") {
         e.preventDefault();
+        if (tempSessionRef.current) return; // history stays out of sight in a temporary chat
         setHistorySearchOpen(true);
       }
     };
@@ -921,25 +929,33 @@ export const AIWorkspace: React.FC<AIWorkspaceProps> = ({ filters }) => {
   // there (or to the most recent chat) instead of creating a new empty session. A new one is
   // made only when there is no saved chat at all.
   const beforeTempRef = useRef<string | null>(null);
-  const toggleTemporary = async () => {
+  const [historyShown, setHistoryShown] = useState(true);
+  const toggleTemporary = async (e?: React.MouseEvent) => {
     if (loading) return;
+    const origin = originOf(e);
     if (!isTemporary) {
       beforeTempRef.current = activeSession?.session_id ?? null;
-      void createNewSession(true);
+      void createNewSession(true, modeTransition(origin, "in"));
       return;
     }
+    const out = modeTransition(origin, "out");
     const back =
       sessions.find((s) => s.session_id === beforeTempRef.current) ?? sessions.find((s) => !s.archived);
     beforeTempRef.current = null;
+    // The history list can be thousands of rows; drawing it inside the switch would hold the
+    // fold-back animation for seconds, so it comes back just after the animation.
+    setHistoryShown(false);
     try {
       if (back) {
-        await openSession(back.session_id);
+        await openSession(back.session_id, true, undefined, out);
         return;
       }
     } catch {
       // The chat could not be opened (deleted elsewhere): fall back to a new one below.
+    } finally {
+      window.setTimeout(() => setHistoryShown(true), 700);
     }
-    await createNewSession();
+    await createNewSession(false, out);
   };
 
 
@@ -1037,7 +1053,7 @@ export const AIWorkspace: React.FC<AIWorkspaceProps> = ({ filters }) => {
   return (
     <div
       ref={layoutRef}
-      className={`chat-app-layout${sidebarCollapsed ? " sidebar-collapsed" : ""}`}
+      className={`chat-app-layout${sidebarCollapsed ? " sidebar-collapsed" : ""}${isTemporary ? " temp-mode" : ""}`}
       lang={langTag(uiLang)}
       style={
         sidebarCollapsed
@@ -1093,17 +1109,22 @@ export const AIWorkspace: React.FC<AIWorkspaceProps> = ({ filters }) => {
             >
               <MessageCircleDashed size={18} />
             </button>
-            <button
-              className="chat-sidebar-icon chat-sidebar-rail-btn"
-              type="button"
-              onClick={() => setHistorySearchOpen(true)}
-              aria-haspopup="dialog"
-              aria-label={t("searchHistory")}
-              data-tip={`${t("searchHistory")} (Ctrl+K)`}
-            >
-              <Search size={18} />
-            </button>
-            <RailRecents t={t} renderHistory={(close) => historyEl(close)} />
+            {/* A temporary chat keeps the history (search + recents) out of sight. */}
+            {isTemporary ? null : (
+              <>
+                <button
+                  className="chat-sidebar-icon chat-sidebar-rail-btn"
+                  type="button"
+                  onClick={() => setHistorySearchOpen(true)}
+                  aria-haspopup="dialog"
+                  aria-label={t("searchHistory")}
+                  data-tip={`${t("searchHistory")} (Ctrl+K)`}
+                >
+                  <Search size={18} />
+                </button>
+                <RailRecents t={t} renderHistory={(close) => historyEl(close)} />
+              </>
+            )}
           </nav>
         ) : (
         <div className="chat-sidebar-top">
@@ -1112,6 +1133,7 @@ export const AIWorkspace: React.FC<AIWorkspaceProps> = ({ filters }) => {
             className="chat-sidebar-icon chat-sidebar-search-btn"
             type="button"
             onClick={() => setHistorySearchOpen(true)}
+            disabled={isTemporary}
             aria-haspopup="dialog"
             aria-label={t("searchHistory")}
             data-tip-pos="below" data-tip={`${t("searchHistory")} (Ctrl+K)`}
@@ -1151,7 +1173,8 @@ export const AIWorkspace: React.FC<AIWorkspaceProps> = ({ filters }) => {
           </div>
         )}
 
-        {sidebarCollapsed ? null : historyEl()}
+        {sidebarCollapsed || isTemporary || !historyShown ? null : historyEl()}
+        {!sidebarCollapsed && (isTemporary || !historyShown) ? <div className="chat-temp-sidebar-fill" aria-hidden="true" /> : null}
 
         <ChatSearchDialog
           open={historySearchOpen}
@@ -1170,13 +1193,16 @@ export const AIWorkspace: React.FC<AIWorkspaceProps> = ({ filters }) => {
         />
       </aside>
 
-      <main className={`chat-main${isTemporary ? " temp-mode" : ""}`}>
+      <main className="chat-main">
         <header className="chat-header">
           <div>
-            <h2 className={isTemporary ? "chat-temp-title" : undefined}>
-              {isTemporary ? <MessageCircleDashed size={16} aria-hidden="true" /> : null}
-              {activeSessionName}
-            </h2>
+            {/* An empty temporary chat already says so in its welcome; the header title returns once it starts. */}
+            {isTemporary && isEmptyChat ? null : (
+              <h2 className={isTemporary ? "chat-temp-title" : undefined}>
+                {isTemporary ? <MessageCircleDashed size={16} aria-hidden="true" /> : null}
+                {activeSessionName}
+              </h2>
+            )}
             {datasets.length <= 1 && (
               <p>
                 {datasets.length === 1
@@ -1449,6 +1475,8 @@ export const AIWorkspace: React.FC<AIWorkspaceProps> = ({ filters }) => {
                 <EmptyState
                   title={isTemporary ? t("temporaryChat") : "GMR AI Intelligence"}
                   temporary={isTemporary}
+                  temporaryHeadline={t("tempHeadline")}
+                  temporarySubline={t("tempSubline")}
                   lang={uiLang}
                   onSuggestedQuestion={(q, canonical) => runQuery(q, 1, ALL_ROWS, true, canonical)}
                   composer={composer(true)}
