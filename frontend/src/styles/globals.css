@@ -3391,21 +3391,10 @@ button {
   margin-top: 6px;
 }
 
+/* Copy / Edit under a question: always visible; their names show as a tooltip on hover. */
 .chat-user-actions {
   justify-content: flex-end;
   margin-top: 0;
-  opacity: 0;
-  transition: opacity var(--duration-fast) ease;
-}
-.chat-msg-col.user:hover .chat-user-actions,
-.chat-user-actions:focus-within {
-  opacity: 1;
-}
-
-@media (hover: none) {
-  .chat-user-actions {
-    opacity: 1;
-  }
 }
 
 .answer-action-btn {
@@ -3494,6 +3483,139 @@ button {
 .chat-edit-send:disabled {
   opacity: 0.55;
   cursor: not-allowed;
+}
+
+/* Sources popover (beside Export under an answer): tables the live query read. */
+.answer-action-btn.is-active {
+  border-color: var(--border);
+  background: var(--card-bg);
+  color: var(--text-main);
+}
+.sources-pop {
+  position: absolute;
+  left: 0;
+  bottom: calc(100% + 6px);
+  z-index: 60;
+  width: min(360px, calc(100vw - 32px));
+  display: flex;
+  flex-direction: column;
+  border: 1px solid var(--border);
+  border-radius: 14px;
+  background: var(--card-bg);
+  box-shadow: 0 16px 40px rgba(15, 23, 42, 0.16), 0 2px 6px rgba(15, 23, 42, 0.06);
+  overflow: hidden;
+  animation: sources-pop-in 140ms ease-out;
+}
+@keyframes sources-pop-in {
+  from { opacity: 0; transform: translateY(4px); }
+  to { opacity: 1; transform: translateY(0); }
+}
+.sources-pop-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 12px 12px 10px 16px;
+  border-bottom: 1px solid var(--border-light);
+}
+.sources-pop-title {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 14px;
+  font-weight: 600;
+  color: var(--text-main);
+}
+.sources-pop-count {
+  min-width: 20px;
+  padding: 1px 7px;
+  border-radius: 999px;
+  background: var(--accent-soft);
+  color: var(--accent);
+  font-size: 11.5px;
+  font-weight: 600;
+  text-align: center;
+}
+.sources-pop-close {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 26px;
+  height: 26px;
+  border: none;
+  border-radius: 8px;
+  background: transparent;
+  color: var(--text-muted);
+  cursor: pointer;
+}
+.sources-pop-close:hover {
+  background: var(--accent-soft);
+  color: var(--text-main);
+}
+.sources-pop-list {
+  list-style: none;
+  margin: 0;
+  padding: 6px;
+  max-height: 320px;
+  overflow-y: auto;
+}
+.sources-pop-item {
+  display: flex;
+  align-items: flex-start;
+  gap: 12px;
+  padding: 10px;
+  border-radius: 10px;
+}
+.sources-pop-item:hover {
+  background: var(--border-light);
+}
+.sources-pop-num {
+  flex: none;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 22px;
+  height: 22px;
+  margin-top: 1px;
+  border-radius: 50%;
+  background: var(--accent-soft);
+  color: var(--accent);
+  font-size: 11.5px;
+  font-weight: 600;
+}
+.sources-pop-body {
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+.sources-pop-name {
+  font-size: 13.5px;
+  font-weight: 600;
+  line-height: 1.35;
+  color: var(--text-main);
+}
+.sources-pop-table {
+  font-family: ui-monospace, SFMono-Regular, Consolas, monospace;
+  font-size: 11.5px;
+  color: var(--text-subtle);
+  overflow-wrap: anywhere;
+}
+.sources-pop-upto {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  margin-top: 4px;
+  font-size: 12px;
+  color: var(--text-muted);
+}
+.sources-pop-foot {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 9px 16px;
+  border-top: 1px solid var(--border-light);
+  font-size: 11.5px;
+  color: var(--text-muted);
 }
 
 /* Export menu items are buttons (exports are built in code -- see utils/snapshot.ts). */

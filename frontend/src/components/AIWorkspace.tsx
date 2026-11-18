@@ -16,6 +16,7 @@ import { ChatSearchDialog, recordOpened } from "./ChatSearchDialog";
 import { ArchivedChatsDialog, ProfileMenu } from "./ProfileMenu";
 import { EmptyState } from "./EmptyState";
 import { CopyButton } from "./CopyButton";
+import { SourcesButton } from "./SourcesNote";
 import { ChatInput } from "./ChatInput";
 import type { ChatInputHandle } from "./ChatInput";
 import gmrLogo from "../assets/gmr_logo.png";
@@ -1356,6 +1357,11 @@ export const AIWorkspace: React.FC<AIWorkspaceProps> = ({ filters }) => {
                               ) : null}
                             </div>
                           ) : null}
+                          <SourcesButton
+                            citations={shown?.result.citations ?? msg.response.citations ?? []}
+                            label={t("sources")}
+                            title={t("viewSourcesTitle")}
+                          />
                         </div>
                       ) : null}
                     </div>

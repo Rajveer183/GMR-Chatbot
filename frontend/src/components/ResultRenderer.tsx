@@ -10,7 +10,6 @@ import { ResultTable } from "./ResultTable";
 import { InsightList } from "./InsightList";
 import { FeederComparePanel } from "./FeederComparePanel";
 import { WarningBox } from "./WarningBox";
-import { SourcesNote } from "./SourcesNote";
 import { SuggestedQuestions } from "./SuggestedQuestions";
 import { FeedbackButtons } from "./FeedbackButtons";
 import type { FeedbackRating } from "../api/client";
@@ -203,7 +202,7 @@ export const ResultRenderer = memo(function ResultRenderer({
 
       <WarningBox warnings={result.warnings ?? []} title={uiText(lang, "warnings")} />
 
-      {/* Below the follow-ups, right above Sources. */}
+      {/* Below the follow-ups. */}
       {onFeedbackChange && result.debug?.trace_id ? (
         <FeedbackButtons
           traceId={result.debug.trace_id}
@@ -214,7 +213,6 @@ export const ResultRenderer = memo(function ResultRenderer({
         />
       ) : null}
 
-      <SourcesNote citations={result.citations ?? []} title={uiText(lang, "sources")} />
 
       {/* Drafts still streaming have no trace yet; the panel renders nothing until the final answer. */}
 
