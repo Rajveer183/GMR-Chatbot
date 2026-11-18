@@ -17,6 +17,10 @@ SKELETON = {
                                         "sat_date": ["2025-01-02", "2026-09-15"]}},
         {"table": "monthly_old", "dates": {"month_date": ["2026-01-01", "2026-08-01"]}},
         {"table": "monthly_current", "dates": {"month": ["2025-01-01", "2026-10-01"]}},
+        {"table": "gold_mi_installation_month_agg", "dates": {"period_start": ["2024-06-01", "2026-11-01"],
+                                                             "period_end": ["2024-06-30", "2026-11-30"]}},
+        {"table": "gold_mi_installation_day_agg", "dates": {"period_start": ["2024-06-10", "2026-11-10"],
+                                                           "period_end": ["2024-06-10", "2026-11-10"]}},
     ],
 }
 
@@ -39,6 +43,16 @@ class FreshnessTests(unittest.TestCase):
         self.assertTrue(f["monthly"] and f["stale"])
         self.assertEqual(freshness.label(f), "data up to Aug 2026")
         self.assertEqual(f["behind"], "3 months")
+
+    def test_month_agg_period_start_is_monthly(self):
+        f = one("gold_mi_installation_month_agg")
+        self.assertTrue(f["monthly"] and not f["stale"])
+        self.assertEqual(freshness.label(f), "data up to Nov 2026")
+
+    def test_day_agg_period_start_is_daily(self):
+        f = one("gold_mi_installation_day_agg")
+        self.assertFalse(f["monthly"] or f["stale"])
+        self.assertEqual(freshness.label(f), "data up to 10 Nov 2026")
 
     def test_last_month_is_current_for_monthly(self):
         self.assertFalse(one("monthly_current")["stale"])

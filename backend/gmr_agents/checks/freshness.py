@@ -9,7 +9,8 @@ written, not which period it covers -- skipped. So is feeder_loss.current_date (
 and any column whose MAX is in the future (due / planned dates).
 
 Cadence: a column NAMED as a month (month_date, raised_month ...) whose values sit on the 1st is
-monthly ('data up to Aug 2026'; behind when the latest month is older than last month).
+monthly ('data up to Aug 2026'; behind when the latest month is older than last month) -- also
+period_start on a *_month_agg / *_monthly_* table.
 Everything else is daily ('data up to 1 Aug 2026'; behind when more than DATA_STALE_DAYS days
 older than the day the skeleton measured it -- measuring against the skeleton's date, not
 today, keeps a day-old skeleton from raising a false alarm). Not 'starts and ends on the 1st':
@@ -27,7 +28,7 @@ from shared import config
 
 _META_COLS = re.compile(
     r"^(?:created|updated|modified|inserted|loaded|refreshed|ingested|synced|deleted)_(?:at|on|date|ts|time)$"
-    r"|^valid_(?:from|to)$|^current_date$|^eligibility_cutoff_date$|^period_start$", re.I)
+    r"|^valid_(?:from|to)$|^current_date$|^eligibility_cutoff_date$", re.I)
 
 
 def _day(v) -> date | None:
@@ -70,7 +71,10 @@ def check(tables: list[str], sql: str | None, skeleton: dict | None = None) -> l
             continue
         used = {c: r for c, r in ranges.items() if re.search(rf"\b{re.escape(c.lower())}\b", sql_text)}
         col, (lo, hi) = max((used or ranges).items(), key=lambda kv: kv[1][1])
-        monthly = "month" in col.lower() and bool(lo and lo.day == 1 and hi.day == 1)
+        # *_month_agg / *_monthly_* tables keep the month in period_start (period_end = month end,
+        # in the future for the current month, so it is dropped above) -- monthly too.
+        named_month = "month" in col.lower() or (col.lower() == "period_start" and "month" in name)
+        monthly = named_month and bool(lo and lo.day == 1 and hi.day == 1)
         if monthly:
             lag = _months_between(hi, measured)
             stale = lag > 1

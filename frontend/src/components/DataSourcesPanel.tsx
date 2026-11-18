@@ -99,7 +99,12 @@ export const DataSourcesPanel: React.FC<{ open: boolean; onClose: () => void; da
                               {f.label.replace(/^data up to /, "")}
                             </span>
                           ) : (
-                            "–"
+                            <span
+                              className="ins-pill sev-low"
+                              title="Current-state table (snapshot / master list): it has no period column, so there is no 'data up to' date"
+                            >
+                              Snapshot
+                            </span>
                           )}
                         </td>
                       </tr>
