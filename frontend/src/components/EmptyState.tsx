@@ -1,5 +1,5 @@
 import React from "react";
-import { ArrowUpRight, FileSpreadsheet, Gauge, Languages, MessagesSquare, Sparkles, TrendingUp, Trophy } from "lucide-react";
+import { ArrowUpRight, FileSpreadsheet, Gauge, Languages, MessageCircleDashed, MessagesSquare, Sparkles, TrendingUp, Trophy } from "lucide-react";
 import gmrLogo from "../assets/gmr_logo.png";
 import { uiText } from "../i18n/languages";
 
@@ -14,6 +14,8 @@ interface EmptyStateProps {
   lang?: string;
   /** The question box, shown inside the card under the intro line. */
   composer?: React.ReactNode;
+  /** Temporary chat: a dashed-bubble mark in place of the logo. */
+  temporary?: boolean;
 }
 
 /* Starters verified against the live backend (WFM KPI tables + MDM feeder
@@ -61,6 +63,7 @@ export const EmptyState: React.FC<EmptyStateProps> = ({
   onSuggestedQuestion,
   lang = "en",
   composer,
+  temporary = false,
 }) => {
   // Starters verified in English: shown in the screen language, a click runs the English one.
   const starters = STARTERS.map(({ key, icon }) => ({ icon, shown: uiText(lang, key), verified: uiText("en", key) }));
@@ -68,12 +71,19 @@ export const EmptyState: React.FC<EmptyStateProps> = ({
     <div className="empty-state">
       <div className="empty-state-glow" aria-hidden="true" />
       <div className="empty-state-icon">
-        <img src={gmrLogo} alt="GMR" />
+        {temporary ? (
+          <span className="empty-state-temp-mark">
+            <MessageCircleDashed size={30} aria-hidden="true" />
+          </span>
+        ) : (
+          <img src={gmrLogo} alt="GMR" />
+        )}
       </div>
       <h3 className="empty-state-title">{title}</h3>
-      <p className="empty-state-message">{message ?? uiText(lang, "es_message")}</p>
+      {/* A temporary chat shows only the mark, the title and the question box. */}
+      {temporary ? null : <p className="empty-state-message">{message ?? uiText(lang, "es_message")}</p>}
 
-      {onSuggestedQuestion ? (
+      {onSuggestedQuestion && !temporary ? (
         <div className="empty-state-starters">
           <div className="empty-state-starters-label">
             <Sparkles size={11} /> {uiText(lang, "tryAsking")}
@@ -97,7 +107,7 @@ export const EmptyState: React.FC<EmptyStateProps> = ({
         </div>
       ) : null}
 
-      <div className="empty-state-capabilities">
+      {temporary ? null : <div className="empty-state-capabilities">
         {CAPABILITY_CARDS.map(({ icon: Icon, title: cardTitle, accent, accentBg }) => (
           <div
             className="empty-state-capability-card"
@@ -110,7 +120,7 @@ export const EmptyState: React.FC<EmptyStateProps> = ({
             <div className="empty-state-capability-title">{uiText(lang, cardTitle)}</div>
           </div>
         ))}
-      </div>
+      </div>}
 
       {composer ? <div className="empty-state-composer">{composer}</div> : null}
     </div>

@@ -168,3 +168,34 @@
   --shadow-float: 0 -8px 24px rgba(0, 0, 0, 0.4);
   color-scheme: dark;
 }
+
+/* ---- Temporary chat ---------------------------------------------------------
+   The chat area of a temporary chat (.chat-main.temp-mode) turns graphite grey, so
+   it never looks like a saved chat; in dark mode it is a neutral charcoal
+   instead of the navy. Only surfaces change -- text and accents stay. */
+.temp-mode {
+  /* Graphite light: a clearly grey "different mode" surface. */
+  --page-bg: #d4d6da;
+  --card-bg: #d4d6da;
+  --surface-2: #e0e1e5;
+  --surface-3: #c9ccd1;
+  --border: #bfc2c8;
+  --border-light: #cfd1d6;
+  --active-bg: #cfd1d6;
+  --table-row-alt: #e0e1e5;
+  --table-row-hover: #d8dade;
+  --divider: rgba(24, 24, 27, 0.12);
+}
+
+:root[data-theme="dark"] .temp-mode {
+  --page-bg: #141416;
+  --card-bg: #1c1c1f;
+  --surface-2: #19191c;
+  --surface-3: #26262a;
+  --border: #303036;
+  --border-light: #242428;
+  --active-bg: #2a2a2f;
+  --table-row-alt: #1a1a1d;
+  --table-row-hover: #232327;
+  --divider: rgba(212, 212, 216, 0.12);
+}

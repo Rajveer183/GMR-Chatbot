@@ -917,9 +917,29 @@ export const AIWorkspace: React.FC<AIWorkspaceProps> = ({ filters }) => {
   useEffect(() => {
     document.documentElement.lang = langTag(uiLang);
   }, [uiLang]);
-  const toggleTemporary = () => {
+  // Turning temporary chat on remembers the chat it was opened from; turning it off goes back
+  // there (or to the most recent chat) instead of creating a new empty session. A new one is
+  // made only when there is no saved chat at all.
+  const beforeTempRef = useRef<string | null>(null);
+  const toggleTemporary = async () => {
     if (loading) return;
-    void createNewSession(!isTemporary);
+    if (!isTemporary) {
+      beforeTempRef.current = activeSession?.session_id ?? null;
+      void createNewSession(true);
+      return;
+    }
+    const back =
+      sessions.find((s) => s.session_id === beforeTempRef.current) ?? sessions.find((s) => !s.archived);
+    beforeTempRef.current = null;
+    try {
+      if (back) {
+        await openSession(back.session_id);
+        return;
+      }
+    } catch {
+      // The chat could not be opened (deleted elsewhere): fall back to a new one below.
+    }
+    await createNewSession();
   };
 
 
@@ -986,7 +1006,7 @@ export const AIWorkspace: React.FC<AIWorkspaceProps> = ({ filters }) => {
       stopLabel={t("stopGenerating")}
       speechUnsupportedLabel={t("speechUnsupported")}
       speechFailedLabel={t("speechStartFailed")}
-      placeholder={t("askPlaceholder")}
+      placeholder={t(isTemporary ? "tempPlaceholder" : "askPlaceholder")}
       micOnLabel={t("micOn")}
       micOffLabel={t("micOff")}
       speechLocale={speechLocale(responseLanguage)}
@@ -1150,16 +1170,14 @@ export const AIWorkspace: React.FC<AIWorkspaceProps> = ({ filters }) => {
         />
       </aside>
 
-      <main className="chat-main">
+      <main className={`chat-main${isTemporary ? " temp-mode" : ""}`}>
         <header className="chat-header">
           <div>
             <h2 className={isTemporary ? "chat-temp-title" : undefined}>
               {isTemporary ? <MessageCircleDashed size={16} aria-hidden="true" /> : null}
               {activeSessionName}
             </h2>
-            {isTemporary ? (
-              <p>{t("temporaryChatNote")}</p>
-            ) : datasets.length <= 1 && (
+            {datasets.length <= 1 && (
               <p>
                 {datasets.length === 1
                   ? t("connectedTo", { name: datasets[0].display_name })
@@ -1430,6 +1448,7 @@ export const AIWorkspace: React.FC<AIWorkspaceProps> = ({ filters }) => {
               <div className="chat-msg-row empty">
                 <EmptyState
                   title={isTemporary ? t("temporaryChat") : "GMR AI Intelligence"}
+                  temporary={isTemporary}
                   lang={uiLang}
                   onSuggestedQuestion={(q, canonical) => runQuery(q, 1, ALL_ROWS, true, canonical)}
                   composer={composer(true)}
