@@ -5924,3 +5924,25 @@ examples:
                    / NULLIF(SUM(month_before) OVER (PARTITION BY zone), 0), 1) AS gap_vs_zone_pts
       FROM g
       ORDER BY zone, gap_vs_zone_pts DESC NULLS LAST
+
+  - q: ["Remaining stock by project month wise for the last 3 months", "month-end remaining stock project wise", "stock balance at the end of each month by project", "remaining stock trend monthly"]
+    note: "Remaining stock in a month = the running balance at that month's end: SUM(inventory - consumed) OVER every month up to it (the dashboard's MI pace vs stock trend), never that month's own receipts minus consumption. The window runs over ALL history; the month filter is applied after it. Last N months = complete months. Total = the projects' balances added."
+    sql: |
+      WITH monthly AS (
+        SELECT period_start AS month, project, SUM(inventory_count) - SUM(stock_consumed_count) AS net_change
+        FROM public.gold_meter_inventory_event_month_agg
+        GROUP BY period_start, project
+      ), running AS (
+        SELECT month, project,
+               SUM(net_change) OVER (PARTITION BY project ORDER BY month
+                                     ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW) AS remaining_stock
+        FROM monthly
+      )
+      SELECT TO_CHAR(month, 'YYYY-MM') AS month,
+             CASE WHEN GROUPING(project) = 1 THEN 'Total' ELSE UPPER(project) END AS project,
+             SUM(remaining_stock) AS remaining_stock
+      FROM running
+      WHERE month >= (date_trunc('month', CURRENT_DATE) - INTERVAL '3 months')::date
+        AND month < date_trunc('month', CURRENT_DATE)::date
+      GROUP BY month, ROLLUP (project)
+      ORDER BY month, GROUPING(project) DESC, project

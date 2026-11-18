@@ -33,7 +33,7 @@ try {
     process.execPath,
     [
       path.join("node_modules", "typescript", "bin", "tsc"), "--ignoreConfig",
-      "src/components/chartOptions.ts", "src/components/charts/dataviz.ts",
+      "src/components/chartOptions.ts", "src/components/charts/dataviz.ts", "src/components/charts/graphModes.ts", "src/components/charts/hoverCard.ts",
       "--outDir", outDir, "--module", "esnext", "--moduleResolution", "bundler",
       "--target", "es2022", "--skipLibCheck",
     ],
@@ -59,6 +59,10 @@ if (!optsJs || !vizJs) {
 }
 const { resolveKind, buildChartOptions, buildChartSeries } = await import(pathToFileURL(path.join(outDir, optsJs)).href);
 const { fullNumber, axisNumber, isOrderedBands, DV } = await import(pathToFileURL(path.join(outDir, vizJs)).href);
+const modesJs = fs.globSync("**/graphModes.js", { cwd: outDir })[0];
+const { availableModes, applyMode, chronological } = await import(pathToFileURL(path.join(outDir, modesJs)).href);
+const hoverJs = fs.globSync("**/hoverCard.js", { cwd: outDir })[0];
+const { hoverCard, hoverHtml, weekRange } = await import(pathToFileURL(path.join(outDir, hoverJs)).href);
 
 const CASES = [
   { name: "bar, SAT stages", chart: { id: "c", title: "SAT by stage", type: "bar",
@@ -181,11 +185,13 @@ for (const { name, chart } of CASES) {
       }
 
       // Dashboard colour rules.
-      if (layout.kind === "bar" && !layout.funnel && (chart.series?.length ?? 1) === 1 && options.colors?.[0] !== DV.series) {
-        problems.push(`single-series bar must use the dashboard series hue ${DV.series}`);
+      // Portal colours everywhere (chartUtils.js getColor): one unnamed series is the portal's 'value' blue.
+      if (layout.kind === "bar" && !layout.funnel && !chart.series?.length && options.colors?.[0] !== "#2563eb") {
+        problems.push("single-series bar must use the portal's value blue #2563eb");
       }
-      if (chart.series?.length > 1 && isOrderedBands(chart.series.map((s) => s.name)) && !options.colors.every((c) => DV.bandRamp.includes(c))) {
-        problems.push("ordered bands must use the band ramp");
+      const PORTAL_BANDS = ["#3987E5", "#FBBC04", "#0B3C6D", "#E31E24", "#F2665D"];
+      if (chart.series?.length > 1 && isOrderedBands(chart.series.map((s) => s.name)) && !options.colors.every((c) => PORTAL_BANDS.includes(c))) {
+        problems.push("ordered bands must use the portal's age-band colours");
       }
     } catch (err) {
       problems.push(`threw: ${err?.message ?? err}`);
@@ -278,6 +284,117 @@ for (const { name, chart, colors, stacked, total, labelsOff, rateOn } of DASHBOA
   failures += problems.length ? 1 : 0;
   console.log(`  ${problems.length ? "FAIL" : "ok  "}  dashboard: ${name}`);
   for (const p of problems) console.log(`          - ${p}`);
+}
+
+// Graphs Modes (charts/graphModes.ts): every mode a chart offers builds clean options and shows the
+// same figures -- bars / lines / areas the same series, a donut each category's total, a pareto the
+// same bars largest first.
+const total = (c) => (c.series?.length ? c.series.filter((s) => s.type !== "line" || c.type !== "combo") : [{ data: c.y }])
+  .reduce((t, s) => t + s.data.reduce((a, v) => a + Number(v || 0), 0), 0);
+const MODE_CHARTS = [...CASES.map((c) => c.chart), ...DASHBOARD.map((d) => d.chart),
+  { id: "m1", title: "MI progress trend", type: "stacked_bar", dashboard: "mi_progress", labels: "total",
+    x: ["2026-11-08", "2026-11-09", "2026-11-10"], y: [1, 2, 3],
+    series: [{ name: "Consumer", data: [3700, 2400, 5100] }, { name: "DT", data: [40, 60, 30] }, { name: "Feeder", data: [0, 1, 0] }] },
+  { id: "m2", title: "Comparison by Project", type: "stacked_bar", dashboard: "mi_progress", labels: "total",
+    x: ["kashi", "agra", "triveni"], y: [1, 2, 3],
+    series: [{ name: "Consumer", data: [7000, 6000, 4900] }, { name: "DT", data: [200, 150, 86] }] },
+  { id: "m3", title: "Supplied vs installed", type: "grouped_bar", dashboard: "supply_utilization",
+    x: ["AGRA", "KASHI"], y: [1, 2], series: [{ name: "Supplied", data: [10, 20] }, { name: "Installed", data: [8, 15] }] },
+  { id: "m4", title: "Tickets by type", type: "bar", x: ["A", "B", "C", "D"], y: [40, 25, 10, 5] },
+  { id: "m5", title: "VDI by zone", type: "horizontal_bar", dashboard: "pq_vdi", x: ["Z1", "Z2", "Z3"], y: [3.1, 2.2, 1.5],
+    point_keys: ["mean", "mean", "mean"] },
+];
+let modeRuns = 0;
+for (const chart of MODE_CHARTS) {
+  const modes = availableModes(chart);
+  for (const mode of modes) {
+    const problems = [];
+    try {
+      const shown = applyMode(chart, mode);
+      modeRuns += 1;
+      for (const [k, v] of Object.entries(shown)) if (v === undefined) problems.push(`spec key "${k}" is undefined`);
+      const layout = resolveKind(shown.type);
+      const options = buildChartOptions(shown, layout);
+      buildChartSeries(shown, layout);
+      for (const at of undefinedPaths(options)) problems.push(`option "${at}" is present but undefined`);
+      checkUnguarded(options, problems);
+      const want = total(chart);
+      const got = total(shown);
+      if (Math.abs(got - want) > 1e-6 * Math.max(1, Math.abs(want))) problems.push(`figures changed: ${got} vs ${want}`);
+      if ((mode === "line" || mode === "area") && shown.point_keys) problems.push("a line keeps no per-bar colours");
+    } catch (err) {
+      problems.push(`threw: ${err?.message ?? err}`);
+    }
+    failures += problems.length ? 1 : 0;
+    if (problems.length) console.log(`  FAIL  mode ${mode}: ${chart.title}`);
+    for (const p of problems) console.log(`          - ${p}`);
+  }
+}
+const expectModes = [
+  ["m1", ["area", "line", "bar"]], ["m2", ["bar", "hbar", "donut"]], ["m3", ["bar", "hbar"]],
+  ["m4", ["line", "area", "bar", "hbar", "donut", "funnel", "pareto"]],
+];
+for (const [id, want] of expectModes) {
+  const got = availableModes(MODE_CHARTS.find((c) => c.id === id));
+  const ok = JSON.stringify(got) === JSON.stringify(["area", "line", "bar", "hbar", "donut", "gauge", "funnel", "pareto"].filter((m) => want.includes(m)));
+  failures += ok ? 0 : 1;
+  console.log(`  ${ok ? "ok  " : "FAIL"}  modes offered for ${id}: ${JSON.stringify(got)}`);
+}
+console.log(`  ok    ${modeRuns} graph-mode renders checked`);
+
+// Hover card (charts/hoverCard.ts): the dashboard's CustomTooltip -- DT / Consumer / Feeder first, a Total only
+// for parts of one whole (kept when a stacked chart is switched to lines), rates as extra rows, donut share.
+{
+  const mi = MODE_CHARTS.find((c) => c.id === "m1");
+  const card = (chart, j = 0) => hoverCard(chart, resolveKind(chart.type), j, ["#1", "#2", "#3", "#4"]);
+  const HOVER = [
+    ["order DT, Consumer, Feeder", () => card(mi).rows.slice(0, 3).map((r) => r.name).join(","), "DT,Consumer,Feeder"],
+    ["Total = sum of the parts", () => card(mi).rows.find((r) => r.name === "Total")?.value, "3,740"],
+    ["Total kept after Line mode", () => card(applyMode(mi, "line")).rows.some((r) => r.name === "Total"), true],
+    ["no Total beside Supplied", () => card(MODE_CHARTS.find((c) => c.id === "m3")).rows.some((r) => r.name === "Total"), false],
+    ["donut share", () => card({ id: "d", title: "t", type: "donut", x: ["A", "B"], y: [30, 10] }).rows.find((r) => r.name === "Share")?.value, "75.0%"],
+    ["rate row", () => card({ id: "r", title: "t", type: "bar", x: ["A"], y: [5], rates: [{ name: "% SAT vs MI", data: [89.06] }] }).rows.at(-1)?.value, "89.06%"],
+    ["ISO week range", () => weekRange("2026-W45"), "02 Nov - 08 Nov 2026"],
+    ["escapes names", () => hoverHtml({ title: "<b>x</b>", rows: [] }).includes("<b>x"), false],
+    ["place rows under 'By Project'", () => card({ ...mi, details: [[["kashi", 2000], ["agra", 1740]], [], []], details_label: "Project" })
+      .rows.slice(-3).map((r) => `${r.name}=${r.value}`).join(","), "By Project=,kashi=2,000,agra=1,740"],
+    ["newest-first dates drawn oldest first", () => JSON.stringify(chronological({ id: "c", title: "t", type: "bar",
+      x: ["2026-11-17", "2026-11-16"], y: [3, 2], series: [{ name: "agra", data: [3, 2] }], details: [[["a", 3]], [["a", 2]]] })),
+      JSON.stringify({ id: "c", title: "t", type: "bar", x: ["2026-11-16", "2026-11-17"], y: [2, 3],
+        series: [{ name: "agra", data: [2, 3] }], details: [[["a", 2]], [["a", 3]]] })],
+    ["pareto keeps place rows aligned", () => applyMode({ id: "p", title: "t", type: "bar", x: ["A", "B"], y: [1, 9],
+      details: [[["a", 1]], [["b", 9]]] }, "pareto").details[0][0][0], "b"],
+  ];
+  for (const [name, run, want] of HOVER) {
+    let got;
+    try { got = run(); } catch (err) { got = `threw: ${err?.message ?? err}`; }
+    const ok = JSON.stringify(got) === JSON.stringify(want);
+    failures += ok ? 0 : 1;
+    console.log(`  ${ok ? "ok  " : "FAIL"}  hover: ${name}${ok ? "" : ` got ${JSON.stringify(got)}`}`);
+  }
+}
+
+// Portal colours, one per place everywhere, never repeated inside a chart (18 Nov whole-project audit).
+{
+  const ZONES = ["VARANASI II", "VARANASI I", "AZAMGARH", "PRAYAGRAJ II", "ETAH", "FIROZABAD", "ALIGARH", "PRAYAGRAJ I", "MIRZAPUR", "AGRA", "MATHURA"];
+  const cols = (chart) => buildChartOptions(chart, resolveKind(chart.type)).colors;
+  const zoneChart = (order) => ({ id: "z", title: "t", type: "stacked_bar", dashboard: "om_closed", x: ["2026-11-11", "2026-11-12"], y: [1, 1],
+    series: order.map((n) => ({ name: n, data: [1, 2] })) });
+  const a = cols(zoneChart(ZONES)), b = cols(zoneChart([...ZONES].reverse()));
+  const COLOUR = [
+    ["11 zones, 11 colours", () => new Set(a).size, 11],
+    ["a zone keeps its colour whatever the order", () => ZONES.every((z, i) => a[i] === b[ZONES.length - 1 - i]), true],
+    ["Total SAT keeps red beside SAT-11 / SAT-12", () => { const c = cols({ id: "s", title: "t", type: "grouped_bar", dashboard: "mi_vs_sat", x: ["AGRA"], y: [1],
+      series: [{ name: "SAT-11", data: [1] }, { name: "Total SAT", data: [2] }, { name: "SAT-12", data: [3] }] }); return [c[1], new Set(c).size]; }, ["#E31E24", 3]],
+    ["Agra stays blue beside Total", () => cols({ id: "a", title: "t", type: "bar", x: ["x"], y: [1],
+      series: [{ name: "Total", data: [1] }, { name: "AGRA", data: [2] }] })[1], "#2563eb"],
+  ];
+  for (const [name, run, want] of COLOUR) {
+    let got; try { got = run(); } catch (err) { got = `threw: ${err?.message ?? err}`; }
+    const ok = JSON.stringify(got) === JSON.stringify(want);
+    failures += ok ? 0 : 1;
+    console.log(`  ${ok ? "ok  " : "FAIL"}  colour: ${name}${ok ? "" : ` got ${JSON.stringify(got)}`}`);
+  }
 }
 
 const FORMATS = [

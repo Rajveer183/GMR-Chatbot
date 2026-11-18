@@ -168,7 +168,8 @@ def _parse_triage(d: dict, state: dict, model: str) -> dict:
         if _MULTI_CARD_RE.search(state["question"]):
             tables, extra = multi_card_tables(asked, pq_topic)
         d = {**d, "topics": list(dict.fromkeys([pq_topic, *extra, *chosen]))[:3], "tables": tables}
-    elif kind in {"data", "explain", "out_of_scope"} and _MAPPING_RE.search(asked) and not _WFM_WORDS_RE.search(asked):
+    elif kind in {"data", "explain", "out_of_scope"} and _MAPPING_RE.search(asked) and not _WFM_WORDS_RE.search(asked) \
+            and not _MI_CARD_RE.search(asked):
         kind, domain = ("data" if kind == "out_of_scope" else kind), "mdm"
         d = {**d, "topics": ["mdm_autoindexing"]}
     else:
@@ -176,9 +177,13 @@ def _parse_triage(d: dict, state: dict, model: str) -> dict:
         # Agra installs / SAT / defects answer came back domain 'mdm' with three WFM topics -> run on the MDM
         # catalog, WFM tables 'unknown', no answer). The topics -- and the tables it named -- decide.
         picked = business_rules.valid_topics(d.get("topics"))
-        if picked and set(picked) <= {"mdm_meter_master", "mdm_meter_readings"} and _WFM.search(asked):
+        if picked and ((set(picked) <= {"mdm_meter_master", "mdm_meter_readings"} and _WFM.search(asked))
+                       or (set(picked) <= {"mdm_autoindexing"} and _MI_CARD_RE.search(asked))):
             # The meter master / raw-readings topics are code-routed (meter_topic) and vetoed by WFM words; the
             # model picking them for 'Non SAT meters zone wise in Kashi' ran it on the MDM catalog (10 Nov retest).
+            # A WFM card named outright ('MI progress') is never the mapping audit: the model picking it for
+            # 'daily MI progress by project, category wise (consumer, DT, feeder)' had no MI table and refused
+            # (18 Nov graph test) -- 'feeder ... MI' read as the audit's feeder-vs-MI wording.
             domain, picked = "wfm", []
             d = {**d, "domain": "wfm", "topics": [], "tables": []}
         doms = {business_rules.topics()[t].get("domain", "wfm") for t in picked}
@@ -346,6 +351,9 @@ _MASTER_COUNT = re.compile(
     r"(?=.*(?:\bhes\b|\bmdm\b|\bmeter master\b|\bdim_meter\b|\bfeeder meters\b|\bdt meters\b|\bdtr meters\b"
     r"|\b(?:on|under|behind|connected to)\s+(?:the\s+)?(?:feeder|dtr?|transformer)\b|\bfeeder\s+\w*\d\w*|\bdtr?\s+[A-Z]{2,}/))", re.I | re.S)
 
+# The WFM card names themselves ('MI progress', 'MI productivity'): 'MI' alone also means meter index in the
+# mapping audit ('MI vs CI'), which _MAPPING_RE catches first.
+_MI_CARD_RE = re.compile(r"\bmi[- ]?(?:progress|productivity|pace)\b|\bmeter installation", re.I)
 _WFM = re.compile(r"\b(?:tickets?|complaints?|install\w*|sat\b|invoic\w*|stock|technicians?|o&m|journey|escalat\w*|"
                   r"warehouse|replac\w*|defect\w*|agency|supervisor|pmpm|revenue|stage|stuck|custody)", re.I)
 

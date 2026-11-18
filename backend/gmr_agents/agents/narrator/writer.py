@@ -210,6 +210,44 @@ def _write_answer(state: dict, triage: dict, plan: dict, result: dict, extras: l
             d = redo.data
             summary = language.ascii_digits(str(d["summary"])).strip()
             insights = [language.ascii_digits(str(i)) for i in d.get("insights") or [] if str(i).strip()][:3] or insights
+    # 'No data' while RESULT has figures, or a day series squashed into '22-620-975' (checks/wording_check.py,
+    # code only): one rewrite naming the problem, then the number / extreme / wording checks below as usual.
+    # 18 Nov: 'Kashi zone data is not available' for 21 Kashi rows (Kashi is the query's filter, not a column);
+    # 'AGRA leading with 22-620-975 consumer installs'.
+    empty_claim = has_numbers and wording_check.false_empty(summary, df0)
+    runs = wording_check.squashed_runs(" ".join([summary, *insights]))
+    if empty_claim or runs:
+        _step(state, "shape_check", time.perf_counter(), empty_claim=empty_claim, runs=runs[:3])
+        if empty_claim:
+            filters = wording_check.sql_filters(plan.get("sql"))
+            # Neutral on purpose: some 'not available' answers are right (cable revenue growth: RESULT holds only the
+            # latest figures, no history) -- those should say what RESULT does show, never stretch it into an answer.
+            problem = (f"That answer says there is no data, yet RESULT has {n} row(s) with figures."
+                       + (f" The query already kept only rows where {'; '.join(filters)} -- every row of RESULT is inside "
+                          "that filter, so it is not repeated as a column." if filters else "")
+                       + " If RESULT answers the question, answer from it, quoting its figures. If it truly cannot (for "
+                         "example no earlier period to compare), say so in one sentence and then state what RESULT does "
+                         "show, with its figures.")
+        else:
+            problem = (f"These figures are chained with dashes, which reads as one garbled number: {', '.join(runs[:3])}. "
+                       "Never join figures with dashes. Give totals from FACTS (or at most three dated figures, each "
+                       "written separately with its date).")
+        redo = llm_gateway.chat_json(
+            "answer", prompt + "\n\nYOUR PREVIOUS ANSWER:\n"
+            + json.dumps({"summary": summary, "insights": insights}, ensure_ascii=False)
+            + f"\n{problem} Same JSON format.", system=_ANSWER_SYSTEM, max_tokens=config.LLM_MAX_TOKENS_ANSWER)
+        if redo is not None and str(redo.data.get("summary") or "").strip():
+            new = language.ascii_digits(str(redo.data["summary"])).strip()
+            if not (has_numbers and wording_check.false_empty(new, df0)):
+                d, summary = redo.data, new
+                insights = [language.ascii_digits(str(i)) for i in d.get("insights") or [] if str(i).strip()][:3]
+        # Still squashed: the sentence goes (never the whole summary); a squashed insight is dropped.
+        left = wording_check.squashed_runs(summary)
+        if left:
+            summary = wording_check.drop_sentences(summary, left)
+        insights = [i for i in insights if not wording_check.squashed_runs(i)]
+        if state.get("emit") is not None:
+            _emit(state, "summary_replace", text=summary)
 
     # Number check: every figure written must come from the results (or a simple
     # sum / difference / share within a row or column). A slip goes back to the LLM
@@ -310,6 +348,11 @@ def _write_answer(state: dict, triage: dict, plan: dict, result: dict, extras: l
         vocab = wording_check.vocabulary(frames, given)
         causes = wording_check.unsupported_causes(cleaned, vocab)
         cleaned = wording_check.drop_sentences(cleaned, causes)
+        # A share named against a base RESULT never had ('87.68% of eligible' with no eligible column): cut.
+        bases = wording_check.unsupported_bases(cleaned, frames, f"{state['question']} {triage['question']}")
+        cleaned = wording_check.strip_phrases(cleaned, bases)
+        causes = [*causes, *bases]
+        insights = [i for i in insights if not wording_check.unsupported_bases(i, frames, state["question"])]
         insights = [wording_check.leaks(i) for i in insights]
         insights = [i for i in insights if not wording_check.unsupported_causes(i, vocab)]
     except Exception:

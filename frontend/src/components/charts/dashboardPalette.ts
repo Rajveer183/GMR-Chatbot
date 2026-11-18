@@ -193,8 +193,59 @@ export const DASHBOARD_CARDS: Record<string, string> = {
 /** chartUtils.js getColor: the key's fixed colour, else the palette slot for its position. */
 export function getColor(key: string, index: number): string {
   const k = key.toLowerCase().trim();
-  return KEY_COLORS[k] ?? GMR_PALETTE[index % GMR_PALETTE.length];
+  return KEY_COLORS[k] ?? PLACE_COLORS[k] ?? EXTENDED_PALETTE[index % EXTENDED_PALETTE.length];
 }
+
+/** One colour per place, the same in every chart (the portal colours zones by position, so a zone changed colour
+ * from chart to chart -- 18 Nov). Only the portal's own hues, all distinct; zone AGRA keeps the portal's 'agra'. */
+export const PLACE_COLORS: Record<string, string> = {
+  aligarh: GMR.green, etah: GMR.orange, firozabad: GMR.purple, mathura: GMR.yellow,          // DVVNL / Agra (agra: blue)
+  azamgarh: NAVY, "varanasi i": GMR.pink, "varanasi ii": GOLD,                              // PUVVNL / Kashi
+  mirzapur: "#15803d", "prayagraj i": "#9085e9", "prayagraj ii": "#F2665D",                 // PUVVNL / Triveni
+  dvvnl: NAVY, puvvnl: GOLD,
+};
+
+/** The portal palette first (its 7 slots, unchanged), then the portal's other brand hues, so a chart with more
+ * than 7 series never repeats a colour (18 Nov: 11 zones painted three of them the same blue). */
+export const EXTENDED_PALETTE = [...GMR_PALETTE, NAVY, GOLD, "#3987E5", "#F2665D", "#9085e9", "#15803d", "#C98500",
+  "#1B4F72", "#d55181", "#199e70"];
+
+/** No two series of one chart share a colour. Names are mapped onto the portal's keys, so several series of one
+ * answer can land on the same key ('SAT-11' / 'SAT-12' -> 'total sat' red; 'Eligible MI' / 'Eligible pending SAT' ->
+ * gold) -- 102 of 3,491 saved charts (18 Nov). The series whose own name IS a portal key keeps the colour (then the
+ * first); the others take the next portal brand hue not used in the chart. */
+export function distinctColours(colours: string[], names: string[], kpi?: string): string[] {
+  // Places / projects / categories hold their colour first (Agra is blue in every chart, even beside 'Total'),
+  // then any other name that is a portal key, then the rest in order.
+  const FIXED = new Set(["agra", "kashi", "triveni", "consumer", "dt", "dtr", "feeder", ...Object.keys(PLACE_COLORS)]);
+  const own = (n: string) => {
+    const k = n.toLowerCase().trim();
+    if (FIXED.has(k)) return 2;
+    return KEY_COLORS[k] || (kpi && KPI_OVERRIDES[kpi]?.[k]) ? 1 : 0;
+  };
+  const order = names.map((_n, i) => i).sort((a, b) => own(names[b]) - own(names[a]) || a - b);
+  const used = new Set<string>();
+  const out = [...colours];
+  for (const i of order) {
+    let c = colours[i];
+    if (c && used.has(c)) {
+      c = EXTENDED_PALETTE.find((p) => !used.has(p) && !colours.includes(p))
+        ?? EXTENDED_PALETTE.find((p) => !used.has(p)) ?? c;
+    }
+    if (c) used.add(c);
+    out[i] = c;
+  }
+  return out;
+}
+
+// Meter Replacement 'by OEM' with free-text defect reasons (SmartChart.jsx METER_REPLACEMENT_REASON_COLORS /
+// _OVERRIDES): by stack position, two pinned by name. Burnt / Faulty / Others keep KEY_COLORS.
+const REASON_COLORS = ["#0B3C6D", "#E31E24", "#FBBC04", "#3987E5", "#F2665D", "#C98500", "#1B4F72"];
+const REASON_OVERRIDES: Record<string, string> = {
+  "push button not working": "#F2665D", "meter display faulty / display not visible": "#E31E24",
+  "load reduction": "#F2665D", "meter tampering detected": "#E31E24", "meter by pass": "#3987E5",
+  "meter glass/box broken": "#0B3C6D",
+};
 
 /** chartUtils.js getContrastText: white ink on dark fills, near-black on light ones. */
 export function getContrastText(bgHex: string): string {
@@ -304,5 +355,9 @@ export function canonicalKey(kpi: string, name: string, exact = false): string {
 /** Colour of series / slice `name` at position `index` on the dashboard card for `kpi`. */
 export function dashboardColour(kpi: string, name: string, index: number, exact = false): string {
   const key = canonicalKey(kpi, name, exact);
+  if (kpi === "meter_replacement" && !["burnt", "faulty", "others"].includes(key) && !KEY_COLORS[key] && !PLACE_COLORS[key]) {
+    const raw = name.toLowerCase().trim();
+    return REASON_OVERRIDES[raw] ?? REASON_COLORS[index % REASON_COLORS.length];
+  }
   return KPI_OVERRIDES[kpi]?.[key] ?? getColor(key, index);
 }

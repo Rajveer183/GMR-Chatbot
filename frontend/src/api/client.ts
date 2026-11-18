@@ -85,6 +85,13 @@ export interface AIChartSpec {
   point_keys?: string[];
   /** ... or for each series (Poor / Moderate, Dips / Surges, last / this month). */
   series_keys?: string[];
+  /** The series are parts of one whole (set when a stacked chart is redrawn as lines / areas): the hover card
+   * keeps its Total row (charts/hoverCard.ts). */
+  stack_total?: boolean;
+  /** Per category, the rows the hover card lists under "By <details_label>" -- e.g. each project's figure on
+   * that day when the axis is dates (backend presentation/multi_chart.py). */
+  details?: [string, number][][];
+  details_label?: string;
   description?: string;
   /** Title / description in the answer's language; `title` stays English. */
   display_title?: string;

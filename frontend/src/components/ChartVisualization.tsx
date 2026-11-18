@@ -3,6 +3,7 @@ import ReactApexChart from "react-apexcharts";
 import type { AIChartSpec } from "../api/client";
 import { buildChartOptions, buildChartSeries, chartCategories, resolveKind } from "./chartOptions";
 import { chartTipData } from "./charts/exportTip";
+import { hoverCard, hoverHtml } from "./charts/hoverCard";
 import { uiText } from "../i18n/languages";
 
 const MONTHS = ["January", "February", "March", "April", "May", "June", "July", "August", "September", "October", "November", "December"];
@@ -29,6 +30,24 @@ function chartLocale(lang?: string | null) {
   };
 }
 
+const HOVER_KINDS = new Set(["bar", "line", "area", "pie", "donut"]);
+const coloursOf = (options: { colors?: unknown[] }) => (options.colors ?? []).map((c) => (typeof c === "string" ? c : ""));
+
+/** The dashboard's hover card (charts/hoverCard.ts) in place of the library's default list. Gauges have no
+ * tooltip (as on the dashboard) and heatmap cells keep the library's. */
+function withHoverCard(options: ReturnType<typeof buildChartOptions>, chart: AIChartSpec, layout: ReturnType<typeof resolveKind>) {
+  if (!HOVER_KINDS.has(layout.kind) || options.tooltip?.enabled === false) return {};
+  const colours = coloursOf(options);
+  const circular = layout.kind === "pie" || layout.kind === "donut";
+  return {
+    tooltip: {
+      ...options.tooltip,
+      custom: ({ seriesIndex, dataPointIndex }: { seriesIndex: number; dataPointIndex: number }) =>
+        hoverHtml(hoverCard(chart, layout, circular ? seriesIndex : dataPointIndex, colours)),
+    },
+  };
+}
+
 interface ChartVisualizationProps {
   chart: AIChartSpec;
   height?: number;
@@ -49,14 +68,16 @@ export const ChartVisualization: React.FC<ChartVisualizationProps> = ({ chart, h
   const series = useMemo(() => buildChartSeries(chart, layout), [chart, layout]);
   const options = useMemo(() => {
     const raw = buildChartOptions(chart, layout, onPointClick);
-    const built = { ...raw, chart: { ...raw.chart, ...chartLocale(lang) } };
+    const built = { ...raw, chart: { ...raw.chart, ...chartLocale(lang) }, ...withHoverCard(raw, chart, layout) };
     // Users who ask the OS for reduced motion get static charts (and so do screenshots).
     const reduced = typeof window !== "undefined" && window.matchMedia?.("(prefers-reduced-motion: reduce)").matches;
     return animate && !reduced ? built : { ...built, chart: { ...built.chart, animations: { enabled: false } } };
   }, [chart, layout, onPointClick, animate, lang]);
   // Hover figures for the downloaded HTML copy, which has no chart library (utils/snapshot.ts).
   const tip = useMemo(() => {
-    const data = chartTipData(chartCategories(chart), layout, series as any, options);
+    const cards = HOVER_KINDS.has(layout.kind)
+      ? chartCategories(chart).map((_c, j) => hoverHtml(hoverCard(chart, layout, j, coloursOf(options)))) : undefined;
+    const data = chartTipData(chartCategories(chart), layout, series as any, options, cards);
     return data ? JSON.stringify(data) : undefined;
   }, [chart, layout, series, options]);
 
@@ -72,8 +93,8 @@ export const ChartVisualization: React.FC<ChartVisualizationProps> = ({ chart, h
 
   return (
     <div className={onPointClick ? "chart-clickable" : undefined} data-chart-tip={tip}>
-      {/* Keyed by language: the library reads its locale (menu labels) only when a chart is created. */}
-      <ReactApexChart key={lang || "en"} options={options} series={series as any} type={layout.kind} height={h} width="100%" />
+      {/* Keyed by language and chart type: the library reads its locale (menu labels) only when a chart is created, and a Graphs Modes switch (bar -> area) needs a fresh chart. */}
+      <ReactApexChart key={`${lang || "en"}-${chart.type}`} options={options} series={series as any} type={layout.kind} height={h} width="100%" />
     </div>
   );
 };

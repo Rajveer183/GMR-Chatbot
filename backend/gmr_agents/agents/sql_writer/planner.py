@@ -322,7 +322,33 @@ def _clean_sql(raw: Any) -> str:
         lambda m: (f"(SELECT MAX(month_date){m.group('alias') or ''} FROM (SELECT month_date FROM hes_gold.dt_load_profile "
                    f"WHERE month_date >= DATE '{m.group('since') or '2026-06-01'}' GROUP BY month_date "
                    "HAVING COUNT(DISTINCT data_date) >= 10) c)"), text)
+    text = _band_total_without_rollup(text)
     return text.rstrip(";").strip()
+
+
+_BAND_TOTAL_RE = re.compile(r"\bNULL\s*,\s*'Total'\s*\)", re.IGNORECASE)
+_GROUP_ROLLUP_RE = re.compile(r"\bGROUP\s+BY\s+ROLLUP\s*\(", re.IGNORECASE)
+
+
+def _band_total_without_rollup(text: str) -> str:
+    """A band list that carries its own Total row ((6, NULL, 'Total') in VALUES) needs no ROLLUP: the ROLLUP adds a
+    second total over it and every meter counts twice. Live 18 Nov: 'Non-SAT ageing by project' -- 526,488 non-SAT
+    for 263,244, twice, the repair kept the ROLLUP. GROUP BY ROLLUP (a, b, (c, d)) -> GROUP BY a, b, c, d: the Total
+    band still gives each total once (GROUPING() is 0 on every row of a plain GROUP BY)."""
+    if not _BAND_TOTAL_RE.search(text):
+        return text
+    m = _GROUP_ROLLUP_RE.search(text)
+    if not m:
+        return text
+    depth, i = 1, m.end()
+    while i < len(text) and depth:
+        depth += {"(": 1, ")": -1}.get(text[i], 0)
+        i += 1
+    if depth:
+        return text
+    inner = text[m.end():i - 1].replace("(", " ").replace(")", " ")
+    cols = ", ".join(c.strip() for c in inner.split(",") if c.strip())
+    return f"{text[:m.start()]}GROUP BY {cols}{text[i:]}"
 
 
 _FLAT_DEFAULT_MONTH_RE = re.compile(

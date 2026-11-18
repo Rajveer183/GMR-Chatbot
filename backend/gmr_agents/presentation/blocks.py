@@ -10,7 +10,7 @@ from typing import Any
 import pandas as pd
 from shared.formatting import format_number
 from gmr_agents.catalog import business_rules
-from gmr_agents.presentation import dashboard_charts
+from gmr_agents.presentation import dashboard_charts, multi_chart
 import logging
 from gmr_agents.agents.common import _CHART_POINTS, _IST, _TABLE_ROWS
 
@@ -259,6 +259,15 @@ def _build_chart(plan: dict, df: pd.DataFrame) -> dict | None:
         series += [{"name": _label(plan, y), "data": [_number(v) or 0.0 for v in cdf[y]], "type": "line"} for y in y2]
     if not cats or not series:
         return None
+    # Time runs left to right, as on the portal's trends: a query ordered newest first ('ORDER BY day DESC') is
+    # drawn oldest first. Seen 18 Nov: 'meters replaced per day' read 17 Nov ... 08 Nov. Chart only; the table
+    # keeps the query's order.
+    if len(cats) > 1 and all(re.match(r"^\d{4}-\d{2}(?:-\d{2})?$", c) for c in cats) \
+            and all(a > b for a, b in zip(cats, cats[1:])):
+        cats = cats[::-1]
+        for s in series:
+            s["data"] = s["data"][::-1]
+        cdf = cdf.iloc[::-1] if cdf is not None else None
 
     chosen = ctype
     # First priority: a question one of the dashboard's KPI cards answers is drawn the way
@@ -352,6 +361,12 @@ def _blocks(plan: dict, result: dict) -> dict:
         log.exception("chart: could not build from %s", list(df.columns))
         built = None
     charts = [built] if built else []
+    # A main chart whose axis mixes dates and places ('2026-11-08 · agra') becomes one detailed trend: dates on
+    # the axis, the place split in the hover card (multi_chart.py). Code only, exact sums, never fails the answer.
+    try:
+        charts = multi_chart.views(plan, result, df, built) or charts
+    except Exception:  # noqa: BLE001
+        log.exception("chart: companion view failed for %s", list(df.columns))
     tables = []
     # A one-row answer with more columns than cards (the Never / Non-comm card has ten figures) keeps
     # its table too, or the figures past the fourth card are never shown. A breakdown always keeps it:

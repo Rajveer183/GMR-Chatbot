@@ -13,11 +13,14 @@ export interface ChartTip {
   mode: "on" | "between" | "hit" | "slice";
   cats: string[];
   series: { name: string; color?: string; values: string[] }[];
+  /** The dashboard hover card per category, as the live chart draws it (charts/hoverCard.ts). */
+  cards?: string[];
 }
 
 type AnySeries = number[] | { name: string; data: (number | { x: string; y: number })[] }[];
 
-export function chartTipData(categories: string[], layout: ChartLayout, series: AnySeries, options: ApexOptions): ChartTip | null {
+export function chartTipData(categories: string[], layout: ChartLayout, series: AnySeries, options: ApexOptions,
+                             cards?: string[]): ChartTip | null {
   if (layout.kind === "radialBar" || options.tooltip?.enabled === false) return null;  // the live gauge has no tooltip either
   const yOpt = options.tooltip?.y;
   const formatter = !Array.isArray(yOpt) && typeof yOpt?.formatter === "function" ? yOpt.formatter : null;
@@ -35,7 +38,7 @@ export function chartTipData(categories: string[], layout: ChartLayout, series: 
 
   if (layout.kind === "pie" || layout.kind === "donut") {
     const values = (series as number[]).map((v, j) => format(v, 0, j));
-    return { mode: "slice", cats: categories, series: [{ name: "", values }] };
+    return { mode: "slice", cats: categories, series: [{ name: "", values }], ...(cards ? { cards } : {}) };
   }
   const named = series as { name: string; data: (number | { x: string; y: number })[] }[];
   const mode = layout.kind === "heatmap" || layout.horizontal ? "hit" : layout.kind === "bar" ? "between" : "on";
@@ -47,5 +50,6 @@ export function chartTipData(categories: string[], layout: ChartLayout, series: 
       ...(colors[i] ? { color: colors[i] } : {}),
       values: s.data.map((d, j) => format(typeof d === "number" ? d : d.y, i, j)),
     })),
+    ...(cards ? { cards } : {}),
   };
 }

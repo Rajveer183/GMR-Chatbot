@@ -198,6 +198,18 @@ const en = {
   closeDialog: "Close dialog",
   closeChart: "Close chart",
   expandChart: "Expand {title}",
+  graphModes: "Graphs Modes",
+  graphModesTitle: "Change chart type",
+  modeArea: "Area Chart",
+  modeMultiArea: "Multi Area",
+  modeLine: "Line",
+  modeMultiLine: "Multi Line",
+  modeBar: "Bar",
+  modeHbar: "Horizontal Bar",
+  modeDonut: "Donut / Pie",
+  modeGauge: "Gauge",
+  modeFunnel: "Funnel",
+  modePareto: "Pareto",
   // audio + voice input
   audioPlayFailed: "Could not play the generated audio.",
   audioFailed: "Could not generate audio for this summary.",
@@ -480,6 +492,18 @@ const hinglish: Strings = {
   themeLight: "Light",
   themeDark: "Dark",
   expandChart: "{title} bada karke dekho",
+  graphModes: "Graphs Modes",
+  graphModesTitle: "Chart ka type badlo",
+  modeArea: "Area Chart",
+  modeMultiArea: "Multi Area",
+  modeLine: "Line",
+  modeMultiLine: "Multi Line",
+  modeBar: "Bar",
+  modeHbar: "Horizontal Bar",
+  modeDonut: "Donut / Pie",
+  modeGauge: "Gauge",
+  modeFunnel: "Funnel",
+  modePareto: "Pareto",
 };
 
 const hi: Strings = {
@@ -644,6 +668,18 @@ const hi: Strings = {
   fc_feedersCompared: "{total} में से {n} फ़ीडर की तुलना",
   fc_outagesDark: "{total} फ़ीडर आउटेज में से {n} में कंज़्यूमर की बिजली गई",
   expandChart: "{title} बड़ा करके देखें",
+  graphModes: "ग्राफ़ मोड",
+  graphModesTitle: "चार्ट का प्रकार बदलें",
+  modeArea: "एरिया चार्ट",
+  modeMultiArea: "मल्टी एरिया",
+  modeLine: "लाइन",
+  modeMultiLine: "मल्टी लाइन",
+  modeBar: "बार",
+  modeHbar: "क्षैतिज बार",
+  modeDonut: "डोनट / पाई",
+  modeGauge: "गेज",
+  modeFunnel: "फ़नल",
+  modePareto: "पैरेटो",
 };
 
 const mr: Strings = {
@@ -843,6 +879,18 @@ const mr: Strings = {
   fc_feedersCompared: "{total} पैकी {n} फीडरची तुलना",
   fc_outagesDark: "{total} पैकी {n} फीडर आउटेजमध्ये ग्राहकाचा पुरवठा बंद",
   expandChart: "{title} मोठे करून पहा",
+  graphModes: "ग्राफ मोड",
+  graphModesTitle: "चार्टचा प्रकार बदला",
+  modeArea: "एरिया चार्ट",
+  modeMultiArea: "मल्टी एरिया",
+  modeLine: "लाइन",
+  modeMultiLine: "मल्टी लाइन",
+  modeBar: "बार",
+  modeHbar: "आडवा बार",
+  modeDonut: "डोनट / पाई",
+  modeGauge: "गेज",
+  modeFunnel: "फनेल",
+  modePareto: "पॅरेटो",
 };
 
 const bn: Strings = {
@@ -1042,6 +1090,18 @@ const bn: Strings = {
   fc_feedersCompared: "{total}টির মধ্যে {n}টি ফিডার তুলনা করা হয়েছে",
   fc_outagesDark: "{total}টি ফিডার বিভ্রাটের মধ্যে {n}টিতে কনজিউমার বিদ্যুৎহীন",
   expandChart: "{title} বড় করে দেখুন",
+  graphModes: "গ্রাফ মোড",
+  graphModesTitle: "চার্টের ধরন বদলান",
+  modeArea: "এরিয়া চার্ট",
+  modeMultiArea: "মাল্টি এরিয়া",
+  modeLine: "লাইন",
+  modeMultiLine: "মাল্টি লাইন",
+  modeBar: "বার",
+  modeHbar: "অনুভূমিক বার",
+  modeDonut: "ডোনাট / পাই",
+  modeGauge: "গেজ",
+  modeFunnel: "ফানেল",
+  modePareto: "প্যারেটো",
 };
 
 const ta: Strings = {
@@ -1241,6 +1301,18 @@ const ta: Strings = {
   fc_feedersCompared: "{total}-இல் {n} ஃபீடர்கள் ஒப்பிடப்பட்டன",
   fc_outagesDark: "{total} ஃபீடர் மின்தடைகளில் {n}-இல் நுகர்வோருக்கு மின்சாரம் இல்லை",
   expandChart: "{title} பெரிதாக்கு",
+  graphModes: "வரைபட முறைகள்",
+  graphModesTitle: "விளக்கப்பட வகையை மாற்று",
+  modeArea: "பரப்பு விளக்கப்படம்",
+  modeMultiArea: "பல பரப்பு",
+  modeLine: "கோடு",
+  modeMultiLine: "பல கோடு",
+  modeBar: "பட்டை",
+  modeHbar: "கிடைமட்ட பட்டை",
+  modeDonut: "டோனட் / பை",
+  modeGauge: "அளவீடு",
+  modeFunnel: "புனல்",
+  modePareto: "பரேட்டோ",
 };
 
 const te: Strings = {
@@ -1440,6 +1512,18 @@ const te: Strings = {
   fc_feedersCompared: "{total}లో {n} ఫీడర్‌లు పోల్చబడ్డాయి",
   fc_outagesDark: "{total} ఫీడర్ అంతరాయాల్లో {n}లో వినియోగదారుకు కరెంట్ లేదు",
   expandChart: "{title} పెద్దదిగా చూడండి",
+  graphModes: "గ్రాఫ్ మోడ్‌లు",
+  graphModesTitle: "చార్ట్ రకాన్ని మార్చండి",
+  modeArea: "ఏరియా చార్ట్",
+  modeMultiArea: "మల్టీ ఏరియా",
+  modeLine: "లైన్",
+  modeMultiLine: "మల్టీ లైన్",
+  modeBar: "బార్",
+  modeHbar: "అడ్డ బార్",
+  modeDonut: "డోనట్ / పై",
+  modeGauge: "గేజ్",
+  modeFunnel: "ఫన్నెల్",
+  modePareto: "పరేటో",
 };
 
 const gu: Strings = {
@@ -1639,6 +1723,18 @@ const gu: Strings = {
   fc_feedersCompared: "{total}માંથી {n} ફીડરની સરખામણી",
   fc_outagesDark: "{total}માંથી {n} ફીડર આઉટેજમાં ગ્રાહકનો પુરવઠો બંધ",
   expandChart: "{title} મોટું કરીને જુઓ",
+  graphModes: "ગ્રાફ મોડ",
+  graphModesTitle: "ચાર્ટનો પ્રકાર બદલો",
+  modeArea: "એરિયા ચાર્ટ",
+  modeMultiArea: "મલ્ટી એરિયા",
+  modeLine: "લાઇન",
+  modeMultiLine: "મલ્ટી લાઇન",
+  modeBar: "બાર",
+  modeHbar: "આડો બાર",
+  modeDonut: "ડોનટ / પાઇ",
+  modeGauge: "ગેજ",
+  modeFunnel: "ફનલ",
+  modePareto: "પેરેટો",
 };
 
 const pa: Strings = {
@@ -1838,6 +1934,18 @@ const pa: Strings = {
   fc_feedersCompared: "{total} ਵਿੱਚੋਂ {n} ਫੀਡਰਾਂ ਦੀ ਤੁਲਨਾ ਕੀਤੀ",
   fc_outagesDark: "{total} ਫੀਡਰ ਕਟੌਤੀਆਂ ਵਿੱਚੋਂ {n} ਵਿੱਚ ਖਪਤਕਾਰ ਦੀ ਬਿਜਲੀ ਗਈ",
   expandChart: "{title} ਵੱਡਾ ਕਰਕੇ ਵੇਖੋ",
+  graphModes: "ਗ੍ਰਾਫ਼ ਮੋਡ",
+  graphModesTitle: "ਚਾਰਟ ਦੀ ਕਿਸਮ ਬਦਲੋ",
+  modeArea: "ਏਰੀਆ ਚਾਰਟ",
+  modeMultiArea: "ਮਲਟੀ ਏਰੀਆ",
+  modeLine: "ਲਾਈਨ",
+  modeMultiLine: "ਮਲਟੀ ਲਾਈਨ",
+  modeBar: "ਬਾਰ",
+  modeHbar: "ਲੇਟਵਾਂ ਬਾਰ",
+  modeDonut: "ਡੋਨਟ / ਪਾਈ",
+  modeGauge: "ਗੇਜ",
+  modeFunnel: "ਫਨਲ",
+  modePareto: "ਪੈਰੇਟੋ",
 };
 
 const kn: Strings = {
@@ -2037,6 +2145,18 @@ const kn: Strings = {
   fc_feedersCompared: "{total} ಫೀಡರ್‌ಗಳಲ್ಲಿ {n} ಹೋಲಿಸಲಾಗಿದೆ",
   fc_outagesDark: "{total} ಫೀಡರ್ ಸ್ಥಗಿತಗಳಲ್ಲಿ {n} ರಲ್ಲಿ ಗ್ರಾಹಕರಿಗೆ ವಿದ್ಯುತ್ ಇರಲಿಲ್ಲ",
   expandChart: "{title} ದೊಡ್ಡದಾಗಿ ನೋಡಿ",
+  graphModes: "ಗ್ರಾಫ್ ಮೋಡ್‌ಗಳು",
+  graphModesTitle: "ಚಾರ್ಟ್ ಪ್ರಕಾರ ಬದಲಿಸಿ",
+  modeArea: "ಏರಿಯಾ ಚಾರ್ಟ್",
+  modeMultiArea: "ಮಲ್ಟಿ ಏರಿಯಾ",
+  modeLine: "ಲೈನ್",
+  modeMultiLine: "ಮಲ್ಟಿ ಲೈನ್",
+  modeBar: "ಬಾರ್",
+  modeHbar: "ಅಡ್ಡ ಬಾರ್",
+  modeDonut: "ಡೋನಟ್ / ಪೈ",
+  modeGauge: "ಗೇಜ್",
+  modeFunnel: "ಫನಲ್",
+  modePareto: "ಪ್ಯಾರೆಟೊ",
 };
 
 const ml: Strings = {
@@ -2236,6 +2356,18 @@ const ml: Strings = {
   fc_feedersCompared: "{total} ഫീഡറുകളിൽ {n} എണ്ണം താരതമ്യം ചെയ്തു",
   fc_outagesDark: "{total} ഫീഡർ തടസ്സങ്ങളിൽ {n} എണ്ണത്തിൽ ഉപഭോക്താവിന് വൈദ്യുതി ഇല്ലായിരുന്നു",
   expandChart: "{title} വലുതാക്കി കാണുക",
+  graphModes: "ഗ്രാഫ് മോഡുകൾ",
+  graphModesTitle: "ചാർട്ട് തരം മാറ്റുക",
+  modeArea: "ഏരിയ ചാർട്ട്",
+  modeMultiArea: "മൾട്ടി ഏരിയ",
+  modeLine: "ലൈൻ",
+  modeMultiLine: "മൾട്ടി ലൈൻ",
+  modeBar: "ബാർ",
+  modeHbar: "തിരശ്ചീന ബാർ",
+  modeDonut: "ഡോനട്ട് / പൈ",
+  modeGauge: "ഗേജ്",
+  modeFunnel: "ഫണൽ",
+  modePareto: "പാരെറ്റോ",
 };
 
 // A tooltip with no translation of its own reads its short label instead of falling back to English.

@@ -32,8 +32,8 @@
  */
 import type { ApexOptions } from "apexcharts";
 import type { AIChartSpec } from "../api/client";
-import { DV, MONO, axisNumber, fullNumber, niceAxis, seriesColour, truncate } from "./charts/dataviz";
-import { canonicalKey, dashboardColour, getContrastText } from "./charts/dashboardPalette";
+import { DV, MONO, axisNumber, fullNumber, isOrderedBands, niceAxis, truncate } from "./charts/dataviz";
+import { GMR, GMR_PALETTE, canonicalKey, dashboardColour, distinctColours, getColor, getContrastText } from "./charts/dashboardPalette";
 
 // Kept for callers/tests that refer to the categorical palette by this name.
 export const SERIES_COLORS = DV.palette;
@@ -102,6 +102,20 @@ function namedSeries(chart: AIChartSpec): Named[] {
 /** Series colours by the dashboard's rules: one hue for a single magnitude series,
  * band ramp for ordered bands (age buckets), categorical palette otherwise. */
 function colours(chart: AIChartSpec, layout: ChartLayout): string[] {
+  const raw = rawColours(chart, layout);
+  // Technical boards' repeats mean something (two bands in one status share its colour); gauges / heatmaps have one hue.
+  if ((chart.dashboard && (chart.point_keys?.length || chart.series_keys?.length))
+      || layout.kind === "radialBar" || layout.kind === "heatmap") {
+    return raw;
+  }
+  const circular = layout.kind === "pie" || layout.kind === "donut" || layout.funnel;
+  const names = circular ? chartCategories(chart)
+    : [...namedSeries(chart).map((s) => s.name),
+       ...(chart.dashboard && layout.kind === "area" ? (chart.rates ?? []).map((r) => r.name) : [])];
+  return distinctColours(raw.slice(0, names.length), names, chart.dashboard).concat(raw.slice(names.length));
+}
+
+function rawColours(chart: AIChartSpec, layout: ChartLayout): string[] {
   const series = namedSeries(chart);
   const kpi = chart.dashboard;
   // Technical boards: the backend names each slice / bar (point_keys) or series (series_keys) by the
@@ -120,15 +134,33 @@ function colours(chart: AIChartSpec, layout: ChartLayout): string[] {
       ...(layout.kind === "area" ? (chart.rates ?? []).map((r) => r.name) : [])];
     return names.map((n, i) => dashboardColour(kpi, n, i));
   }
-  if (layout.kind === "pie" || layout.kind === "donut" || layout.funnel) return DV.palette;
-  if (layout.kind === "radialBar") return [DV.good, ...DV.palette.slice(1)];
-  if (layout.kind === "heatmap") return [DV.series];
-  if (series.length === 1) return [DV.series];
-  const names = series.map((s) => s.name);
-  if (layout.combo) {
-    return series.map((s, i) => (s.type === "line" ? (i === series.length - 1 ? DV.accent : seriesColour(i, names)) : seriesColour(i, names)));
+  // Every other chart in the portal's colours too (chartUtils.js getColor): a name the portal colours keeps that
+  // colour (Consumer navy, DT gold, Feeder red, Agra blue, Closed green ...), anything else takes the portal
+  // palette in order; one unnamed series is the portal's 'value' blue.
+  if (layout.kind === "pie" || layout.kind === "donut" || layout.funnel) {
+    return chartCategories(chart).map((c, i) => portalColour(c, i));
   }
-  return series.map((_s, i) => seriesColour(i, names));
+  if (layout.kind === "radialBar") return [GMR.green, ...GMR_PALETTE.slice(1)];
+  if (layout.kind === "heatmap") return [GMR.blue];
+  if (series.length === 1) return [chart.series?.length ? portalColour(series[0].name, 0) : GMR.blue];
+  if (layout.combo) {
+    return series.map((s, i) => (s.type === "line" && i === series.length - 1 ? GMR.orange : portalColour(s.name, i)));
+  }
+  // Age bands: the portal's band colours -- the non-SAT / revenue scale when it reaches 91-120 / 120+, else stock's.
+  const names = series.map((s) => s.name);
+  if (isOrderedBands(names)) {
+    const scale = names.some((n) => /\b(?:91|120)\b/.test(n)) ? "non_sat_ageing" : "stock_ageing";
+    return names.map((n, i) => dashboardColour(scale, n, i));
+  }
+  return series.map((s, i) => portalColour(s.name, i));
+}
+
+/** The portal's colour for a series / slice name: 'Dtr' / 'dt_meters' / 'DT' are all the portal's 'dt'. */
+function portalColour(name: string, index: number): string {
+  const k = name.toLowerCase().replace(/_/g, " ").replace(/\s+/g, " ").trim();
+  const key = /^dtr?s?$|^dt meters?$/.test(k) ? "dt" : /^consumers?(?: meters?)?$/.test(k) ? "consumer"
+    : /^feeders?(?: meters?)?$/.test(k) ? "feeder" : k;
+  return getColor(key, index);
 }
 
 /**

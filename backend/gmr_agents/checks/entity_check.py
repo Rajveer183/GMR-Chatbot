@@ -1217,13 +1217,30 @@ def check(question: str, sql_texts: list[str], columns: set[str] | None = None, 
 
     # 'category wise' = every category. Live 27 Oct: 'productivity category wise in august 2026' ran as
     # category = 'DT' only (one row).
+    # Any *_category column: live 18 Nov 'daily MI progress by project, category wise (consumer, DT, feeder)' ran as
+    # progress_category = 'CONSUMER' only -- '\bcategory' never matched after the underscore. Naming two or more
+    # categories asks for each of them too, unless the SQL splits by category anyway.
+    # The second case needs a real split ask -- all three named, or a breakdown word -- and exactly one category value
+    # filtered anywhere (HES unions filter 'dt_meter' / 'feeder' / ... one per part; 'a burnt DT meter -> how many
+    # consumers' filters DT on purpose).
+    cat_values = set(re.findall(r"\w*category\s*=\s*'([\w ]+)'", where_only))
+    split_ask = len(mentioned) >= 3 or (len(mentioned) > 1 and re.search(r"\bwise\b|\bsplit|\beach\b|\bper\b|\bby\b", question, re.I))
     if (re.search(r"\bcategor(?:y|ies)[- ]?wise\b|\bby categor|\beach categor", question, re.I)
-            and re.search(r"\bcategory\s*=\s*'(?:dt|feeder|consumer)'", where_only)):
+            and re.search(r"\w*category\s*=\s*'(?:dt|feeder|consumer)'", where_only)) or (
+            split_ask and len(cat_values) == 1 and cat_values <= {"dt", "feeder", "consumer"}
+            and not _grouped_by(low, r"\w*category")):
         problems.append("a category-wise answer has one row per category (Consumer / DT / Feeder): GROUP BY category, "
                         "with no filter to a single category")
 
     # A place name that is not stored is a 0-row answer. Live 27 Oct: 'Chunar division' ran as division = 'chunar'
     # (stored 'edd chunar') and the answer said 0 active days.
+    # A band list that already carries its own Total row ((6, NULL, 'Total') in VALUES) under a ROLLUP: the ROLLUP
+    # adds a second total over it, so every meter counts twice. Live 18 Nov: 'Non-SAT ageing by project' took the
+    # verified band-list example and added GROUP BY ROLLUP (project, band) -- 526,488 non-SAT for 263,244.
+    if re.search(r"\bnull\s*,\s*'total'\s*\)", low) and re.search(r"\brollup\s*\(", low):
+        problems.append("the band list already has a Total row (NULL, 'Total'), and ROLLUP adds another total over it -- "
+                        "every meter would count twice. Keep one: drop the ROLLUP (GROUP BY the columns plainly) or drop "
+                        "the Total band")
     problems += _unknown_places(low)
     # The KPI 3 cube has no zone / circle columns: a place scope is filter_level + filter_label. Live 27 Oct:
     # 'Month-wise productivity in Agra zone' ran as project = 'agra' AND filter_level = 'zone' (every Agra zone

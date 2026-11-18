@@ -8,9 +8,11 @@ interface ChartCardProps {
   subtitle?: string;
   children: React.ReactNode;
   onExpand?: () => void;
+  /** Controls shown beside the expand button (the Graphs Modes menu). */
+  tools?: React.ReactNode;
 }
 
-export const ChartCard: React.FC<ChartCardProps> = ({ title, subtitle, children, onExpand, expandLabel }) => {
+export const ChartCard: React.FC<ChartCardProps> = ({ title, subtitle, children, onExpand, expandLabel, tools }) => {
   return (
     <div className="chart-card chat-chart-card">
       <div className="chart-card-header">
@@ -18,11 +20,14 @@ export const ChartCard: React.FC<ChartCardProps> = ({ title, subtitle, children,
           <h3 className="chart-card-title">{title}</h3>
           {subtitle ? <p className="chart-card-subtitle">{subtitle}</p> : null}
         </div>
-        {onExpand ? (
-          <button type="button" className="chart-expand-btn" onClick={onExpand} aria-label={expandLabel ?? `Expand ${title}`}>
-            <Maximize2 size={16} />
-          </button>
-        ) : null}
+        <div className="chart-card-tools">
+          {tools}
+          {onExpand ? (
+            <button type="button" className="chart-expand-btn" onClick={onExpand} aria-label={expandLabel ?? `Expand ${title}`}>
+              <Maximize2 size={16} />
+            </button>
+          ) : null}
+        </div>
       </div>
       <div className="chart-card-body">
         <div className="chart-plot chat-chart-plot">{children}</div>

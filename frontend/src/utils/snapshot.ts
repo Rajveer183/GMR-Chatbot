@@ -154,16 +154,21 @@ const TOOLTIP_SCRIPT = `(function () {
     if (data.mode === "on" || data.mode === "between") {
       var j = plotIndex(host, data, ev);
       if (j < 0) return hide();
+      if (data.cards && data.cards[j]) return place(data.cards[j], ev);
       html = data.series.filter(function (s) { return s.values[j] != null; }).map(function (s) { return row(s, j); }).join("");
       html = '<div class="snapshot-tip-title">' + esc(data.cats[j] || "") + "</div>" + html;
     } else {
       var mark = ev.target.closest("[j]");
       if (!mark || !host.contains(mark)) return hide();
       var k = parseInt(mark.getAttribute("j"), 10);
+      if (data.cards && data.cards[k]) return place(data.cards[k], ev);
       var s = data.series[data.mode === "slice" ? 0 : seriesIndexOf(mark)];
       if (!s || s.values[k] == null) return hide();
       html = '<div class="snapshot-tip-title">' + esc(data.cats[k] || "") + "</div>" + row(s, k);
     }
+    place(html, ev);
+  }
+  function place(html, ev) {
     tip.innerHTML = html;
     tip.style.display = "block";
     var left = ev.clientX + 14, top = ev.clientY + 14;

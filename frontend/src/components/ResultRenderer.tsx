@@ -6,6 +6,9 @@ import { ChartCard } from "./ChartCard";
 import { ChartVisualization } from "./ChartVisualization";
 import { DASHBOARD_CARDS } from "./charts/dashboardPalette";
 import { ExpandableChartModal } from "./ExpandableChartModal";
+import { GraphModeMenu } from "./GraphModeMenu";
+import type { GraphMode } from "./charts/graphModes";
+import { applyMode, availableModes, chronological, currentMode } from "./charts/graphModes";
 import { ResultTable } from "./ResultTable";
 import { InsightList } from "./InsightList";
 import { FeederComparePanel } from "./FeederComparePanel";
@@ -17,6 +20,14 @@ import { apiClient } from "../api/client";
 import { resultToPayload } from "../utils/clipboard";
 import { resultToSpeech } from "../utils/speech";
 import { uiText } from "../i18n/languages";
+
+const COMPANION_RE = /(?:^|-)(?:comparison_chart|trend_chart)$/;
+/** Drop a saved second view when its answer (or its part of a multi-question answer, 'q2-...') has a main chart. */
+function oneChartEach(charts: AIChartSpec[]): AIChartSpec[] {
+  const prefix = (id: string) => id.replace(/(?:primary_chart|comparison_chart|trend_chart)$/, "");
+  const hasMain = new Set(charts.filter((c) => !COMPANION_RE.test(c.id)).map((c) => prefix(c.id)));
+  return charts.filter((c) => !COMPANION_RE.test(c.id) || !hasMain.has(prefix(c.id)));
+}
 
 const DRILLDOWN_CHART_TYPES = new Set(["bar", "horizontal_bar", "stacked_bar"]);
 
@@ -45,7 +56,9 @@ export const ResultRenderer = memo(function ResultRenderer({
   result, onFollowUp, showFollowups, feedbackSessionId, feedbackRating, onFeedbackChange,
 }: ResultRendererProps) {
   const speechText = useMemo(() => resultToSpeech(result), [result]);
-  const [expandedChart, setExpandedChart] = useState<AIChartSpec | null>(null);
+  const [expandedId, setExpandedId] = useState<string | null>(null);
+  // Graphs Modes picked per chart (by id); shared by the card and its enlarged view.
+  const [modes, setModes] = useState<Record<string, GraphMode | null>>({});
   const followups = result.suggested_followups?.length && showFollowups ? result.suggested_followups : [];
   // Shown in the answer's language when the backend translated them; a click still runs the
   // verified English question behind each one.
@@ -59,7 +72,13 @@ export const ResultRenderer = memo(function ResultRenderer({
   // A consumer's feeder comparison is drawn by its own panel: no KPI cards / plain chart, tables folded below it.
   const feederCompare = result.feeder_compare ?? null;
   const displayKpis = feederCompare ? [] : result.kpis ?? [];
-  const charts = feederCompare ? [] : result.charts ?? [];
+  // One chart per answer. Answers saved while the branch briefly drew the dashboard's second view beside the
+  // main chart (ids 'comparison_chart' / 'trend_chart', 18 Nov) show only their main chart.
+  const charts = useMemo(() => (feederCompare ? [] : oneChartEach(result.charts ?? []).map(chronological)),
+    [feederCompare, result.charts]);
+  const shownChart = (chart: AIChartSpec) => applyMode(chart, modes[chart.id] ?? null);
+  const expandedSource = charts.find((c) => c.id === expandedId) ?? null;
+  const expandedChart = expandedSource ? shownChart(expandedSource) : null;
   const tables = result.tables ?? [];
   // Section headings follow the language the answer is written in.
   const lang = result.answer_language;
@@ -110,18 +129,27 @@ export const ResultRenderer = memo(function ResultRenderer({
           style={{ "--stagger": 1 } as React.CSSProperties}
         >
           <div className="charts-row chat-charts-row">
-            {charts.map((chart) => (
+            {charts.map((chart) => {
+              const options = availableModes(chart);
+              const shown = shownChart(chart);
+              return (
               <ChartCard
                 key={chart.id}
                 title={chart.display_title || chart.title}
                 subtitle={chart.display_description || chart.description || (chart.dashboard && DASHBOARD_CARDS[chart.dashboard]
                   ? uiText(lang, "dashboardView", { card: DASHBOARD_CARDS[chart.dashboard] }) : undefined)}
-                onExpand={() => setExpandedChart(chart)}
+                onExpand={() => setExpandedId(chart.id)}
                 expandLabel={uiText(lang, "expandChart", { title: chart.display_title || chart.title })}
+                tools={options.length ? (
+                  <GraphModeMenu modes={options} active={modes[chart.id] ?? null} original={currentMode(chart)}
+                    multi={(chart.series?.length ?? 0) > 1} lang={lang}
+                    onPick={(m) => setModes((prev) => ({ ...prev, [chart.id]: m }))} />
+                ) : null}
               >
-                <ChartVisualization chart={chart} height={340} onPointClick={drilldownHandler(chart)} lang={lang} />
+                <ChartVisualization chart={shown} height={340} onPointClick={drilldownHandler(shown)} lang={lang} />
               </ChartCard>
-            ))}
+              );
+            })}
           </div>
         </section>
       ) : null}
@@ -223,7 +251,7 @@ export const ResultRenderer = memo(function ResultRenderer({
         title={expandedChart?.display_title || expandedChart?.title || uiText(lang, "chartFallbackTitle")}
         closeLabel={uiText(lang, "closeChart")}
         subtitle={expandedChart?.display_description || expandedChart?.description}
-        onClose={() => setExpandedChart(null)}
+        onClose={() => setExpandedId(null)}
       >
         {(available: number) =>
           expandedChart ? (

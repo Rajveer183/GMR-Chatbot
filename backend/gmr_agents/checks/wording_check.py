@@ -84,6 +84,87 @@ def unsupported_causes(text: str, vocab: set[str]) -> list[str]:
     return bad
 
 
+# Three or more figures chained by dashes: a day-by-day series squashed into one token. Live 18 Nov: 'AGRA
+# leading with 22-620-975 consumer installs ... DT installs (6-10-10-10-10-10-10-10-10-10)'. Every figure was in
+# the result, so the number check passed it. Dates (2026-11-08, 08-11-2026) are not runs.
+_DASH = r"\s?[-‐‑‒–—]\s?"
+_FIG = r"\d+(?:,\d+)*(?:\.\d+)?"
+_RUN_RE = re.compile(rf"(?<![\w.,]){_FIG}(?:{_DASH}{_FIG}){{2,}}(?![\w])")
+_DATE_LIKE_RE = re.compile(r"^(?:\d{4}[-‑]\d{1,2}[-‑]\d{1,2}|\d{1,2}[-‑]\d{1,2}[-‑]\d{2,4})$")
+
+
+def squashed_runs(text: str) -> list[str]:
+    """Runs of 3+ figures joined by dashes ('22-620-975'), dates excluded."""
+    return [m.group(0) for m in _RUN_RE.finditer(text or "") if not _DATE_LIKE_RE.match(m.group(0))]
+
+
+# 'Not available' with no figure at all. Live 18 Nov: 'Kashi zone data is not available in the current snapshot.'
+# for a query that had already kept only Kashi rows (21 rows, zones VARANASI I / II, AZAMGARH) -- 'Kashi' is the
+# filter, not a column value, and the model read it as missing.
+_EMPTY_CLAIM_RE = re.compile(
+    r"\b(?:not available|unavailable|no data|no records?|not found|could ?n[o']t (?:find|locate)|"
+    r"(?:is|are|was|were) not (?:present|recorded|reported|captured)|does not (?:contain|include|have)|"
+    r"do not have|no (?:installations?|figures?|rows?|results?|entries) (?:were |was )?(?:found|recorded|available))\b",
+    re.I)
+
+
+def false_empty(text: str, df) -> bool:
+    """The answer says there is no data, quotes no figure, and the result has non-zero figures outside Total rows."""
+    if not text or re.search(r"\d", text) or not _EMPTY_CLAIM_RE.search(text) or "AI summary is unavailable" in text:
+        return False   # (the last: the code's own 'AI busy' line, never the model's claim)
+    if df is None or not hasattr(df, "select_dtypes") or df.empty:
+        return False
+    labels = [c for c in df.columns if not pd.api.types.is_numeric_dtype(df[c])]
+    rows = df
+    if labels:
+        rows = df[~df[labels].apply(lambda c: c.astype(str).str.strip().str.lower().isin({"total", "grand total"})).any(axis=1)]
+    nums = rows.select_dtypes("number")
+    return not nums.empty and bool((nums.fillna(0) != 0).to_numpy().any())
+
+
+def sql_filters(sql: str | None) -> list[str]:
+    """The literal filters a query applied ('project = kashi', 'category = DT'): rows already inside them need not
+    name them."""
+    out = []
+    for col, val in re.findall(r"(?:lower|upper|trim)?\(?\s*\b([a-z_]+)\)?\s*=\s*'([^']{1,40})'", sql or "", re.I):
+        item = f"{col.lower()} = {val}"
+        if item not in out and col.lower() not in ("then", "else", "when"):
+            out.append(item)
+    return out[:6]
+
+
+# A share named against a base the result never had. Live 18 Nov: 'SAT-done 3,866,783 (87.68% of installed, 87.68% of
+# eligible)' -- RESULT had no eligible column; 87.68 is the share of installed, the share of eligible is 94.40. The
+# number check passed it (87.68 is in RESULT). Only bases that are separate KPIs in this programme are checked.
+_BASES = ("eligible", "supplied", "received", "target", "invoiced", "inventory")
+_PCT_OF_RE = re.compile(r"\d+(?:\.\d+)?\s?%\s+of\s+(?:the\s+|all\s+|total\s+)?(" + "|".join(_BASES) + r")\b[\w -]{0,40}?"
+                        r"(?=[),.;:]|\s+(?:and|while|with|but)\b|$)", re.I)
+
+
+def unsupported_bases(text: str, frames: list, question: str = "") -> list[str]:
+    """'87.68% of eligible' when no result column / label and not the question names that base."""
+    names = " ".join(str(c).lower().replace("_", " ") for df in frames if hasattr(df, "columns") for c in df.columns)
+    labels = " ".join(str(v).lower() for df in frames if hasattr(df, "columns")
+                      for c in df.columns if not pd.api.types.is_numeric_dtype(df[c]) for v in df[c].head(200))
+    known = f"{names} {labels} {question.lower()}"
+    # Stems: a 'total_supplies' / 'inventory_count' column supports '% of supplied' (receipts are the supply).
+    stems = {"eligible": ("eligib",), "supplied": ("suppl", "invent", "receiv"), "received": ("receiv", "suppl", "invent"),
+             "target": ("target",), "invoiced": ("invoic",), "inventory": ("invent", "suppl", "receiv")}
+    return [m.group(0).strip() for m in _PCT_OF_RE.finditer(text or "")
+            if not any(s in known for s in stems[m.group(1).lower()])]
+
+
+def strip_phrases(text: str, phrases: list[str]) -> str:
+    """text without these clauses ('(87.68% of installed, 87.68% of eligible)' -> '(87.68% of installed)');
+    a clause that cannot be cut cleanly takes its sentence with it (never the whole text)."""
+    out = text
+    for ph in phrases:
+        esc = re.escape(ph)
+        new = re.sub(rf",\s*{esc}|{esc}\s*,\s*|\s*\(\s*{esc}\s*\)", "", out, count=1)
+        out = new if new != out else drop_sentences(out, [ph])
+    return out
+
+
 def drop_sentences(text: str, phrases: list[str]) -> str:
     """text without the sentences holding these phrases (unchanged if that would empty it)."""
     if not phrases:
