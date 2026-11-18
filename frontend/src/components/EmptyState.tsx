@@ -14,11 +14,10 @@ interface EmptyStateProps {
   lang?: string;
   /** The question box, shown inside the card under the intro line. */
   composer?: React.ReactNode;
-  /** Temporary chat: GMR logo, a small "Temporary chat" label (title), a two-tone headline and
-   * the question box -- nothing else. */
+  /** Temporary chat: GMR logo, a small "Temporary chat" label (title), one headline and the
+   * question box -- nothing else. */
   temporary?: boolean;
   temporaryHeadline?: string;
-  temporarySubline?: string;
 }
 
 /* Starters verified against the live backend (WFM KPI tables + MDM feeder
@@ -68,7 +67,6 @@ export const EmptyState: React.FC<EmptyStateProps> = ({
   composer,
   temporary = false,
   temporaryHeadline,
-  temporarySubline,
 }) => {
   // Starters verified in English: shown in the screen language, a click runs the English one.
   const starters = STARTERS.map(({ key, icon }) => ({ icon, shown: uiText(lang, key), verified: uiText("en", key) }));
@@ -83,10 +81,7 @@ export const EmptyState: React.FC<EmptyStateProps> = ({
             <MessageCircleDashed size={13} aria-hidden="true" />
             {title}
           </div>
-          <h3 className="tc-title">
-            {temporaryHeadline}
-            <span className="tc-subline">{temporarySubline}</span>
-          </h3>
+          <h3 className="tc-title">{temporaryHeadline}</h3>
         </div>
       ) : (
         <>

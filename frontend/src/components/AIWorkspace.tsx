@@ -1476,7 +1476,6 @@ export const AIWorkspace: React.FC<AIWorkspaceProps> = ({ filters }) => {
                   title={isTemporary ? t("temporaryChat") : "GMR AI Intelligence"}
                   temporary={isTemporary}
                   temporaryHeadline={t("tempHeadline")}
-                  temporarySubline={t("tempSubline")}
                   lang={uiLang}
                   onSuggestedQuestion={(q, canonical) => runQuery(q, 1, ALL_ROWS, true, canonical)}
                   composer={composer(true)}

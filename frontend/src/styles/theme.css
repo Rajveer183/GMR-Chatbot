@@ -188,7 +188,6 @@
   --temp-input-bg: #eceef1;
   --tc-dot: rgba(24, 24, 27, 0.13);
   --tc-pool: rgba(255, 255, 255, 0.5);
-  --tc-sub: #8a8c92;
 }
 
 :root[data-theme="dark"] .temp-mode {
@@ -205,5 +204,4 @@
   --temp-input-bg: #1f1f23;
   --tc-dot: rgba(244, 244, 245, 0.08);
   --tc-pool: rgba(255, 255, 255, 0.035);
-  --tc-sub: #6e6e76;
 }
