@@ -191,7 +191,7 @@ export const ChatSearchDialog: React.FC<ChatSearchDialogProps> = ({ open, sessio
         <span className="chat-search-row-icon">{s.archived ? <Archive size={18} /> : <MessageCircle size={18} />}</span>
         <span className="chat-search-row-body">
           <span className="chat-search-row-title">
-            {hit ? <Highlight text={s.session_name || "New Session"} query={q} /> : s.session_name || "New Session"}
+            {hit ? <Highlight text={s.session_name || "New Session"} query={q} /> : s.session_name && s.session_name !== "New Session" ? s.session_name : t("newSession")}
           </span>
           {hit && hit.match_snippet ? (
             <span className="chat-search-row-snippet">

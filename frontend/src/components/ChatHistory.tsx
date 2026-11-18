@@ -254,7 +254,7 @@ export const ChatHistory: React.FC<ChatHistoryProps> = ({
       ) : (
         <button className="chat-session-name" type="button" onClick={() => onOpen(s.session_id)}>
           <span className="chat-session-title-row">
-            <span className="chat-session-title">{s.session_name || "New Session"}</span>
+            <span className="chat-session-title">{s.session_name && s.session_name !== "New Session" ? s.session_name : t("newSession")}</span>
           </span>
         </button>
       )}
@@ -504,6 +504,7 @@ export const ChatHistory: React.FC<ChatHistoryProps> = ({
         message={t("deleteFolderMessage", { name: confirmFolder?.name ?? "" })}
         confirmLabel={t("del")}
         cancelLabel={t("cancel")}
+        closeLabel={t("closeDialog")}
         onCancel={() => setConfirmFolder(null)}
         onConfirm={async () => {
           const f = confirmFolder;

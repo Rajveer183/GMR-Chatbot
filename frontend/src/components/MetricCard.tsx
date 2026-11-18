@@ -8,6 +8,8 @@ interface MetricCardProps {
    * by `format_number` with the column's detected unit). Rendered verbatim. */
   formattedValue: string;
   subtitle?: string;
+  /** "Copy <label>" in the screen language. */
+  copyTitle?: string;
 }
 
 // This card deliberately has no formatting logic. It used to strip a trailing
@@ -16,7 +18,7 @@ interface MetricCardProps {
 // profiler detected survived only by accident, and an `isCurrency` prop guessed
 // at currency-ness from whether the label contained the word "unique". The
 // backend already knows the unit; there is nothing to decide here.
-export const MetricCard: React.FC<MetricCardProps> = ({ label, formattedValue, subtitle }) => {
+export const MetricCard: React.FC<MetricCardProps> = ({ label, formattedValue, subtitle, copyTitle }) => {
   return (
     <div className="kpi-card">
       <div className="kpi-card-header">
@@ -24,7 +26,7 @@ export const MetricCard: React.FC<MetricCardProps> = ({ label, formattedValue, s
         <CopyButton
           compact
           className="kpi-copy-btn"
-          title={`Copy ${label}`}
+          title={copyTitle ?? `Copy ${label}`}
           getPayload={() => kpiToPayload({ label, formatted_value: formattedValue, description: subtitle })}
         />
       </div>

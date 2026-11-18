@@ -97,6 +97,7 @@ export const ResultRenderer = memo(function ResultRenderer({
                 label={kpi.display_label || kpi.label}
                 formattedValue={kpi.formatted_value}
                 subtitle={kpi.display_description || kpi.description}
+                copyTitle={uiText(lang, "copyLabel", { label: kpi.display_label || kpi.label })}
               />
             ))}
           </div>
@@ -116,8 +117,9 @@ export const ResultRenderer = memo(function ResultRenderer({
                 subtitle={chart.display_description || chart.description || (chart.dashboard && DASHBOARD_CARDS[chart.dashboard]
                   ? uiText(lang, "dashboardView", { card: DASHBOARD_CARDS[chart.dashboard] }) : undefined)}
                 onExpand={() => setExpandedChart(chart)}
+                expandLabel={uiText(lang, "expandChart", { title: chart.display_title || chart.title })}
               >
-                <ChartVisualization chart={chart} height={340} onPointClick={drilldownHandler(chart)} />
+                <ChartVisualization chart={chart} height={340} onPointClick={drilldownHandler(chart)} lang={lang} />
               </ChartCard>
             ))}
           </div>
@@ -126,7 +128,7 @@ export const ResultRenderer = memo(function ResultRenderer({
 
       {feederCompare ? (
         <section className="chat-result-section result-stagger" style={{ "--stagger": 1 } as React.CSSProperties}>
-          <FeederComparePanel data={feederCompare} onAsk={onFollowUp ? (q) => onFollowUp(q) : undefined} />
+          <FeederComparePanel data={feederCompare} onAsk={onFollowUp ? (q) => onFollowUp(q) : undefined} lang={lang} />
         </section>
       ) : null}
 
@@ -218,13 +220,14 @@ export const ResultRenderer = memo(function ResultRenderer({
 
       <ExpandableChartModal
         open={expandedChart !== null}
-        title={expandedChart?.display_title || expandedChart?.title || "Chart"}
+        title={expandedChart?.display_title || expandedChart?.title || uiText(lang, "chartFallbackTitle")}
+        closeLabel={uiText(lang, "closeChart")}
         subtitle={expandedChart?.display_description || expandedChart?.description}
         onClose={() => setExpandedChart(null)}
       >
         {(available: number) =>
           expandedChart ? (
-            <ChartVisualization chart={expandedChart} height={available} onPointClick={drilldownHandler(expandedChart)} />
+            <ChartVisualization chart={expandedChart} height={available} onPointClick={drilldownHandler(expandedChart)} lang={lang} />
           ) : null
         }
       </ExpandableChartModal>

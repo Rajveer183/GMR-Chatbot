@@ -203,7 +203,7 @@ export const ResultTable: React.FC<ResultTableProps> = ({ table, traceId, tableI
         setRemoteRows(mapped.filter((row) => !isTotal(row)));
       })
       .catch((err: unknown) => {
-        if (!cancelled) setPageError(err instanceof Error ? err.message : "This page could not be loaded.");
+        if (!cancelled) setPageError(err instanceof Error ? err.message : uiText(lang, "pageLoadFailed"));
       })
       .finally(() => {
         if (!cancelled) setLoading(false);
@@ -286,11 +286,11 @@ export const ResultTable: React.FC<ResultTableProps> = ({ table, traceId, tableI
           />
           <div className="table-download">
             <button type="button" className="table-download-btn" onClick={() => void download("csv")} disabled={!!exporting}
-                    title="Download every row as CSV">
+                    title={uiText(lang, "downloadCsvTitle")}>
               <Download size={13} /> {exporting === "csv" ? "…" : "CSV"}
             </button>
             <button type="button" className="table-download-btn" onClick={() => void download("xlsx")} disabled={!!exporting}
-                    title="Download every row as an Excel file">
+                    title={uiText(lang, "downloadXlsxTitle")}>
               <Download size={13} /> {exporting === "xlsx" ? "…" : "Excel"}
             </button>
           </div>
@@ -343,7 +343,7 @@ export const ResultTable: React.FC<ResultTableProps> = ({ table, traceId, tableI
               <tr className="data-table-total">
                 {table.columns.map((name) => (
                   <td key={name} className={numericColumns.has(name) ? "col-numeric" : undefined}>
-                    {formatTableCell(totalRow[name])}
+                    {name === firstColumn ? uiText(lang, "totalRowLabel") : formatTableCell(totalRow[name])}
                   </td>
                 ))}
               </tr>

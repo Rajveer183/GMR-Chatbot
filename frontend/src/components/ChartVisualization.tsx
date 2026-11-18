@@ -3,6 +3,31 @@ import ReactApexChart from "react-apexcharts";
 import type { AIChartSpec } from "../api/client";
 import { buildChartOptions, buildChartSeries, chartCategories, resolveKind } from "./chartOptions";
 import { chartTipData } from "./charts/exportTip";
+import { uiText } from "../i18n/languages";
+
+const MONTHS = ["January", "February", "March", "April", "May", "June", "July", "August", "September", "October", "November", "December"];
+const DAYS = ["Sunday", "Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday"];
+
+/** The chart library's own menu (Download PNG / CSV) in the screen language. Month and day
+ * names stay English: the axis labels come from the data, which is English. The locale name
+ * carries the language so a language change re-applies it. */
+function chartLocale(lang?: string | null) {
+  const name = `ui-${lang || "en"}`;
+  return {
+    defaultLocale: name,
+    locales: [{
+      name,
+      options: {
+        months: MONTHS, shortMonths: MONTHS.map((m) => m.slice(0, 3)), days: DAYS, shortDays: DAYS.map((d) => d.slice(0, 3)),
+        toolbar: {
+          menu: uiText(lang, "chartMenu"), exportToPNG: uiText(lang, "chartDownloadPng"),
+          exportToCSV: uiText(lang, "chartDownloadCsv"), exportToSVG: uiText(lang, "chartDownloadSvg"),
+          selection: "Selection", selectionZoom: "Selection Zoom", zoomIn: "Zoom In", zoomOut: "Zoom Out", pan: "Panning", reset: "Reset Zoom",
+        },
+      },
+    }],
+  };
+}
 
 interface ChartVisualizationProps {
   chart: AIChartSpec;
@@ -12,20 +37,23 @@ interface ChartVisualizationProps {
   onPointClick?: (label: string) => void;
   /** Entry animations (default on); the dev preview turns them off for screenshots. */
   animate?: boolean;
+  /** Screen language for the chart's own menu and empty-state text. */
+  lang?: string | null;
 }
 
 // ApexCharts styled after the WFM/HES dashboard's chart cards. All option/series
 // construction lives in ./chartOptions so it stays a pure function of the backend
 // payload and can be exercised against the real library (scripts/verify-charts.mjs).
-export const ChartVisualization: React.FC<ChartVisualizationProps> = ({ chart, height = 320, onPointClick, animate = true }) => {
+export const ChartVisualization: React.FC<ChartVisualizationProps> = ({ chart, height = 320, onPointClick, animate = true, lang }) => {
   const layout = useMemo(() => resolveKind(chart.type), [chart.type]);
   const series = useMemo(() => buildChartSeries(chart, layout), [chart, layout]);
   const options = useMemo(() => {
-    const built = buildChartOptions(chart, layout, onPointClick);
+    const raw = buildChartOptions(chart, layout, onPointClick);
+    const built = { ...raw, chart: { ...raw.chart, ...chartLocale(lang) } };
     // Users who ask the OS for reduced motion get static charts (and so do screenshots).
     const reduced = typeof window !== "undefined" && window.matchMedia?.("(prefers-reduced-motion: reduce)").matches;
     return animate && !reduced ? built : { ...built, chart: { ...built.chart, animations: { enabled: false } } };
-  }, [chart, layout, onPointClick, animate]);
+  }, [chart, layout, onPointClick, animate, lang]);
   // Hover figures for the downloaded HTML copy, which has no chart library (utils/snapshot.ts).
   const tip = useMemo(() => {
     const data = chartTipData(chartCategories(chart), layout, series as any, options);
@@ -33,7 +61,7 @@ export const ChartVisualization: React.FC<ChartVisualizationProps> = ({ chart, h
   }, [chart, layout, series, options]);
 
   if (!chartCategories(chart).length || !chart.y?.length) {
-    return <div className="table-empty">No data for this chart.</div>;
+    return <div className="table-empty">{uiText(lang, "noChartData")}</div>;
   }
   if (layout.kind === "radialBar") {
     return <Gauges chart={chart} height={height} animate={animate} />;
@@ -44,7 +72,8 @@ export const ChartVisualization: React.FC<ChartVisualizationProps> = ({ chart, h
 
   return (
     <div className={onPointClick ? "chart-clickable" : undefined} data-chart-tip={tip}>
-      <ReactApexChart options={options} series={series as any} type={layout.kind} height={h} width="100%" />
+      {/* Keyed by language: the library reads its locale (menu labels) only when a chart is created. */}
+      <ReactApexChart key={lang || "en"} options={options} series={series as any} type={layout.kind} height={h} width="100%" />
     </div>
   );
 };

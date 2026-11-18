@@ -2,13 +2,15 @@ import React from "react";
 import { Maximize2 } from "lucide-react";
 
 interface ChartCardProps {
+  /** "Expand <title>" in the screen language. */
+  expandLabel?: string;
   title: string;
   subtitle?: string;
   children: React.ReactNode;
   onExpand?: () => void;
 }
 
-export const ChartCard: React.FC<ChartCardProps> = ({ title, subtitle, children, onExpand }) => {
+export const ChartCard: React.FC<ChartCardProps> = ({ title, subtitle, children, onExpand, expandLabel }) => {
   return (
     <div className="chart-card chat-chart-card">
       <div className="chart-card-header">
@@ -17,7 +19,7 @@ export const ChartCard: React.FC<ChartCardProps> = ({ title, subtitle, children,
           {subtitle ? <p className="chart-card-subtitle">{subtitle}</p> : null}
         </div>
         {onExpand ? (
-          <button type="button" className="chart-expand-btn" onClick={onExpand} aria-label={`Expand ${title}`}>
+          <button type="button" className="chart-expand-btn" onClick={onExpand} aria-label={expandLabel ?? `Expand ${title}`}>
             <Maximize2 size={16} />
           </button>
         ) : null}

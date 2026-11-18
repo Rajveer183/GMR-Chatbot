@@ -7,6 +7,8 @@ interface ConfirmDialogProps {
   message: string;
   confirmLabel?: string;
   cancelLabel?: string;
+  /** The close (X) button's label in the screen language. */
+  closeLabel?: string;
   onCancel: () => void;
   onConfirm: () => void;
 }
@@ -17,6 +19,7 @@ export const ConfirmDialog: React.FC<ConfirmDialogProps> = ({
   message,
   confirmLabel = "Delete",
   cancelLabel = "Cancel",
+  closeLabel = "Close dialog",
   onCancel,
   onConfirm,
 }) => {
@@ -47,7 +50,7 @@ export const ConfirmDialog: React.FC<ConfirmDialogProps> = ({
             <h3 id="confirm-dialog-title" className="confirm-dialog-title">{title}</h3>
             <p className="confirm-dialog-message">{message}</p>
           </div>
-          <button type="button" className="confirm-dialog-close" onClick={onCancel} aria-label="Close dialog">
+          <button type="button" className="confirm-dialog-close" onClick={onCancel} aria-label={closeLabel}>
             <X size={18} />
           </button>
         </div>

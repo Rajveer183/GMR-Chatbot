@@ -54,25 +54,33 @@ WORD = {"hi": "अनुवाद", "mr": "भाषांतर", "bn": "অন
         "pa": "ਅਨੁਵਾਦ", "kn": "ಅನುವಾದ", "ml": "വിവർത്തനം", "en": "translated", "hinglish": "anuvaad"}
 
 
-def scripted(text: str, target: str) -> str:
+NAMES = {"kashi", "agra", "triveni"}
+
+
+def scripted(text: str, target: str, keep_names: bool = True) -> str:
     """What the scripted translator 'writes': every word in the target script, tokens with a
-    digit (figures, IDs, dates) kept exactly."""
-    return " ".join(w if any(c.isdigit() for c in w) else WORD[target] for w in text.split())
+    digit (figures, IDs, dates) and -- unless keep_names=False -- project names kept exactly."""
+    def keep(w: str) -> bool:
+        return any(c.isdigit() for c in w) or (keep_names and w.strip("?.,:;!").lower() in NAMES)
+    return " ".join(w if keep(w) else WORD[target] for w in text.split())
 
 
-def fake_translator(mutate: dict[str, str] | None = None, calls: list | None = None):
-    """A scripted translate LLM (see scripted()), optionally changing a figure."""
+def fake_translator(mutate: dict[str, str] | None = None, calls: list | None = None, rename_calls: int = 0):
+    """A scripted translate LLM (see scripted()), optionally changing a figure; its first
+    `rename_calls` calls transliterate the names too."""
     def chat_json(task, prompt, **_kw):
         if calls is not None:
             calls.append(task)
+        chat_json.n += 1
         target, items = _items_of(prompt)
         out = {}
         for k, v in items.items():
-            text = scripted(v, target)
+            text = scripted(v, target, keep_names=chat_json.n > rename_calls)
             for old, new in (mutate or {}).items():
                 text = text.replace(old, new)
             out[k] = text
         return llm_gateway.LLMResult({"items": out}, "scripted", "scripted", None, None, 0.0)
+    chat_json.n = 0
     return chat_json
 
 
@@ -256,6 +264,40 @@ class TranslationLayerTests(unittest.TestCase):
         self.assertEqual(out["suggested_followups"], [FOLLOWUP])               # what a click runs
         self.assertEqual(out["suggested_followup_labels"], [scripted(FOLLOWUP, "hi")])  # what is shown
         self.assertEqual(calls, ["translate"])                                   # all in one call
+
+    def test_names_stay_in_roman_letters(self):
+        # live 18 Nov: Kashi -> कशी, Agra -> अज्ञा. Names go out as tokens (NM1 ...) and come back as written,
+        # even from a translator that would transliterate every word.
+        calls: list = []
+        prompts: list = []
+        translator = fake_translator(calls=calls, rename_calls=99)
+
+        def spy(task, prompt, **kw):
+            prompts.append(prompt)
+            return translator(task, prompt, **kw)
+
+        with mock.patch.object(llm_gateway, "chat_json", spy):
+            out = L.translate_response(answer("en"), "hi")
+        self.assertEqual(calls, ["translate"])
+        self.assertNotIn("Kashi", prompts[0].split("ITEMS:")[1])
+        self.assertIn("Kashi", out["summary"])
+        self.assertEqual(out["translation"]["status"], "ok")
+
+    def test_mask_and_unmask(self):
+        names = L.response_names({"tables": [{"columns": ["Zone", "Status"],
+                                              "rows": [{"Zone": "Mathura Zone", "Status": "Overloaded"}]}],
+                                  "charts": [{"title": "Installs by circle", "x": ["EDC Ballia"]}]})
+        self.assertTrue({"mathura", "ballia", "kashi"} <= names)
+        self.assertNotIn("overloaded", names)
+        self.assertNotIn("zone", names)  # 'Mathura Zone': the place is the name, not the word
+        self.assertNotIn("total", L.response_names({"tables": [{"columns": ["Project"], "rows": [{"Project": "Total"}]}]}))
+        masked, back = L.mask_names({"a": "Kashi and KASHI beat Mathura", "b": "Overloaded in Ballia"}, names)
+        self.assertEqual(masked, {"a": "NM1 and NM2 beat NM3", "b": "Overloaded in NM4"})
+        self.assertEqual(L.unmask_names("NM1ने NM3 को (NM2), NM4-இல்", back), "Kashiने Mathura को (KASHI), Ballia-இல்")
+
+    def test_prompts_mention_names(self):
+        self.assertIn("never transliterate", L.prompt_line("ta"))
+        self.assertIn("NM1", L._TRANSLATE_SYSTEM)
 
     def test_original_is_not_mutated(self):
         original = answer("en")

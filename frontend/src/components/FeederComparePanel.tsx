@@ -4,6 +4,8 @@ import {
 } from "lucide-react";
 import type { FeederCompare, FeederCompareFeeder, FeederCompareOutage, FeederCompareSide } from "../api/client";
 import "../styles/feeder-compare.css";
+import { uiParts, uiText } from "../i18n/languages";
+import type { UIKey } from "../i18n/uiStrings";
 
 /** One consumer vs every feeder of its substation (backend presentation/feeder_compare.py):
  *  verdict header + month switcher, current -> recommended feeder, a feeder leaderboard
@@ -11,12 +13,15 @@ import "../styles/feeder-compare.css";
  *  the consumer's dark periods up against each feeder's outages. Every figure comes from the
  *  payload; the plain tables (and downloads) stay below the panel. */
 
-const VERDICT: Record<string, { cls: string; label: string; Icon: React.FC<{ size?: number }> }> = {
-  CONFIRMED: { cls: "ok", label: "Confirmed", Icon: CircleCheck },
-  REASSIGN: { cls: "move", label: "Reassign", Icon: ArrowRightLeft },
-  REVIEW: { cls: "review", label: "Review", Icon: CircleHelp },
-  "NO DATA": { cls: "none", label: "No data", Icon: CircleSlash },
+const VERDICT: Record<string, { cls: string; label: UIKey; Icon: React.FC<{ size?: number }> }> = {
+  CONFIRMED: { cls: "ok", label: "fc_confirmed", Icon: CircleCheck },
+  REASSIGN: { cls: "move", label: "fc_reassign", Icon: ArrowRightLeft },
+  REVIEW: { cls: "review", label: "fc_review", Icon: CircleHelp },
+  "NO DATA": { cls: "none", label: "fc_noData", Icon: CircleSlash },
 };
+
+/** Screen language of the panel (the answer's language). */
+type Lang = string | null | undefined;
 
 /** The backend writes " -- " for a dash. */
 const dash = (t: string) => t.replace(/ -- /g, " — ");
@@ -25,26 +30,26 @@ const pct = (dark: number, seen: number) => (seen ? Math.round((dark * 100) / se
 
 /* ---------------------------------------------------------------------------------------------- */
 
-const Ring: React.FC<{ dark: number; seen: number; tone: "ok" | "move" | "muted" }> = ({ dark, seen, tone }) => {
+const Ring: React.FC<{ dark: number; seen: number; tone: "ok" | "move" | "muted"; lang: Lang }> = ({ dark, seen, tone, lang }) => {
   const r = 30, c = 2 * Math.PI * r;
   const p = pct(dark, seen);
   return (
     <svg className={`fcp-ring fcp-ring--${tone}`} width="76" height="76" viewBox="0 0 76 76" role="img"
-      aria-label={seen ? `${dark} of ${seen} outages matched` : "no outages observed"}>
+      aria-label={seen ? uiText(lang, "fc_ringAria", { dark, seen }) : uiText(lang, "fc_noOutagesObserved")}>
       <circle cx="38" cy="38" r={r} className="fcp-ring-track" />
       {seen ? (
         <circle cx="38" cy="38" r={r} className="fcp-ring-value"
           strokeDasharray={`${(c * dark) / seen} ${c}`} transform="rotate(-90 38 38)" />
       ) : null}
       <text x="38" y="36" textAnchor="middle" className="fcp-ring-num">{seen ? `${p}%` : "–"}</text>
-      <text x="38" y="51" textAnchor="middle" className="fcp-ring-sub">{seen ? `${dark} of ${seen}` : "no outages"}</text>
+      <text x="38" y="51" textAnchor="middle" className="fcp-ring-sub">{seen ? uiText(lang, "fc_ofSeen", { dark, seen }) : uiText(lang, "fc_noOutages")}</text>
     </svg>
   );
 };
 
-const SideCard: React.FC<{ title: string; side: FeederCompareSide; tone: "ok" | "move" | "muted"; hint?: string }> = ({ title, side, tone, hint }) => (
+const SideCard: React.FC<{ title: string; side: FeederCompareSide; tone: "ok" | "move" | "muted"; hint?: string; lang: Lang }> = ({ title, side, tone, hint, lang }) => (
   <div className={`fcp-side fcp-side--${tone}`}>
-    <Ring dark={side.dark} seen={side.seen} tone={tone} />
+    <Ring dark={side.dark} seen={side.seen} tone={tone} lang={lang} />
     <div className="fcp-side-text">
       <span className="fcp-eyebrow">{title}</span>
       <strong className="fcp-side-name">{side.name || side.code}</strong>
@@ -56,12 +61,12 @@ const SideCard: React.FC<{ title: string; side: FeederCompareSide; tone: "ok" | 
 
 /* ---------------------------------------------------------------------------------------------- */
 
-const SplitBar: React.FC<{ f: FeederCompareFeeder; maxSeen: number }> = ({ f, maxSeen }) => {
-  if (!f.seen) return <span className="fcp-bar-empty">No outage to compare</span>;
+const SplitBar: React.FC<{ f: FeederCompareFeeder; maxSeen: number; lang: Lang }> = ({ f, maxSeen, lang }) => {
+  if (!f.seen) return <span className="fcp-bar-empty">{uiText(lang, "fc_noOutageToCompare")}</span>;
   const width = Math.max(14, (f.seen * 100) / Math.max(maxSeen, 1));
   return (
     <div className="fcp-bar" style={{ width: `${width}%` }}
-      title={`${f.dark} outage(s) with the consumer dark, ${f.powered} with it powered`}>
+      title={uiText(lang, "fc_barTitle", { dark: f.dark, powered: f.powered })}>
       {f.dark ? <span className="fcp-seg fcp-seg--dark" style={{ flexGrow: f.dark }}>{f.dark}</span> : null}
       {f.powered ? <span className="fcp-seg fcp-seg--powered" style={{ flexGrow: f.powered }}>{f.powered}</span> : null}
     </div>
@@ -69,8 +74,9 @@ const SplitBar: React.FC<{ f: FeederCompareFeeder; maxSeen: number }> = ({ f, ma
 };
 
 const Leaderboard: React.FC<{
-  feeders: FeederCompareFeeder[]; focus: string | null; onFocus: (code: string | null) => void;
-}> = ({ feeders, focus, onFocus }) => {
+  feeders: FeederCompareFeeder[]; focus: string | null; onFocus: (code: string | null) => void; lang: Lang;
+}> = ({ feeders, focus, onFocus, lang }) => {
+  const t = (key: UIKey, vars?: Record<string, string | number>) => uiText(lang, key, vars);
   const [order, setOrder] = useState<"rank" | "match">("rank");
   const scored = feeders.filter((f) => f.rank !== null);
   const unscored = feeders.filter((f) => f.rank === null);
@@ -81,17 +87,17 @@ const Leaderboard: React.FC<{
     <div className="fcp-card">
       <div className="fcp-card-head">
         <div>
-          <h5 className="fcp-card-title">Every feeder of the substation</h5>
-          <p className="fcp-card-sub">Each feeder's outages: did this consumer go dark with it? Click a feeder to trace it on the timeline.</p>
+          <h5 className="fcp-card-title">{t("fc_everyFeeder")}</h5>
+          <p className="fcp-card-sub">{t("fc_everyFeederSub")}</p>
         </div>
-        <div className="fcp-toggle" role="group" aria-label="Order feeders by">
-          <button type="button" className={order === "rank" ? "is-on" : ""} onClick={() => setOrder("rank")}>Audit rank</button>
-          <button type="button" className={order === "match" ? "is-on" : ""} onClick={() => setOrder("match")}>Match %</button>
+        <div className="fcp-toggle" role="group" aria-label={t("fc_orderBy")}>
+          <button type="button" className={order === "rank" ? "is-on" : ""} onClick={() => setOrder("rank")}>{t("fc_auditRank")}</button>
+          <button type="button" className={order === "match" ? "is-on" : ""} onClick={() => setOrder("match")}>{t("fc_matchPct")}</button>
         </div>
       </div>
       <div className="fcp-legend">
-        <span><i className="fcp-swatch fcp-swatch--dark" />Consumer went dark (supports the feeder)</span>
-        <span><i className="fcp-swatch fcp-swatch--powered" />Consumer stayed powered (contradicts it)</span>
+        <span><i className="fcp-swatch fcp-swatch--dark" />{t("fc_legendDark")}</span>
+        <span><i className="fcp-swatch fcp-swatch--powered" />{t("fc_legendPowered")}</span>
       </div>
       <div className="fcp-rows" role="list">
         {rows.map((f, i) => (
@@ -105,19 +111,19 @@ const Leaderboard: React.FC<{
               <span className="fcp-feeder-name">{f.name || f.code}</span>
               <span className="fcp-feeder-meta">
                 <span className="fcp-code">{f.code}</span>
-                {f.declared ? <span className="fcp-chip fcp-chip--current">Current tag</span> : null}
-                {f.recommended && !f.declared ? <span className="fcp-chip fcp-chip--rec">Recommended</span> : null}
-                {f.best && !f.recommended && !f.declared ? <span className="fcp-chip">Strongest evidence</span> : null}
+                {f.declared ? <span className="fcp-chip fcp-chip--current">{t("fc_currentTag")}</span> : null}
+                {f.recommended && !f.declared ? <span className="fcp-chip fcp-chip--rec">{t("fc_recommended")}</span> : null}
+                {f.best && !f.recommended && !f.declared ? <span className="fcp-chip">{t("fc_strongest")}</span> : null}
                 {f.other_substation ? <span className="fcp-chip fcp-chip--other">{f.other_substation}</span> : null}
               </span>
             </span>
-            <span className="fcp-bar-cell"><SplitBar f={f} maxSeen={maxSeen} /></span>
+            <span className="fcp-bar-cell"><SplitBar f={f} maxSeen={maxSeen} lang={lang} /></span>
             <span className="fcp-match">
               <strong>{f.match_pct === null ? "–" : `${Math.round(f.match_pct)}%`}</strong>
-              <small>match</small>
+              <small>{t("fc_match")}</small>
             </span>
             <span className={`fcp-net ${f.net && f.net > 0 ? "is-pos" : f.net && f.net < 0 ? "is-neg" : ""}`}
-              title="Net score = outages dark with the feeder minus outages powered">
+              title={t("fc_netTitle")}>
               {f.net === null ? "–" : f.net > 0 ? `+${f.net}` : f.net}
             </span>
           </button>
@@ -129,11 +135,11 @@ const Leaderboard: React.FC<{
               <span className="fcp-feeder-name">{f.name || f.code}</span>
               <span className="fcp-feeder-meta">
                 <span className="fcp-code">{f.code}</span>
-                {f.declared ? <span className="fcp-chip fcp-chip--current">Current tag</span> : null}
+                {f.declared ? <span className="fcp-chip fcp-chip--current">{t("fc_currentTag")}</span> : null}
               </span>
             </span>
-            <span className="fcp-bar-cell"><SplitBar f={f} maxSeen={maxSeen} /></span>
-            <span className="fcp-match"><strong>–</strong><small>match</small></span>
+            <span className="fcp-bar-cell"><SplitBar f={f} maxSeen={maxSeen} lang={lang} /></span>
+            <span className="fcp-match"><strong>–</strong><small>{t("fc_match")}</small></span>
             <span className="fcp-net">–</span>
           </div>
         ))}
@@ -168,8 +174,9 @@ type Tip = { x: number; y: number; title: string; lines: string[] };
 
 const Timeline: React.FC<{
   outages: FeederCompareOutage[]; feeders: FeederCompareFeeder[]; consumerDark?: { start: string; end: string }[];
-  focus: string | null; onFocus: (c: string | null) => void;
-}> = ({ outages, feeders, consumerDark, focus, onFocus }) => {
+  focus: string | null; onFocus: (c: string | null) => void; lang: Lang;
+}> = ({ outages, feeders, consumerDark, focus, onFocus, lang }) => {
+  const t = (key: UIKey, vars?: Record<string, string | number>) => uiText(lang, key, vars);
   const [wrapRef, width] = useWidth<HTMLDivElement>();
   const [tip, setTip] = useState<Tip | null>(null);
   const valid = outages.filter((o) => Number.isFinite(ms(o.start)) && Number.isFinite(ms(o.end)));
@@ -225,18 +232,18 @@ const Timeline: React.FC<{
     <div className="fcp-card">
       <div className="fcp-card-head">
         <div>
-          <h5 className="fcp-card-title">Outage timeline (IST)</h5>
-          <p className="fcp-card-sub">Each bar is one feeder outage, solid green where the consumer was dark at the same time. The consumer's own feeder lines up with its dark periods; a feeder whose outages pass while the consumer stays powered is not its feeder.</p>
+          <h5 className="fcp-card-title">{t("fc_timeline")}</h5>
+          <p className="fcp-card-sub">{t("fc_timelineSub")}</p>
         </div>
       </div>
       <div className="fcp-legend">
-        <span><i className="fcp-swatch fcp-swatch--consumer" />Consumer had no supply</span>
-        <span><i className="fcp-swatch fcp-swatch--dark" />Feeder out, consumer dark too</span>
-        <span><i className="fcp-swatch fcp-swatch--frame" />Feeder out (rest of the outage)</span>
-        <span><i className="fcp-swatch fcp-swatch--hollow" />Feeder out, consumer stayed powered</span>
+        <span><i className="fcp-swatch fcp-swatch--consumer" />{t("fc_lgConsumer")}</span>
+        <span><i className="fcp-swatch fcp-swatch--dark" />{t("fc_lgDark")}</span>
+        <span><i className="fcp-swatch fcp-swatch--frame" />{t("fc_lgFrame")}</span>
+        <span><i className="fcp-swatch fcp-swatch--hollow" />{t("fc_lgHollow")}</span>
       </div>
       <div className="fcp-timeline" ref={wrapRef} onMouseLeave={() => setTip(null)}>
-        <svg width={width} height={height} style={{ display: "block" }} role="img" aria-label="Outage timeline of the substation's feeders">
+        <svg width={width} height={height} style={{ display: "block" }} role="img" aria-label={t("fc_timelineAria")}>
           {ticks.map((t) => (
             <g key={t}>
               <line x1={x(t)} x2={x(t)} y1={top - 6} y2={height - 6} className={new Date(t).getHours() === 0 ? "fcp-grid fcp-grid--day" : "fcp-grid"} />
@@ -247,12 +254,12 @@ const Timeline: React.FC<{
             </g>
           ))}
           {/* Consumer lane */}
-          <text x={8} y={top + laneH / 2 + 4} className="fcp-lane-label fcp-lane-label--consumer">This consumer</text>
+          <text x={8} y={top + laneH / 2 + 4} className="fcp-lane-label fcp-lane-label--consumer">{t("fc_thisConsumer")}</text>
           <rect x={labelW} y={top + 4} width={plotW} height={laneH - 8} rx="4" className="fcp-lane-bg" />
           {merged.map(([a, b]) => (
             <rect key={`c${a}`} x={x(a)} y={top + 5} width={Math.max(3, x(b) - x(a))} height={laneH - 10} rx="4"
               className="fcp-block fcp-block--consumer"
-              onMouseMove={(e) => show(e, "Consumer dark", [`${dayLabel(a)} ${hourLabel(a)} – ${dayLabel(b)} ${hourLabel(b)}`])} />
+              onMouseMove={(e) => show(e, t("fc_consumerDark"), [`${dayLabel(a)} ${hourLabel(a)} – ${dayLabel(b)} ${hourLabel(b)}`])} />
           ))}
           {lanes.map((f, i) => {
             const y = top + laneH * (i + 1) + consumerGap;
@@ -271,12 +278,11 @@ const Timeline: React.FC<{
                   const parts = o.dark && exact ? overlap(a, b) : o.dark ? [[a, b] as [number, number]] : [];
                   const darkMin = parts.reduce((s, [p, q]) => s + minutes(p, q), 0);
                   const tipLines = [
-                    `${o.start_label} – ${o.end_label} (${o.half_hours * 30} min)`,
-                    o.dark ? `Consumer went dark${exact ? ` for ${darkMin} min of it` : ""} — supports this feeder`
-                      : "Consumer stayed powered — contradicts this feeder"];
+                    `${o.start_label} – ${o.end_label} (${t("fc_minutes", { n: o.half_hours * 30 })})`,
+                    o.dark ? (exact ? t("fc_tipDarkFor", { n: darkMin }) : t("fc_tipDark")) : t("fc_tipPowered")];
                   const bx = x(a) + 1, bw = Math.max(4, x(b) - x(a) - 2);
                   return (
-                    <g key={`${o.feeder}-${o.no}`} onMouseMove={(e) => show(e, `${f.name || f.code} — outage ${o.no}`, tipLines)}>
+                    <g key={`${o.feeder}-${o.no}`} onMouseMove={(e) => show(e, t("fc_outageNo", { name: f.name || f.code, no: o.no }), tipLines)}>
                       <rect x={bx} y={y + 6} width={bw} height={laneH - 12} rx="4"
                         className={`fcp-block ${o.dark ? "fcp-block--dark-frame" : "fcp-block--powered"}`} />
                       {parts.map(([p, q]) => (
@@ -298,46 +304,52 @@ const Timeline: React.FC<{
           </div>
         ) : null}
       </div>
-      <p className="fcp-foot">• marks the feeder the consumer is tagged to today.</p>
+      <p className="fcp-foot">{t("fc_footDot")}</p>
     </div>
   );
 };
 
 /* ---------------------------------------------------------------------------------------------- */
 
+/** "<strong>3</strong> of 12 feeders compared" from uiParts(). */
+const Bold: React.FC<{ parts: [string, string, string] }> = ({ parts: [before, bold, after] }) => (
+  <span>{before}<strong>{bold}</strong>{after}</span>
+);
+
 export const FeederComparePanel: React.FC<{
-  data: FeederCompare; onAsk?: (question: string) => void;
-}> = ({ data, onAsk }) => {
+  data: FeederCompare; onAsk?: (question: string) => void; lang?: Lang;
+}> = ({ data, onAsk, lang }) => {
+  const t = (key: UIKey, vars?: Record<string, string | number>) => uiText(lang, key, vars);
   const [focus, setFocus] = useState<string | null>(null);
   const v = VERDICT[data.verdict] ?? VERDICT["NO DATA"];
-  const place = [data.category, data.sub_station, data.zone ? `${data.zone} zone` : null].filter(Boolean).join(" · ");
+  const place = [data.category, data.sub_station, data.zone ? t("fc_zone", { zone: data.zone }) : null].filter(Boolean).join(" · ");
   const sameFeeder = data.declared && data.recommended && data.declared.code === data.recommended.code;
 
   return (
-    <section className={`fcp fcp--${v.cls}`} aria-label={`Feeder mapping of meter ${data.meter}`}>
+    <section className={`fcp fcp--${v.cls}`} aria-label={t("fc_mappingAria", { meter: data.meter })}>
       <header className="fcp-hero">
         <div className="fcp-hero-main">
-          <span className="fcp-eyebrow fcp-eyebrow--hero">Consumer-to-feeder mapping · {data.month_label}</span>
+          <span className="fcp-eyebrow fcp-eyebrow--hero">{t("fc_eyebrow", { month: data.month_label })}</span>
           <h4 className="fcp-meter">{data.meter}</h4>
           <span className="fcp-place">{place}</span>
         </div>
         <div className={`fcp-verdict fcp-verdict--${v.cls}`}>
           <v.Icon size={22} />
           <div>
-            <strong>{v.label}</strong>
+            <strong>{t(v.label)}</strong>
             <span>{dash(data.verdict_text)}</span>
           </div>
         </div>
         {data.months.length > 1 ? (
-          <div className="fcp-months" role="group" aria-label="Audit month">
+          <div className="fcp-months" role="group" aria-label={t("fc_auditMonth")}>
             {data.months.map((m) => {
               const mv = VERDICT[m.verdict] ?? VERDICT["NO DATA"];
               const on = m.month === data.month;
               return (
                 <button type="button" key={m.month} className={`fcp-month${on ? " is-on" : ""}`} disabled={on || !onAsk}
                   onClick={() => onAsk?.(`mapping of meter ${data.meter} in ${m.label}`)}
-                  title={on ? "Showing this month" : `Show ${m.label}`}>
-                  <i className={`fcp-dot fcp-dot--${mv.cls}`} />{m.label}<small>{mv.label}</small>
+                  title={on ? t("fc_showingMonth") : t("fc_showMonth", { month: m.label })}>
+                  <i className={`fcp-dot fcp-dot--${mv.cls}`} />{m.label}<small>{t(mv.label)}</small>
                 </button>
               );
             })}
@@ -347,25 +359,25 @@ export const FeederComparePanel: React.FC<{
 
       <div className="fcp-flow">
         {data.declared ? (
-          <SideCard title={sameFeeder ? "Tagged & confirmed" : "Current tag"} side={data.declared}
-            tone={data.verdict === "CONFIRMED" ? "ok" : "muted"} />
-        ) : <div className="fcp-side fcp-side--muted"><div className="fcp-side-text"><span className="fcp-eyebrow">Current tag</span><strong>No feeder in the records</strong></div></div>}
+          <SideCard title={sameFeeder ? t("fc_taggedConfirmed") : t("fc_currentTag")} side={data.declared}
+            tone={data.verdict === "CONFIRMED" ? "ok" : "muted"} lang={lang} />
+        ) : <div className="fcp-side fcp-side--muted"><div className="fcp-side-text"><span className="fcp-eyebrow">{t("fc_currentTag")}</span><strong>{t("fc_noFeeder")}</strong></div></div>}
         {data.recommended && !sameFeeder ? (
           <>
-            <div className="fcp-arrow" aria-hidden><ArrowRight size={22} /><span>re-tag</span></div>
-            <SideCard title="Recommended (auto-indexed)" side={data.recommended} tone="move" />
+            <div className="fcp-arrow" aria-hidden><ArrowRight size={22} /><span>{t("fc_retag")}</span></div>
+            <SideCard title={t("fc_recommendedAuto")} side={data.recommended} tone="move" lang={lang} />
           </>
         ) : null}
         {!data.recommended && data.strongest ? (
           <>
-            <div className="fcp-arrow fcp-arrow--soft" aria-hidden><ArrowRight size={22} /><span>maybe</span></div>
-            <SideCard title="Strongest evidence" side={data.strongest} tone="muted" hint="Not decisive — field check" />
+            <div className="fcp-arrow fcp-arrow--soft" aria-hidden><ArrowRight size={22} /><span>{t("fc_maybe")}</span></div>
+            <SideCard title={t("fc_strongest")} side={data.strongest} tone="muted" hint={t("fc_notDecisive")} lang={lang} />
           </>
         ) : null}
         <div className="fcp-facts">
-          <div><Zap size={16} /><span><strong>{data.feeders.filter((f) => f.rank !== null).length}</strong> of {data.feeders_in_substation} feeders compared</span></div>
+          <div><Zap size={16} /><Bold parts={uiParts(lang, "fc_feedersCompared", "n", { n: data.feeders.filter((f) => f.rank !== null).length, total: data.feeders_in_substation })} /></div>
           {data.outages.length ? (
-            <div><ZapOff size={16} /><span><strong>{data.outages.filter((o) => o.dark).length}</strong> of {data.outages.length} feeder outages with the consumer dark</span></div>
+            <div><ZapOff size={16} /><Bold parts={uiParts(lang, "fc_outagesDark", "n", { n: data.outages.filter((o) => o.dark).length, total: data.outages.length })} /></div>
           ) : null}
           {data.action ? <div className="fcp-action"><Lightbulb size={16} /><span>{dash(data.action)}</span></div> : null}
         </div>
@@ -379,9 +391,9 @@ export const FeederComparePanel: React.FC<{
         </div>
       ) : null}
 
-      {data.feeders.length ? <Leaderboard feeders={data.feeders} focus={focus} onFocus={setFocus} /> : null}
+      {data.feeders.length ? <Leaderboard feeders={data.feeders} focus={focus} onFocus={setFocus} lang={lang} /> : null}
       {data.outages.length ? (
-        <Timeline outages={data.outages} feeders={data.feeders} consumerDark={data.consumer_dark} focus={focus} onFocus={setFocus} />
+        <Timeline outages={data.outages} feeders={data.feeders} consumerDark={data.consumer_dark} focus={focus} onFocus={setFocus} lang={lang} />
       ) : null}
     </section>
   );

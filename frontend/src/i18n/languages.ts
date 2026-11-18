@@ -77,3 +77,17 @@ export function screenLanguage(preference: LanguagePreference, latestAnswerLangu
   if (preference !== "auto") return preference;
   return latestAnswerLanguage && PREFERENCES.has(latestAnswerLanguage) ? latestAnswerLanguage : "en";
 }
+
+/** A chat's name as shown: the backend's default "New Session" in the screen language. */
+export function sessionLabel(language: string | null | undefined, name: string | null | undefined): string {
+  return !name || name === "New Session" ? uiText(language, "newSession") : name;
+}
+
+/** Screen text with one placeholder drawn bold: "{n} of {total} feeders compared" ->
+ * ["", <n>, " of 12 feeders compared"]. `strong` names the placeholder to keep apart. */
+export function uiParts(language: string | null | undefined, key: UIKey, strong: string, vars: Record<string, string | number>): [string, string, string] {
+  const marker = "\u0000";
+  const text = uiText(language, key, { ...vars, [strong]: marker });
+  const at = text.indexOf(marker);
+  return at < 0 ? [text, "", ""] : [text.slice(0, at), String(vars[strong]), text.slice(at + marker.length)];
+}

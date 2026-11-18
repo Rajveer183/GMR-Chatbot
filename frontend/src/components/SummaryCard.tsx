@@ -102,13 +102,13 @@ export const SummaryCard: React.FC<SummaryCardProps> = ({ summary, interpretedIn
       audio.onended = () => setPlaying(false);
       audio.onerror = () => {
         setPlaying(false);
-        setAudioError("Could not play the generated audio.");
+        setAudioError(uiText(lang, "audioPlayFailed"));
       };
       audioRef.current = audio;
       await audio.play();
       setPlaying(true);
     } catch (err: any) {
-      setAudioError(err?.message || "Could not generate audio for this summary.");
+      setAudioError(err?.message || uiText(lang, "audioFailed"));
     } finally {
       setLoadingAudio(false);
     }

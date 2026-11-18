@@ -54,6 +54,12 @@ AUTO = "auto"
 _TERMS = ("MDM, WFM, MI, SAT, DT/DTR, OEM, KPI, PMPM, SQL, feeder, Consumer ID, Low PF, SAIDI, SAIFI, "
           "invoice, receivables")
 
+# Seen live (18 Nov): 'keep names as they are' still got Kashi -> कशी, Agra -> अज्ञा (Hindi) and
+# Agra -> அகரா (Tamil). Names stay in the Roman letters the data uses, like the table / chart cells.
+_NAMES_RULE = ("write project / DISCOM / zone / circle / division / place / OEM / person names exactly as in the "
+               "original, in English (Roman) letters -- e.g. Kashi, Agra, Triveni, PUVVNL stay 'Kashi', 'Agra', "
+               "'Triveni', 'PUVVNL'; never transliterate a name into another script")
+
 
 def prompt_line(code: str) -> str:
     """The LANGUAGE line of an answer / explain prompt."""
@@ -61,7 +67,7 @@ def prompt_line(code: str) -> str:
     if code == "en":
         return "en -- English"
     return (f"{code} -- {LANGUAGES[code][2]}; keep familiar English technical terms and abbreviations "
-            f"({_TERMS}) and project / place / OEM / person names as they are")
+            f"({_TERMS}); {_NAMES_RULE}")
 
 
 def normalize_preference(value: Any) -> str:
@@ -328,11 +334,65 @@ def values_preserved(original: str, translated: str) -> bool:
     return set(protected_tokens(original)) == set(protected_tokens(translated))
 
 
+# The projects by name, and the table columns whose cells are names (a 'Zone' cell 'Mathura' is a
+# name; a 'Status' cell 'Overloaded' is a word to translate).
+_KNOWN_NAMES = frozenset({"kashi", "agra", "triveni", "puvvnl", "dvvnl", "varanasi", "prayagraj", "mirzapur"})
+_NAME_COLUMN = re.compile(r"project|discom|zone|circle|division|district|substation|sub_station|feeder_name|"
+                          r"warehouse|store|site|oem|vendor|city|town|cluster", re.I)
+_NOT_NAMES = frozenset({"total", "grand", "overall", "sum", "all", "others", "other", "unmapped", "unknown", "none",
+                        "null", "blank", "not", "available", "and", "the", "of", "zone", "circle", "division",
+                        "project", "district", "substation", "feeder", "store", "site", "warehouse", "city", "cluster"})
+
+
+def response_names(response: dict) -> frozenset[str]:
+    """Lower-case Roman-letter names in this answer: the known projects, plus the words of the
+    cells of its name columns (tables) and of the chart categories of a by-name chart."""
+    names = set(_KNOWN_NAMES)
+    def add(value: Any) -> None:
+        for w in re.findall(r"[A-Za-z][A-Za-z]{2,}", str(value or "")):
+            names.add(w.lower())
+    for table in response.get("tables") or []:
+        cols = [c for c in (table.get("columns") or []) if _NAME_COLUMN.search(str(c))]
+        for row in table.get("rows") or []:
+            if isinstance(row, dict):
+                for c in cols:
+                    add(row.get(c))
+    for chart in response.get("charts") or []:
+        if _NAME_COLUMN.search(f"{chart.get('title') or ''} {chart.get('x_label') or ''}"):
+            for x in chart.get("x") or []:
+                add(x)
+    # Summary rows and buckets in a name column ('Total', 'Others', 'Unmapped') are words, not names.
+    return frozenset(names - _NOT_NAMES)
+
+
+_MASK_RE = re.compile(r"(?<![A-Za-z0-9])NM(\d+)(?!\d)")  # not \b: "NM1ने" has none before an Indic suffix
+
+
+def mask_names(items: dict[str, str], names: frozenset[str]) -> tuple[dict[str, str], list[str]]:
+    """The items with every name swapped for a token NM1, NM2 ... (one per spelling), and the
+    spellings to put back. Seen live (18 Nov): asked to keep names, the translator still wrote
+    Kashi -> कशी / காஷி and Agra -> अज्ञा; a token with a digit it must keep (values_preserved),
+    so the name comes back exactly as the data spells it."""
+    back: list[str] = []
+    def swap(m: re.Match) -> str:
+        word = m.group(0)
+        if word.lower() not in names:
+            return word
+        if word not in back:
+            back.append(word)
+        return f"NM{back.index(word) + 1}"
+    return {k: re.sub(r"\b[A-Za-z]+\b", swap, v) for k, v in items.items()}, back
+
+
+def unmask_names(text: str, back: list[str]) -> str:
+    return _MASK_RE.sub(lambda m: back[int(m.group(1)) - 1] if 0 < int(m.group(1)) <= len(back) else m.group(0), text)
+
+
 _TRANSLATE_SYSTEM = f"""You translate the presentation text of an answer from GMR's smart-meter analytics chatbot.
 Translate every value of ITEMS into TARGET and reply with JSON only: {{"items": {{"<same key>": "<translated text>"}}}} -- the same keys, nothing else.
 - Keep every number, percentage, amount, date number, count and ID (meter serials, consumer numbers, SAT-13, ticket ids) exactly as written, in Western digits 0-9. Never add, drop, round, convert or recompute a number, and never write a number in words. Before replying, check that every number and ID of each original value is in its translation.
 - Write in the script TARGET names (Hindi / Marathi = Devanagari, Tamil = Tamil script ...); only Hinglish and English use Roman letters.
-- Keep technical terms and abbreviations ({_TERMS}) and project / place / OEM / person names as they are.
+- Keep technical terms and abbreviations ({_TERMS}) as they are. Tokens NM1, NM2 ... stand for project / place / OEM names: keep each one exactly as written (the name is put back afterwards).
 - Translate the meaning naturally, the way a colleague would say it -- not word for word. Keep the same facts, order and markdown / bullet structure; add nothing.
 - Keys kpis.* / charts.* / tables.* / col.* are short labels and column headers: translate them as short labels (a few words, no sentence). Keys followups.* are questions a user can ask next: translate them as natural questions, the way that user would type them.
 - If a value is already in TARGET, return it unchanged.
@@ -517,7 +577,10 @@ def translate_response(response: dict, target: str) -> dict:
         out.update(answer_language=current or target, translation={"target": target, "status": "skipped"})
         return out
     try:
-        done = _translate_items({**text, **labels}, target)
+        masked, back = mask_names({**text, **labels}, response_names(out))
+        done = _translate_items(masked, target)
+        if done:
+            done = {k: unmask_names(v, back) for k, v in done.items()}
     except Exception:  # never let translation break an answer
         log.exception("translate: failed")
         done = None

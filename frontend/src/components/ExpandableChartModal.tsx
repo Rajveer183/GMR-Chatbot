@@ -7,6 +7,8 @@ interface ExpandableChartModalProps {
   title: string;
   subtitle?: string;
   onClose: () => void;
+  /** The close (X) button's label in the screen language. */
+  closeLabel?: string;
   /** A render function receives the pixel height actually available inside the
    * modal body, so the chart is drawn to fit instead of at a fixed height that
    * the modal (capped to the viewport) would clip. */
@@ -18,6 +20,7 @@ export const ExpandableChartModal: React.FC<ExpandableChartModalProps> = ({
   title,
   subtitle,
   onClose,
+  closeLabel = "Close chart",
   children,
 }) => {
   const savedScrollTopRef = useRef<number | null>(null);
@@ -77,7 +80,7 @@ export const ExpandableChartModal: React.FC<ExpandableChartModalProps> = ({
             <h3 className="chart-modal-title">{title}</h3>
             {subtitle ? <p className="chart-modal-subtitle">{subtitle}</p> : null}
           </div>
-          <button type="button" className="chart-modal-close" onClick={onClose} aria-label="Close chart">
+          <button type="button" className="chart-modal-close" onClick={onClose} aria-label={closeLabel}>
             <X size={18} />
           </button>
         </div>

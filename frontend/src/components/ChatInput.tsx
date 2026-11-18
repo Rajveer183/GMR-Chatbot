@@ -25,6 +25,9 @@ interface ChatInputProps {
   /** Stop button (shown in place of Send while an answer is running). */
   onStop?: () => void;
   stopLabel?: string;
+  /** Voice-input errors in the screen language. */
+  speechUnsupportedLabel?: string;
+  speechFailedLabel?: string;
   /** Render in the page flow (inside the welcome card) instead of the fixed bottom bar. */
   inline?: boolean;
   /** Shown just above the input box (the "continue previous analysis" banner). */
@@ -32,7 +35,7 @@ interface ChatInputProps {
 }
 
 export const ChatInput = forwardRef<ChatInputHandle, ChatInputProps>(
-  ({ loading, onSubmit, onStop, stopLabel = "Stop", placeholder, micOnLabel, micOffLabel, speechLocale, inline = false, above }, ref) => {
+  ({ loading, onSubmit, onStop, stopLabel = "Stop", speechUnsupportedLabel = "Speech recognition is not supported in this browser.", speechFailedLabel = "Unable to start speech recognition.", placeholder, micOnLabel, micOffLabel, speechLocale, inline = false, above }, ref) => {
     const [question, setQuestion] = useState("");
     const [speechError, setSpeechError] = useState<string | null>(null);
     const inputRef = useRef<HTMLTextAreaElement>(null);
@@ -77,7 +80,7 @@ export const ChatInput = forwardRef<ChatInputHandle, ChatInputProps>(
     // browser's built-in Web Speech API (SpeechRecognition).
     const toggleSpeech = () => {
       if (!browserSupportsSpeechRecognition) {
-        setSpeechError("Speech recognition is not supported in this browser.");
+        setSpeechError(speechUnsupportedLabel);
         return;
       }
       if (speechActive) {
@@ -88,7 +91,7 @@ export const ChatInput = forwardRef<ChatInputHandle, ChatInputProps>(
       resetTranscript();
       setQuestion("");
       SpeechRecognition.startListening({ continuous: true, language: speechLocale }).catch(() => {
-        setSpeechError("Unable to start speech recognition.");
+        setSpeechError(speechFailedLabel);
       });
     };
 

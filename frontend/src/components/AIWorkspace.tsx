@@ -4,7 +4,7 @@ import { apiClient, QueryStoppedError } from "../api/client";
 import type { FeedbackRating } from "../api/client";
 import type { AIQueryResponse, AIStreamEvent, ChatFolder, DatasetSummary, FilterRequest, SessionPatch, SessionSummary, SessionDetail, SessionMessage, TranslatedAnswer } from "../api/client";
 import { LanguageSelect } from "./LanguageSelect";
-import { langTag, readStoredLanguage, screenLanguage, speechLocale, statusText, storeLanguage, uiText } from "../i18n/languages";
+import { langTag, readStoredLanguage, screenLanguage, sessionLabel, speechLocale, statusText, storeLanguage, uiText } from "../i18n/languages";
 import type { LanguagePreference } from "../i18n/languages";
 import { ResultRenderer } from "./ResultRenderer";
 import { LoadingStatus } from "./LoadingStatus";
@@ -909,10 +909,14 @@ export const AIWorkspace: React.FC<AIWorkspaceProps> = ({ filters }) => {
 
   const isTemporary = !!activeSession && (activeSession.session_id === tempId || !!activeSession.temporary);
   const activeSessionName = useMemo(
-    () => (isTemporary ? t("temporaryChat") : activeSession?.session_name || "Project Workspace"),
+    () => (isTemporary ? t("temporaryChat") : activeSession ? sessionLabel(uiLang, activeSession.session_name) : "Project Workspace"),
     // eslint-disable-next-line react-hooks/exhaustive-deps
     [activeSession, isTemporary, uiLang]
   );
+  // The page's language follows the screen language (font shaping, screen-reader voice).
+  useEffect(() => {
+    document.documentElement.lang = langTag(uiLang);
+  }, [uiLang]);
   const toggleTemporary = () => {
     if (loading) return;
     void createNewSession(!isTemporary);
@@ -980,6 +984,8 @@ export const AIWorkspace: React.FC<AIWorkspaceProps> = ({ filters }) => {
       onSubmit={onSubmitQuestion}
       onStop={stopQuery}
       stopLabel={t("stopGenerating")}
+      speechUnsupportedLabel={t("speechUnsupported")}
+      speechFailedLabel={t("speechStartFailed")}
       placeholder={t("askPlaceholder")}
       micOnLabel={t("micOn")}
       micOffLabel={t("micOff")}
@@ -1466,9 +1472,10 @@ export const AIWorkspace: React.FC<AIWorkspaceProps> = ({ filters }) => {
         <ConfirmDialog
           open={confirmDelete.open}
           title={t("confirmDelete")}
-          message={t("deleteMessage", { name: confirmDelete.sessionName ?? "this chat" })}
+          message={t("deleteMessage", { name: confirmDelete.sessionName ? sessionLabel(uiLang, confirmDelete.sessionName) : t("thisChat") })}
           confirmLabel={t("delChat")}
           cancelLabel={t("cancel")}
+          closeLabel={t("closeDialog")}
           onCancel={cancelDeleteSession}
           onConfirm={() => confirmDeleteSession(confirmDelete.sessionId)}
         />
