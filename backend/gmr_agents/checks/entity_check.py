@@ -1196,9 +1196,14 @@ def check(question: str, sql_texts: list[str], columns: set[str] | None = None, 
     # here -- grouping by category returns every category whatever the word meant.
     mentioned = asked_cats | {cat for cat in _CATEGORIES if re.search(rf"\b{cat.lower()}r?s?\b", _words(question))}
     split = len(mentioned) > 1 and _grouped_by(low, r"\w*category")
+    # Every category named ('by meter category (Consumer, DT, Feeder)') = no category filter needed, like 'all
+    # projects (Agra, Kashi, Triveni)'. Live 18 Nov: a meter-wise complaints list (no GROUP BY) was sent back for
+    # 'never filters CONSUMER'; the repair added category = 'CONSUMER' and the last attempt ran unchecked --
+    # 937,411 complaints instead of 1,033,230, "Consumer = 100%".
+    every_cat = len(mentioned) == len(_CATEGORIES)
     for cat, aliases in _CATEGORIES.items() if has_category and not mapping else ():
         named = cat in asked_cats
-        if named and cat.lower() not in low and not split:
+        if named and cat.lower() not in low and not split and not every_cat:
             problems.append(f"the question asks about {cat} meters but the SQL never filters/selects category '{cat}'")
         if named or any(f" {a} " in words for a in aliases) or (cat == "CONSUMER" and _CONSUMER_RE.search(words)) \
                 or re.search(rf"\b{cat.lower()}s?\b", words):
