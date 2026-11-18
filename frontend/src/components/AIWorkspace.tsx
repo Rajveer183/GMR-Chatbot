@@ -15,6 +15,7 @@ import { RailRecents } from "./RailRecents";
 import { ChatSearchDialog, recordOpened } from "./ChatSearchDialog";
 import { ArchivedChatsDialog, ProfileMenu } from "./ProfileMenu";
 import { EmptyState } from "./EmptyState";
+import { CopyButton } from "./CopyButton";
 import { ChatInput } from "./ChatInput";
 import type { ChatInputHandle } from "./ChatInput";
 import gmrLogo from "../assets/gmr_logo.png";
@@ -1253,16 +1254,22 @@ export const AIWorkspace: React.FC<AIWorkspaceProps> = ({ filters }) => {
                         <>
                           <div className="chat-user-bubble chat-bubble-enter">{msg.content}</div>
                           <div className="chat-user-actions">
+                            <CopyButton
+                              getPayload={() => ({ text: msg.content, html: "" })}
+                              title={t("copyMessage")}
+                              copiedLabel={t("copied")}
+                              compact
+                              className="answer-action-btn icon-only"
+                            />
                             <button
                               type="button"
-                              className="answer-action-btn"
+                              className="answer-action-btn icon-only"
                               onClick={() => setEditing({ index, text: msg.content })}
                               disabled={loading}
-                              title={t("editQuestion")}
-                              aria-label={t("editQuestion")}
+                              title={t("editMessage")}
+                              aria-label={t("editMessage")}
                             >
-                              <Pencil size={12} />
-                              <span>{t("edit")}</span>
+                              <Pencil size={13} />
                             </button>
                           </div>
                         </>

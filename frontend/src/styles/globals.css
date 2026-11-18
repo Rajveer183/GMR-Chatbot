@@ -1013,7 +1013,7 @@ button {
 }
 
 .chat-msg-row {
-  margin-bottom: var(--space-5);
+  margin-bottom: var(--space-4);
   display: flex;
   width: 100%;
   box-sizing: border-box;
@@ -1021,6 +1021,23 @@ button {
 
 .chat-msg-row.user {
   justify-content: flex-end;
+  /* The Edit row under the bubble already adds height; keep the hop to the
+     answer header tight. */
+  margin-bottom: 6px;
+}
+
+/* Icon-only Copy / Edit under the question; the hover label ("Copy message",
+   "Edit message") comes from the shared instant tooltip via `title`. */
+.chat-msg-col .chat-user-actions {
+  gap: 2px;
+}
+
+.answer-action-btn.icon-only {
+  width: 28px;
+  height: 28px;
+  padding: 0;
+  justify-content: center;
+  border-radius: 8px;
 }
 
 .chat-msg-row.assistant {
@@ -1121,7 +1138,7 @@ button {
   border: 1px solid var(--border);
   border-radius: var(--radius-lg);
   box-shadow: var(--shadow-card);
-  padding: var(--space-5) var(--space-6);
+  padding: var(--space-4) var(--space-5);
   box-sizing: border-box;
   scroll-margin-top: 84px;
 }
@@ -1474,7 +1491,7 @@ button {
 .chat-result-panel {
   display: flex;
   flex-direction: column;
-  gap: 22px;
+  gap: 16px;
   width: 100%;
 }
 
@@ -1742,7 +1759,7 @@ button {
 }
 
 .chart-card-header {
-  padding: 16px 20px 12px;
+  padding: 12px 18px 10px;
   border-bottom: 1px solid var(--border-light);
   display: flex;
   align-items: flex-start;
@@ -1765,7 +1782,7 @@ button {
 }
 
 .chart-card-body {
-  padding: 16px 20px 20px;
+  padding: 8px 16px 6px;
 }
 
 .chart-plot,
@@ -1941,7 +1958,7 @@ button {
   z-index: 3;
   box-shadow: inset 0 -1px 0 rgba(255, 255, 255, 0.12);
   font-weight: 650;
-  padding: 11px 16px;
+  padding: 9px 14px;
   white-space: nowrap;
   font-size: 12px;
   text-transform: uppercase;
@@ -1949,7 +1966,7 @@ button {
 }
 
 .data-table td {
-  padding: 11px 16px;
+  padding: 8px 14px;
   border-bottom: 1px solid var(--border-light);
   color: var(--text-main);
   max-width: 280px;
@@ -2808,7 +2825,7 @@ button {
 
 /* ---- Answer feedback (thumbs up / down) ------------------------------- */
 .feedback-wrap {
-  margin-top: var(--space-3);
+  margin-top: 0;
 }
 
 .feedback-buttons {
@@ -3376,10 +3393,10 @@ button {
 
 .chat-user-actions {
   justify-content: flex-end;
+  margin-top: 0;
   opacity: 0;
   transition: opacity var(--duration-fast) ease;
 }
-
 .chat-msg-col.user:hover .chat-user-actions,
 .chat-user-actions:focus-within {
   opacity: 1;

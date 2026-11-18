@@ -124,6 +124,8 @@ const en = {
   stopGenerating: "Stop generating",
   edit: "Edit",
   editQuestion: "Edit and resubmit this question",
+  editMessage: "Edit message",
+  copyMessage: "Copy message",
   editSend: "Save & submit",
   editHint: "The answers after this question will be replaced.",
   exportAnswer: "Export",
@@ -557,6 +559,7 @@ const ml: Strings = {
 
 // A tooltip with no translation of its own reads its short label instead of falling back to English.
 const TITLE_FALLBACK: Partial<Record<UIKey, UIKey>> = {
+  copyMessage: "copy", editMessage: "edit",
   copyAllTitle: "copyAll", copySummaryTitle: "copy", copyTableTitle: "copyTable", playTitle: "play", pauseTitle: "pause",
 };
 

@@ -124,7 +124,9 @@ export async function copyToClipboard(payload: CopyPayload): Promise<void> {
       await navigator.clipboard.write([
         new ClipboardItem({
           "text/plain": new Blob([payload.text], { type: "text/plain" }),
-          "text/html": new Blob([payload.html], { type: "text/html" }),
+          // Plain-text copies (a question) leave html empty; an empty text/html
+          // entry would make rich editors paste nothing.
+          ...(payload.html ? { "text/html": new Blob([payload.html], { type: "text/html" }) } : {}),
         }),
       ]);
       return;
