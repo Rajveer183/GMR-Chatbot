@@ -1,5 +1,5 @@
 import React, { useEffect, useMemo, useRef, useState } from "react";
-import { Archive, ArchiveRestore, Check, ChevronRight, SunMoon, Trash2, User, X } from "lucide-react";
+import { Archive, ArchiveRestore, Check, ChevronRight, Settings, SunMoon, Trash2, X } from "lucide-react";
 import type { SessionSummary } from "../api/client";
 import type { UIKey } from "../i18n/uiStrings";
 import { readThemePref, setThemePref, type ThemePref } from "../utils/theme";
@@ -12,7 +12,7 @@ const THEME_OPTIONS: { value: ThemePref; label: UIKey }[] = [
 
 type T = (key: UIKey, vars?: Record<string, string | number>) => string;
 
-// Sidebar footer: a profile button (like ChatGPT's) whose menu opens the archived chats.
+// Sidebar footer: a Settings button whose menu opens the archived chats and the theme picker.
 // Archived chats live only here -- they are deleted by the backend 30 days after archiving
 // unless unarchived (or continued) first.
 
@@ -103,8 +103,8 @@ export const ProfileMenu: React.FC<ProfileMenuProps> = ({ archivedCount, t, onOp
         aria-expanded={open}
         onClick={() => setOpen((v) => !v)}
       >
-        <span className="chat-profile-avatar" aria-hidden="true"><User size={15} /></span>
-        <span className="chat-profile-name">{t("profile")}</span>
+        <Settings size={16} className="chat-profile-icon" aria-hidden="true" />
+        <span className="chat-profile-name">{t("settings")}</span>
       </button>
     </div>
   );

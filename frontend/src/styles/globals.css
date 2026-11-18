@@ -727,21 +727,14 @@ button {
   background: var(--active-bg);
 }
 
-.chat-profile-avatar {
-  width: 30px;
-  height: 30px;
+.chat-profile-icon {
   flex: none;
-  border-radius: 50%;
-  background: var(--bhel-navy, #1e3a5f);
-  color: #fff;
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
+  color: var(--text-main);
 }
 
 .chat-profile-name {
   font-size: 13px;
-  font-weight: 600;
+  font-weight: 500;
   color: var(--text-main);
 }
 
