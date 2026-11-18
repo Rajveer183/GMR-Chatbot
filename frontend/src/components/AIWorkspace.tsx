@@ -1,5 +1,5 @@
 import React, { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { PanelLeft, Search, SquarePen, MessageCircleDashed, Pencil, X, User, Database, Download, History, RefreshCw, ArchiveRestore } from "lucide-react";
+import { PanelLeft, Search, SquarePen, MessageCircleDashed, Pencil, X, User, Download, History, RefreshCw, ArchiveRestore } from "lucide-react";
 import { apiClient, QueryStoppedError } from "../api/client";
 import type { FeedbackRating } from "../api/client";
 import type { AIQueryResponse, AIStreamEvent, ChatFolder, DatasetSummary, FilterRequest, SessionPatch, SessionSummary, SessionDetail, SessionMessage, TranslatedAnswer } from "../api/client";
@@ -15,7 +15,6 @@ import { RailRecents } from "./RailRecents";
 import { ChatSearchDialog, recordOpened } from "./ChatSearchDialog";
 import { ArchivedChatsDialog, ProfileMenu } from "./ProfileMenu";
 import { EmptyState } from "./EmptyState";
-import { DataSourcesPanel } from "./DataSourcesPanel";
 import { ChatInput } from "./ChatInput";
 import type { ChatInputHandle } from "./ChatInput";
 import gmrLogo from "../assets/gmr_logo.png";
@@ -313,7 +312,6 @@ export const AIWorkspace: React.FC<AIWorkspaceProps> = ({ filters }) => {
   // The answer running now -- what the Stop button aborts / cancels.
   const stopRef = useRef<{ controller: AbortController; requestId: string } | null>(null);
   // Insights drawer (observability, alerts, quality, freshness, investigations) -- read-only reports.
-  const [insightsOpen, setInsightsOpen] = useState(false);
   const recordVote = useCallback(
     (traceId: string, rating: FeedbackRating) =>
       setVotes((v) => {
@@ -1162,15 +1160,6 @@ export const AIWorkspace: React.FC<AIWorkspaceProps> = ({ filters }) => {
             )}
           </div>
           <div className="chat-header-controls">
-            <button
-              type="button"
-              className="summary-audio-btn"
-              onClick={() => setInsightsOpen(true)}
-              title={`All ${datasets.length} tables the assistant can query`}
-            >
-              <Database size={14} />
-              <span>{t("dataSources")}</span>
-            </button>
             {activeSession?.messages?.length ? (
               <div className="export-menu">
                 <button
@@ -1199,7 +1188,6 @@ export const AIWorkspace: React.FC<AIWorkspaceProps> = ({ filters }) => {
             <LanguageSelect value={responseLanguage} onChange={changeLanguage} label={t("answerLanguage")} />
           </div>
         </header>
-        <DataSourcesPanel open={insightsOpen} onClose={() => setInsightsOpen(false)} datasets={datasets} />
 
         <div className={`chat-messages${isEmptyChat ? " is-empty" : ""}${continueBannerEl && !isEmptyChat ? " has-banner" : ""}`} ref={chatMessagesRef}>
           <div className="chat-thread chat-thread-enter" key={activeSession?.session_id || "none"} ref={chatThreadRef}>
