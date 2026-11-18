@@ -1086,8 +1086,20 @@ button {
 }
 
 .chat-msg-avatar.assistant {
-  background: var(--accent-soft);
-  color: var(--accent);
+  /* GMR logo is wide (~2.5:1), so a white pill instead of a circle; white
+     keeps the navy letters readable in dark mode too. */
+  width: auto;
+  height: 20px;
+  padding: 0 5px;
+  border-radius: 6px;
+  background: #fff;
+  border: 1px solid rgba(0, 0, 0, 0.08);
+}
+
+.chat-msg-avatar.assistant img {
+  height: 11px;
+  width: auto;
+  display: block;
 }
 
 .chat-user-bubble {

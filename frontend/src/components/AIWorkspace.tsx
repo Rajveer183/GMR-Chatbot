@@ -1,5 +1,5 @@
 import React, { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { PanelLeft, Search, SquarePen, MessageCircleDashed, Pencil, X, User, Bot, Database, Download, History, RefreshCw, ArchiveRestore } from "lucide-react";
+import { PanelLeft, Search, SquarePen, MessageCircleDashed, Pencil, X, User, Database, Download, History, RefreshCw, ArchiveRestore } from "lucide-react";
 import { apiClient, QueryStoppedError } from "../api/client";
 import type { FeedbackRating } from "../api/client";
 import type { AIQueryResponse, AIStreamEvent, ChatFolder, DatasetSummary, FilterRequest, SessionPatch, SessionSummary, SessionDetail, SessionMessage, TranslatedAnswer } from "../api/client";
@@ -1284,7 +1284,7 @@ export const AIWorkspace: React.FC<AIWorkspaceProps> = ({ filters }) => {
                     <div className="chat-msg-col assistant">
                       <div className="chat-msg-meta">
                         <span className="chat-msg-avatar assistant">
-                          <Bot size={12} />
+                          <img src={gmrLogo} alt="" />
                         </span>
                         <span className="chat-msg-meta-name">{t("assistant")}</span>
                         <span className="chat-msg-meta-time">{formatMessageTime(msg.timestamp)}</span>
@@ -1390,7 +1390,7 @@ export const AIWorkspace: React.FC<AIWorkspaceProps> = ({ filters }) => {
                 <div className="chat-msg-col assistant">
                   <div className="chat-msg-meta">
                     <span className="chat-msg-avatar assistant">
-                      <Bot size={12} />
+                      <img src={gmrLogo} alt="" />
                     </span>
                     <span className="chat-msg-meta-name">{t("assistant")}</span>
                   </div>
@@ -1407,7 +1407,7 @@ export const AIWorkspace: React.FC<AIWorkspaceProps> = ({ filters }) => {
                 <div className="chat-msg-col assistant">
                   <div className="chat-msg-meta">
                     <span className="chat-msg-avatar assistant">
-                      <Bot size={12} />
+                      <img src={gmrLogo} alt="" />
                     </span>
                     <span className="chat-msg-meta-name">{t("assistant")}</span>
                   </div>
