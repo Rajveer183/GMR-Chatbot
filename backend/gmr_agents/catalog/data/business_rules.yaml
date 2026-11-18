@@ -576,6 +576,10 @@ topics:
       - "Repeat-complaint meter = total_complaints > 1. Meters = COUNT(*); complaints = SUM(total_complaints)."
       - "Dashboard 'Top 50 Meters & SAT Status' (O&M Ticket Closed Analysis tab): meters only in areas (discom, zone, circle, division, sub_division) with a ticket CLOSED in the asked window of public.gold_om_closed_tickets_day_agg (closed_date; no period = last 30 days ending yesterday, say so) -- join on COALESCE(LOWER(col), '') for all five; project / category / place filters on both tables. Tiles: complaint meters = COUNT(*), SAT Done / Non-SAT meters (sat_status) and their %, total complaints and per SAT status. Top 50 = ORDER BY total_complaints DESC LIMIT 50 with serial, place, category, total / open / closed complaints, SAT status and number. The answer changes with the window."
       - "CONSUMER rows hold only OPEN complaints (closed_complaints is always 0) and DT/FEEDER rows only CLOSED ones -- never report consumer closed = 0 as a real figure; say which kind each category counts."
+      - "'Complaints of <project / cluster>' (no top / which meters / meter-wise) = the TOTALS for that scope (complaint meters, total / open / closed complaints), split zone-wise for one project or project-wise (ROLLUP Total) for all -- never the Top 50 meter list. 'Cluster' = project."
+      - "Meter-wise / per meter = the dashboard's Top 50 Meters list (the Top 50 example: same closed-ticket areas window, LIMIT 50) plus its extra query with that scope's totals (COUNT(*) meters, SUM of total / open / closed); say the window (last 30 days ending yesterday unless asked)."
+    answer_notes:
+      - "Open with the total complaints (open / closed) and complaint meters for the scope; a meter list then names the top meters -- never only the highest and lowest meter."
     example:
       question: "Repeat-complaint meters by zone and SAT status"
       sql: |

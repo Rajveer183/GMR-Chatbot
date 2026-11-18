@@ -23,9 +23,13 @@ import re
 from gmr_agents.checks.entity_check import _PROJECTS, _words
 
 _RESET_RE = re.compile(
-    r"\b(overall|all (projects|zones|discoms|circles|divisions|places)|whole (programme|program|project)|"
-    r"programme|program[- ]wide|across (all|projects|the program)|everywhere|total (programme|program)|"
-    r"(project|discom)[- ]?wise|by (project|discom)|each (project|discom)|per (project|discom)|sab|poore|"
+    r"\b(overall|all (the )?(three |3 )?(projects|clusters|zones|discoms|circles|divisions|places)|"
+    r"whole (programme|program|project)|"
+    r"programme|program[- ]wide|across (all|projects|clusters|the program)|everywhere|total (programme|program)|"
+    # 'cluster' = project (business rule 'Places'). 18 Nov: 'also give me total complaints for all clusters' after
+    # a Kashi turn was resolved as '... all clusters in the Kashi project' (Kashi carried, 'all' ignored).
+    r"(project|cluster|discom)[- ]?wise|by (project|cluster|discom)s?|(each|every) (project|cluster|discom)|"
+    r"per (project|cluster|discom)|sab|poore|"
     # An explicit fresh start drops the earlier turns' places (12 Nov: 'New topic: what is the total stock available
     # in all warehouses?' after Kashi turns was answered for Kashi's warehouses only).
     r"new (topic|question|query)|different (topic|question)|unrelated|change of topic|start over|start fresh|"
@@ -75,8 +79,8 @@ def _strip(question: str, name: str, level: str) -> str:
 # divisions') is answered across ALL places of that level: memory may keep only a coarser place
 # (Kashi for 'which zone is worst'), never one at that level or below. Seen live: 'Which project
 # has the highest PMPM invoice percentage?' after a Kashi turn was answered for Kashi alone.
-_RANK = {"project": 0, "discom": 0, "zone": 1, "circle": 2, "division": 3, "sub_division": 4}
-_LEVELS_RE = r"(projects?|discoms?|zones?|circles?|divisions?|sub[- ]?divisions?)"
+_RANK = {"project": 0, "cluster": 0, "discom": 0, "zone": 1, "circle": 2, "division": 3, "sub_division": 4}
+_LEVELS_RE = r"(projects?|clusters?|discoms?|zones?|circles?|divisions?|sub[- ]?divisions?)"
 _COMPARE_RE = re.compile(
     rf"\b(?:which|what|each|every|all|per|by|top|bottom|compare|comparing|across|among|between|rank|ranking)\s+"
     rf"(?:\w+\s+){{0,2}}?{_LEVELS_RE}\b|\b{_LEVELS_RE}[- ]?wise\b|"

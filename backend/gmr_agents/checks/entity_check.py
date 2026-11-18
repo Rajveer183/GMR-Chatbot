@@ -1623,7 +1623,69 @@ def check(question: str, sql_texts: list[str], columns: set[str] | None = None, 
     problems += _bare_count_problems(f"{asked_words or ''} {question}", sql)
     problems += _week_window_problems(f"{asked_words or ''} {question}", low)
     problems += _snapshot_history_problems(low)
+    problems += _entity_grain_problems(asked.get("breakdown_by") or [], low, cols)
+    problems += _all_projects_problems(asked_words or "", low)
+    if re.search(r"\brollup\s*\(", low) and re.search(r"\bsum\s*\(\s*sum\s*\([^)]*\)\s*\)\s*over\s*\(\s*\)", low):
+        # 18 Nov: 'in detail' -> share_pct = SUM(x) * 100 / SUM(SUM(x)) OVER () with GROUP BY ROLLUP: the window adds
+        # the Total and subtotal rows too, so every share came out a fraction of the truth ('33.33%' for the Total).
+        problems.append("a share computed with SUM(SUM(x)) OVER () over a GROUP BY ROLLUP also adds the Total / "
+                        "subtotal rows, so every share is wrong -- drop the share column (shares are computed "
+                        "afterwards from the Total row)")
     return problems
+
+
+# One row per meter / DT / feeder / consumer. 18 Nov: 'give me meter wise breakdown' (resolved '... meter-wise')
+# came back GROUP BY ROLLUP (project) -- the geo-level loop above has no entity grains, so it passed.
+_ENTITY_COLS = {"meter": ("meter_serial_number", "meter_no", "meter_serial"),
+                "dt": ("dtr_code", "dtr_name", "dt_code", "dtr"),
+                "feeder": ("feeder_code", "feeder_name", "feeder"),
+                "consumer": ("consumer_number", "consumer_id", "consumer_no", "meter_no")}
+
+
+def _entity_grain_problems(levels: list[str], low: str, cols: set[str] | None) -> list[str]:
+    problems = []
+    # (feeder is left to the existing checks: the encoder's feeder level also fires on 'zone wise feeder installation'
+    # and 'SAIFI by feeder category')
+    for lvl in ("meter", "dt", "consumer"):
+        if lvl not in levels:
+            continue
+        have = [c for c in _ENTITY_COLS[lvl] if cols is None or c in cols]
+        name = {"dt": "DT", "meter": "meter", "feeder": "feeder", "consumer": "consumer"}[lvl]
+        if not have:
+            # 'by DT' / 'by consumer' on a WFM table usually means the meter category (CONSUMER / DT / FEEDER),
+            # handled by the category checks; only a per-meter ask needs a per-meter table.
+            if lvl == "meter" and cols is not None:
+                problems.append("the question asks meter-wise (one row per meter) but these tables have no meter "
+                                "column -- use the topic's per-meter table (meter_serial_number / meter_no), or if none "
+                                "exists give the finest level the data has and say per-meter detail is not available")
+            continue
+        if any(_grouped_by(low, c) for c in have):
+            continue
+        # a per-entity table listed row by row (no GROUP BY at all) already is one row per entity
+        if not re.search(r"\bgroup\s+by\b", low) and any(re.search(rf"\b{c}\b", low) for c in have):
+            continue
+        problems.append(f"the question asks for a {name}-wise breakdown but the SQL never lists or groups by "
+                        f"{have[0]} -- return one row per {name} ({have[0]}, its figures, ORDER BY the main measure "
+                        f"DESC LIMIT 50) and the overall total (number of {name}s and the summed measure) as an "
+                        "extra query")
+    return problems
+
+
+_ALL_PROJECTS_RE = re.compile(r"\b(?:all (?:the )?(?:three |3 )?(?:projects|clusters)|every (?:project|cluster)|"
+                              r"(?:project|cluster)[- ]?wise|overall)\b", re.I)
+
+
+def _all_projects_problems(asked: str, low: str) -> list[str]:
+    """'all clusters' / 'all projects' in the user's own words: no single-project filter. 18 Nov: 'also give me
+    total complaints for all clusters' after a Kashi turn ran WHERE LOWER(project) = 'kashi'."""
+    if not asked or not _ALL_PROJECTS_RE.search(asked) or _named(asked, _PROJECTS):
+        return []
+    one = re.findall(r"\b(?:project|cluster)\s*\)?\s*=\s*'(agra|kashi|triveni)'", low)
+    if one and len(set(one)) == 1:
+        return [f"the user asked for all projects (clusters = projects: Agra, Kashi, Triveni) but the SQL keeps only "
+                f"{one[0].title()} -- remove that project filter and give one row per project with a Total "
+                "(GROUP BY ROLLUP (project))"]
+    return []
 
 
 # A plain count with no breakdown asked ('Low PF flagged count', 'how many theft suspect meters') must come back as

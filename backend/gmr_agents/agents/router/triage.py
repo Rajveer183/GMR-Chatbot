@@ -30,7 +30,7 @@ _TRIAGE_SYSTEM = """You are the front desk of GMR's smart-meter analytics chatbo
 Data available:
 - WFM (workforce management): meter installations (MI), SAT, invoices/revenue/receivables, inventory/stock, O&M complaints/tickets, technicians, meter journey.
 - MDM: (1) the consumer-to-feeder mapping audit / auto-indexing (confirmed, reassigned, review, no-data consumers; mapping accuracy, pending verification; feeders' MI, CI, reassign in/out, confidence; one consumer's index-based vs AI-based feeder, substation and outage match; correction queue; by project/zone/division/substation/feeder); (2) power quality: voltage deviation index (VDI), voltage fluctuation index (VFI), voltage unbalance index (VUI), voltage drop, low-voltage pockets, meter current unbalance, % time beyond the voltage tolerance band, % time with unacceptable current imbalance; (3) load management: DT load (kVA), % DT loading, % DT peak loading (overloaded / underloaded DTs), DT load rise, % consumers with load violation (max demand above sanctioned load), overload / MD breach risk; (4) operation analytics: voltage / current imbalance (3-sigma test), imbalance alerts, phase imbalance reduced by 30%, reverse flow (net-meter export), data quality / completeness, meters stopped communicating, hidden outage pockets (hidden power events, outages not recorded, block-load gaps, abnormal current flow), consumption spikes / drops; (5) power factor: low power factor by DT/feeder, power factor deterioration; (6) supply reliability: SAIDI, SAIFI, CAIDI, CAIFI, MAIFI, number / duration of outages, feeders with most outages, reliability improvement trend; (7) theft analysis: theft suspect flags, load diversion, areas with highest theft risk, % reduction in theft events, total anomalies detected, repeat anomalies; (8) energy audit: feeder loss %, LT (DT) loss %, energy gap (feeder input vs consumer energy; the AT&C proxy), best / worst feeders and DTs by loss. Any other meter data (per-consumer billing or consumption trends) is NOT available -> out_of_scope.
-Known values: OEMs (make/vendor) are only AEW, CAP, HPL, SEIPL; SAT batches are SAT-1 .. SAT-13 (no SAT-14 yet); 'kasi' = kashi project, 'trivei'/'triveni' = triveni; a bare 'Varanasi' = the zones Varanasi I + Varanasi II (write 'Varanasi I and Varanasi II zones'), only 'Varanasi project/cluster' = the kashi project. SAT = Site Acceptance Test; MI = meter installation; DT/DTR = distribution transformer meter; PMPM = per meter per month payment.
+Known values: OEMs (make/vendor) are only AEW, CAP, HPL, SEIPL; SAT batches are SAT-1 .. SAT-13 (no SAT-14 yet); 'kasi' = kashi project, 'trivei'/'triveni' = triveni; a bare 'Varanasi' = the zones Varanasi I + Varanasi II (write 'Varanasi I and Varanasi II zones'), only 'Varanasi project/cluster' = the kashi project. 'Cluster' = project ('kashi cluster' = the Kashi project, never 'meters'); 'all clusters' / 'all projects' / 'every project' / 'overall' = all three projects (agra, kashi, triveni) -- it REPLACES the latest turn's project, never 'all clusters in Kashi'. SAT = Site Acceptance Test; MI = meter installation; DT/DTR = distribution transformer meter; PMPM = per meter per month payment.
 Dates: compare every date with Today, never with the verb tense -- a date before Today is in the past even when asked 'will be installed on ...' (answer it as data: what was installed that day); only a date after Today is a forecast.
 The user's screen: the chatbot cannot see or change the dashboard page the user has open. 'What filters are applied on my page / what am I looking at' -> kind chitchat, reply that you cannot see their page and offer to fetch the data if they name the project, period or other filters (never mention tables).
 Decide everything about the user's message and reply with JSON only:
@@ -817,6 +817,26 @@ def fix_measure(state: dict, triage: dict, prior_turns: list[dict] | None) -> bo
     return True
 
 
+_DRILL_ORDER = ("project", "zone", "circle", "division", "sub_division")
+
+
+def _detail_drilldown(latest: dict) -> str:
+    """'in detail' with no level named = one place level below the latest answer's grouping, plus the other
+    splits. 18 Nov: 'in detail, as much detail as you can provide' after a project-wise answer re-ran the same
+    project-wise query (the user wanted something more insightful)."""
+    sql = str((latest.get("context") or {}).get("sql") or "").lower()
+    grouped = " ".join(re.findall(r"\b(?:group|partition)\s+by\b([^;]*?)(?:\border\b|\blimit\b|\bhaving\b|\)|$)", sql))
+    have = [lvl for lvl in _DRILL_ORDER if re.search(rf"\b{lvl}\b", grouped)]
+    filtered = [lvl for lvl in _DRILL_ORDER if re.search(rf"\b{lvl}\s*\)?\s*(?:=|in\s*\(|like)", sql)]
+    finest = max((_DRILL_ORDER.index(lvl) for lvl in have + filtered), default=-1)
+    nxt = _DRILL_ORDER[finest + 1] if finest + 1 < len(_DRILL_ORDER) else None
+    level = f"broken down {nxt.replace('_', '-')} wise (with the Total)" if nxt else "for the top 50 meters"
+    # No category names here ('Consumer/DT/Feeder' carried into the next turn and read as a CONSUMER filter) and no
+    # 'share' (the writer computed SUM() OVER () across ROLLUP rows -- shares come from code, analyst.py).
+    return (f"in detail: same measure and filters, {level}, plus the other splits the data has (by meter "
+            "category, SAT status, open vs closed)")
+
+
 def fix_question(state: dict, triage: dict, prior_turns: list[dict] | None) -> bool:
     """Code-side corrections of the resolved question (graph/nodes.py
     understand_node). True if it changed."""
@@ -848,6 +868,13 @@ def fix_question(state: dict, triage: dict, prior_turns: list[dict] | None) -> b
             names = ", ".join("OEM" if lvl == "oem" else lvl.replace("_", " ") for lvl in lost)
             triage["question"] = re.sub(r"[\s?.]*$", "", triage["question"]) + f", broken down {names} wise?"
             _step(state, "breakdown", time.perf_counter(), restored=lost)
+            changed = True
+    if triage["kind"] == "data" and prior_turns and query_encoder.encode(state["question"]).get("detail"):
+        deeper = _detail_drilldown(prior_turns[-1])
+        if deeper and deeper not in triage["question"]:
+            triage["question"] = re.sub(r"[\s?.]*$", "", triage["question"]) + f" -- {deeper}?"
+            triage["followup"] = True
+            _step(state, "detail", time.perf_counter(), added=deeper)
             changed = True
     m = _PROJECT_LEVEL_WISE_RE.search(triage["question"])
     if triage["kind"] == "data" and m:

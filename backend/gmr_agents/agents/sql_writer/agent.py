@@ -22,7 +22,7 @@ from gmr_agents.catalog.catalog import get_catalog
 from gmr_agents.execution.tools import calling, registry
 from shared import config as settings
 from shared import llm_gateway
-from gmr_agents.agents import common as C
+from gmr_agents.agents import common as C                                                                                                                          
 from gmr_agents.agents.sql_writer import planner as PL
 from gmr_agents.agents.sql_writer import cross_domain as XD
 from gmr_agents.supervisor.steps import _tick
@@ -32,7 +32,7 @@ from gmr_agents.supervisor.steps import _tick
 # controller -- decides the next action; never executes
 # --------------------------------------------------------------------------- #
 
-# The router matched the question to a verified example almost word for word: when the planner
+ # The router matched the question to a verified example almost word for word: when the planner
 # gives up on it ('unanswerable') or its SQL is rejected, that example's own SQL -- checked by hand
 # against the dashboard -- runs instead of another free-tier attempt. Seen live 27 Oct: 'Write a CXO
 # weekly summary with three risks and three actions' and 'The project totals add up to ~2.27L but the
@@ -238,6 +238,31 @@ _ERROR_KIND = {"unknown_tool": "not_allowed", "missing_tool": "not_allowed", "re
                "invalid_args": "invalid_args", "parse": "parse"}
 
 
+def _sql_shape(sql: str) -> str:
+    return re.sub(r"\s+", " ", re.sub(r"\blimit\s+\d+\s*$", "", str(sql or "").strip().rstrip(";"), flags=re.I)).lower().strip()
+
+
+def _repeats_previous_turn(state: AgentState, sql: str) -> str | None:
+    """A follow-up asking for more detail or a new grouping must not re-run the previous turn's SQL. 18 Nov:
+    'in detail, as much detail as you can provide' and then 'give me meter wise breakdown' both re-ran the
+    project-wise ROLLUP of the turn before."""
+    from gmr_agents.resolvers import query_encoder
+    prior = state.get("prior_turns") or []
+    prev_sql = ((prior[-1].get("context") or {}).get("sql") if prior else None) or ""
+    if not prev_sql or _sql_shape(prev_sql) != _sql_shape(sql):
+        return None
+    asked = query_encoder.encode(state.get("question") or "")
+    if asked.get("detail"):
+        return ("the user asked for MORE DETAIL but this is the previous answer's SQL unchanged -- keep its measure "
+                "and filters, but break it down one level deeper (project -> zone -> circle -> division) and add "
+                "the other splits the table has (category CONSUMER/DT/FEEDER, SAT status, open vs closed) as "
+                "extra queries")
+    if asked.get("breakdown_by"):
+        return (f"the user asked for a new breakdown ({', '.join(asked['breakdown_by'])}-wise) but this is the "
+                "previous answer's SQL unchanged -- group by what was asked now")
+    return None
+
+
 def validate_node(state: AgentState, config: RunnableConfig) -> dict[str, Any]:
     """Who controls it: application code, in this order --
     1. allowlist: the requested tool must be registered (tools/registry.py)
@@ -292,6 +317,11 @@ def validate_node(state: AgentState, config: RunnableConfig) -> dict[str, Any]:
         mismatch = sql_validator.check_entities(triage["question"], [ctx.plan["sql"], *extra_sql],
                                                 columns=PL._table_columns(ctx.plan["tables"], catalog),
                                                 asked=state.get("question"))
+        repeat = _repeats_previous_turn(state, ctx.plan["sql"])
+        if repeat:
+            problems = [*(mismatch or {}).get("problems", []), repeat]
+            mismatch = {"kind": "entity_mismatch", "problems": problems,
+                        "message": "The SQL does not match the question: " + "; ".join(problems)}
         update["entities_checked"] = True
         before = [e for e in state.get("errors") or [] if e.get("kind") == "entity_mismatch"]
         if mismatch and before and set(mismatch["problems"]) <= set(before[-1].get("problems") or []):

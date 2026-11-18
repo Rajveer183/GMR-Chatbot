@@ -37,7 +37,7 @@ _PLAN_SYSTEM = """You write the read-only SQL SELECT that answers a business que
 - postgres tables: PostgreSQL syntax. athena tables: Trino/Presto syntax.
 - Follow GLOBAL RULES and TOPIC rules exactly: they define how every KPI is computed so numbers match the dashboard. Use exactly the filters the rules give for a KPI -- never add extra boolean/flag filters (e.g. has_sat_number) the rules do not list, and never drop one they list.
 - Apply ONLY the filters the question states (or the previous turn, for a follow-up). Never copy a place, period or category filter from an example. In top-N lists do not add a ROLLUP total row; when you do use ROLLUP, label the GROUPING row 'Total', never 'Unmapped'. 'Which <project/discom/zone/category> has the highest / lowest X' (no N given) returns EVERY one of them ranked by X (no LIMIT 1), so the answer can say who is next and by how much.
-- Give every selected expression a snake_case alias. No SELECT *. Lists: ORDER BY + LIMIT (200 unless asked).
+- Give every selected expression a snake_case alias. No SELECT *. Lists: ORDER BY + LIMIT (200 unless asked; meter-wise / one row per meter = LIMIT 50). A list of meters / tickets / consumers / DTs also returns the overall count and summed measure for the same scope as an extra query, so the answer can state the total.
 - 'why', 'should we', 'is it rising', 'what changed', summaries and what-ifs: return the numbers that answer it (comparisons, shares, trends) -- the answer writer reasons from them. 'Why did X rise / fall / change' (no breakdown named), when X's table has a date / period column: return X for the period asked about AND the one before it (the latest complete period and the previous one when none is named), split by the most useful place / category (zone or discom; OEM / agency when the question is about them) -- one row per (period, group), the period column first; no ROLLUP total row. When X comes from a snapshot with no history (TOPIC rules say so, e.g. SAT, invoice): do not look for dates in another engine -- return X's current breakdown; the answer says the month-by-month history is not stored.
 - When the answer needs data from another engine or a differently-shaped result (e.g. a batch-date table plus a meter-count table, a trend plus a total), put up to 3 more queries in extra_queries (they run in parallel). Keep them small.
 - Summaries, status briefs, CXO notes, 'risks and actions', drafts: never unanswerable -- query the headline KPIs (dashboard stats, SAT / non-SAT, stock, defects, collections) and the answer writer derives risks and actions from those numbers.
@@ -53,6 +53,21 @@ Reply with JSON only:
              "table": true if the rows should be shown as a table},
  "title": "short title for the result",
  "reason": "only when unanswerable"}"""
+
+
+_LEVEL_COL_RE = {"meter": r"meter_serial\w*|meter_no", "dt": r"dtr\w*|dt_code", "consumer": r"consumer\w*",
+                 "category": r"category", "sub_division": r"sub_division"}
+
+
+def _new_grouping(question: str, prev_sql: str) -> str:
+    """The breakdown the question asks for that the previous SQL does not group by ('' if none)."""
+    levels = query_encoder.encode(question).get("breakdown_by") or []
+    low = prev_sql.lower()
+    grouped = " ".join(re.findall(r"\b(?:group|partition)\s+by\b([^;]*?)(?:\border\b|\blimit\b|\bhaving\b|$)", low, re.S))
+    missing = [lvl for lvl in levels
+               if lvl not in ("month", "week", "day")
+               and not re.search(rf"\b(?:{_LEVEL_COL_RE.get(lvl, re.escape(lvl))})\b", grouped)]
+    return ", ".join(f"{lvl.replace('_', '-')}-wise" for lvl in missing)
 
 
 def _plan_prompt(triage: dict, catalog, previous: dict | None) -> tuple[str, list[str]]:
@@ -139,6 +154,11 @@ def _plan_prompt(triage: dict, catalog, previous: dict | None) -> tuple[str, lis
     # August 2026' copied a logged one-query SQL and skipped the example's work-completed extra query.
     past = ([] if triage.get("source") == "router" else
             knowledge.past_questions_for(question, config.PAST_QUESTIONS_TOP_K, [t.table_name for t in wanted]))
+    if past and previous and (previous.get("context") or {}).get("sql"):
+        # The turn just answered is logged too and comes back as a 'similar past question' -- offering it twice
+        # pulled 'meter wise breakdown' back to the previous project-wise SQL (18 Nov).
+        prev_shape = re.sub(r"\s+", " ", str(previous["context"]["sql"])).strip().lower()
+        past = [p for p in past if re.sub(r"\s+", " ", str(p.get("sql") or "")).strip().lower() != prev_shape]
     if past:
         # Whole SQL, never cut: a 900-char cut sent broken SQL (29 of 560 logged); skipping long
         # ones instead lost a past answer to the very same question (A/B, 2026-10-04). The
@@ -154,6 +174,11 @@ def _plan_prompt(triage: dict, catalog, previous: dict | None) -> tuple[str, lis
         # otherwise the query writer decides whether this question builds on it (deep-dive chats).
         label = ("PREVIOUS ANSWER (this question is a follow-up -- adapt its SQL):" if triage.get("followup") else
                  "PREVIOUS TURN (continue its filters / grouping only if this question builds on it):")
+        regroup = _new_grouping(question, str(previous["context"]["sql"]))
+        if regroup:
+            # 18 Nov: 'meter wise breakdown' / 'in detail' copied the previous project-wise ROLLUP unchanged.
+            label = (f"PREVIOUS ANSWER (keep its measure and filters, but a NEW grouping is asked: {regroup} -- "
+                     "do not reuse its GROUP BY):")
         sections.append(S("previous_turn", 3, [f"{label}\n" + injection.wrap(
                                                f"Q: {previous.get('resolved_question') or previous.get('question')}\n"
                                                # whole SQL: a cut at 1,200 chars broke 5% of logged

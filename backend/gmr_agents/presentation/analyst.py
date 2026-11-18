@@ -272,6 +272,17 @@ def _result_facts(df: pd.DataFrame | None, max_cols: int = 4) -> str:
                      + ", ".join(f"{c} {fmt(float(tot[c]))}" for c in nums))
         lines.append(f"- BREAKDOWN ITEMS ({len(rows)}; each is one part, never the overall): "
                      + ", ".join(str(v) for v in rows[labels[0]].head(15)))
+        # Shares of the Total, computed here so a detailed answer can say 'Kashi = 45.6%' / 'top 3 = 71%'
+        # without the model doing arithmetic (18 Nov: 'in detail' answers only repeated the totals).
+        share_col = next((c for c in nums if not re.search(r"pct|percent|rate|ratio|share|avg|average|mean|per_|_per|days",
+                                                            str(c), re.I)), None)
+        if share_col and 2 <= len(rows) <= 40 and float(tot[share_col] or 0) > 0:
+            vals = pd.to_numeric(rows[share_col], errors="coerce").fillna(0)
+            order = vals.sort_values(ascending=False)
+            top = [f"{rows.loc[i, labels[0]]} {100 * v / float(tot[share_col]):.1f}%" for i, v in order.head(5).items()]
+            lines.append(f"- SHARE OF TOTAL by {share_col}: " + ", ".join(top)
+                         + (f"; top 3 together {100 * order.head(3).sum() / float(tot[share_col]):.1f}%"
+                            if len(rows) > 3 else ""))
     if not is_total.any() and not period_col and len(rows) >= 2 and len(rows) <= 60:
         # No Total row: the overall figure is the sum of the items (counts / money only, never rates). 11 Nov: a
         # per-project revenue-at-risk table had no Total row and the answer quoted Agra's row (Rs 111.9 cr) as the

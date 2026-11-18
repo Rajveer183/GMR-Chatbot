@@ -36,6 +36,21 @@ _LEVELS = ["project", "discom", "zone", "circle", "division", "sub_division", "s
 # last month' was not tagged as an OEM breakdown and came back as one total.
 _LEVEL_ALIASES = {"oem": ["make", "vendor", "brand", "manufacturer", "company"], "project": ["cluster"],
                   "sub_division": ["sub division", "sub-division", "subdivision"]}
+# Entity grains: one row per meter / DT / consumer. 18 Nov: 'give me meter wise breakdown' after a project-wise
+# answer came back GROUP BY project again -- no level said 'meter', so nothing asked the writer for it.
+# 'by meter type' / 'consumer category' are attributes, not the entity: the lookahead keeps them out.
+_ENTITY_LEVELS = {"meter": ["meter", "meter serial", "serial"], "dt": ["dt", "dtr", "transformer"],
+                  "consumer": ["consumer", "account"]}
+# 'by meter' / 'per DT' only as the grouping itself -- 'OEM wise meter installed', 'top zones by meter installations',
+# 'by meter type' name a measure or an attribute (the log replay found 44 such false alarms).
+_ENTITY_END = (r"(?=\s*(?:$|[,.?;:)]|(?:in|for|of|and|with|from|across|over|during|last|this|on|at|level|basis|"
+               r"breakdown|wise|split|ranked|sorted|order|top|kashi|agra|triveni)\b))")
+# GMR meaning: 'consumer, DT and feeder' (two or more named together) or 'type / category wise' = the meter
+# CATEGORY (one row per Consumer / DT / Feeder meter), not one row per consumer or per DT.
+_CATEGORY_WORDS = {"consumer": r"\bconsumers?\b", "dt": r"\b(?:dts?|dtrs?|transformers?)\b", "feeder": r"\bfeeders?\b"}
+_DETAIL_RE = re.compile(r"\b(in (?:more |full |complete |great |much )?details?|detailed|more details?|elaborate|"
+                        r"drill[- ]?down|deeper|deep[- ]?dive|in[- ]depth|insights?|insightful|vistar|vistaar)\b",
+                        re.IGNORECASE)
 
 
 def encode(question: str) -> dict:
@@ -110,8 +125,28 @@ def encode(question: str) -> dict:
                  for w in [lvl, *_LEVEL_ALIASES.get(lvl, [])])]
     if "sub_division" in by and "division" in by and not re.search(r"(?<!sub )(?<!sub-)\bdivision[- ]?wise\b|\bby\s+division", low):
         by.remove("division")  # 'sub division wise' contains 'division wise'
+    # 'all projects' / 'all clusters' = every project shown (one row each + Total), never one project.
+    if "project" not in by and re.search(r"\ball (?:the )?(?:three |3 )?(?:projects|clusters)\b", low):
+        by.insert(0, "project")
+    # 'average outage duration per consumer' / 'SAIDI per consumer' is a rate, not one row per consumer
+    per = "" if re.search(r"\b(average|avg|mean|saidi|saifi|caidi|caifi|rate|ratio)\b", low) else "|per"
+    entity = [lvl for lvl, words in _ENTITY_LEVELS.items()
+              if any(re.search(rf"\b(by|each|every{per})\s+{re.escape(w)}s?\b{_ENTITY_END}"
+                               rf"|\b{re.escape(w)}[- ]?(wise|level)\b", low) for w in words)]
+    named_cats = sum(bool(re.search(p, low)) for p in _CATEGORY_WORDS.values())
+    if named_cats >= 2 or re.search(r"\b(category|type)[- ]?wise\b|\bby (meter )?(category|type)\b", low):
+        # the meter category, not the entities: consumer / dt (and feeder when listed with them) are categories
+        entity = [e for e in entity if e not in ("consumer", "dt")]
+        if named_cats >= 2:
+            by = [b for b in by if b != "feeder"]
+            if "category" not in by:
+                by.append("category")
+    by += [e for e in entity if e not in by]
     if by:
         out["breakdown_by"] = by
+    elif _DETAIL_RE.search(low):
+        # 'in detail / as much detail as you can' with no level named: drill one level deeper (router/triage.py)
+        out["detail"] = True
     return out
 
 

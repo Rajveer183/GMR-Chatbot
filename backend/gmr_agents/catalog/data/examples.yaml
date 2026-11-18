@@ -518,6 +518,22 @@ examples:
       WHERE LOWER(c.project) = 'kashi'
       ORDER BY c.total_complaints DESC
       LIMIT 50
+    extra:
+      - purpose: "How many complaint meters and complaints in all for the same scope (the list shows only the top 50)"
+        sql: |
+          WITH areas AS (
+            SELECT DISTINCT COALESCE(LOWER(discom), '') AS discom, COALESCE(LOWER(zone), '') AS zone,
+                   COALESCE(LOWER(circle), '') AS circle, COALESCE(LOWER(division), '') AS division,
+                   COALESCE(LOWER(sub_division), '') AS sub_division
+            FROM public.gold_om_closed_tickets_day_agg
+            WHERE closed_date BETWEEN CURRENT_DATE - 31 AND CURRENT_DATE - 1 AND LOWER(project) = 'kashi')
+          SELECT COUNT(*) AS complaint_meters, SUM(c.total_complaints) AS total_complaints,
+                 SUM(c.open_complaints) AS open_complaints, SUM(c.closed_complaints) AS closed_complaints
+          FROM public.gold_om_meter_complaints_agg c
+          JOIN areas a ON a.discom = COALESCE(LOWER(c.discom), '') AND a.zone = COALESCE(LOWER(c.zone), '')
+                      AND a.circle = COALESCE(LOWER(c.circle), '') AND a.division = COALESCE(LOWER(c.division), '')
+                      AND a.sub_division = COALESCE(LOWER(c.sub_division), '')
+          WHERE LOWER(c.project) = 'kashi'
 
   - q: ["Never / non-comm status", "non comm tickets summary", "never comm and not in communication tickets", "how many non-comm tickets are unassigned or escalated"]
     note: "Always complaint_type IN ('NEVER COMM', 'METER NOT IN COMMUNICATION') -- the table holds every open ticket. The card's ten figures; a filter (project / zone / category / status / remark) goes in the WHERE."
@@ -5946,3 +5962,13 @@ examples:
         AND month < date_trunc('month', CURRENT_DATE)::date
       GROUP BY month, ROLLUP (project)
       ORDER BY month, GROUPING(project) DESC, project
+
+  - q: ["complaints of Kashi", "complaints of all kashi cluster", "total complaints for all clusters", "total complaints project-wise", "complaints in agra zone-wise", "how many complaints in each project"]
+    note: "'Complaints of <project>' = the totals (total / open / closed, complaint meters), never the Top 50 meter list. 'Cluster' = project; all clusters = all three projects with a Total. One project named -> filter it and break it down zone-wise. total_complaints is each meter's all-time count."
+    sql: |
+      SELECT CASE WHEN GROUPING(project) = 1 THEN 'Total' ELSE UPPER(project) END AS project,
+             COUNT(*) AS complaint_meters, SUM(total_complaints) AS total_complaints,
+             SUM(open_complaints) AS open_complaints, SUM(closed_complaints) AS closed_complaints
+      FROM public.gold_om_meter_complaints_agg
+      GROUP BY ROLLUP (project)
+      ORDER BY GROUPING(project) DESC, total_complaints DESC
