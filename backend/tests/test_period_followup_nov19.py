@@ -3,8 +3,8 @@
 
 from gmr_agents.agents.router.triage import carry_partial_date
 
-DAY_TURN = [{"resolved_question": "How many O&M tickets were closed on 18 November 2026?"}]
-MONTH_TURN = [{"resolved_question": "How many meters were installed in March 2026?"}]
+DAY_TURN = [{"question": "closed on 18 november", "resolved_question": "How many O&M tickets were closed on 18 November 2026?"}]
+MONTH_TURN = [{"question": "installs in march 2026", "resolved_question": "How many meters were installed in March 2026?"}]
 
 
 def _run(asked, resolved, prior):
@@ -43,3 +43,24 @@ def test_own_period_or_no_dated_turn_unchanged():
 def test_model_already_kept_the_date():
     changed, t = _run("tell about 2025", "How many O&M tickets were closed on 18 November 2025?", DAY_TURN)
     assert not changed and t["question"].endswith("18 November 2025?")
+
+
+# 19 Nov UAT: 'installed yesterday' -> 'And the day before?' -> 'Tell me about 2025' became '17 Nov 2025'.
+# The day came from a relative word, so a bare year is the whole year.
+RELATIVE_TURNS = [{"question": "How many meters were installed yesterday?",
+                   "resolved_question": "How many meters were installed yesterday?"},
+                  {"question": "And the day before?", "resolved_question": "How many meters were installed on 17 Nov 2026?"}]
+
+
+def test_relative_day_then_bare_year_is_whole_year():
+    changed, t = _run("Tell me about 2025", "How many meters were installed on 17 Nov 2025?", RELATIVE_TURNS)
+    assert changed and t["question"] == "How many meters were installed in 2025?"
+    changed, t = _run("Tell me about 2025", "How many meters were installed in 2025?", RELATIVE_TURNS)
+    assert not changed and t["question"] == "How many meters were installed in 2025?"
+
+
+def test_typed_date_still_carried():
+    typed = [{"question": "how many tickets are closed on 18 november",
+              "resolved_question": "How many O&M tickets were closed on 18 November 2026?"}]
+    changed, t = _run("tell about 2025", "How many O&M tickets were closed in 2025?", typed)
+    assert changed and t["question"] == "How many O&M tickets were closed on 18 November 2025?"

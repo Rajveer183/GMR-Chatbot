@@ -35,7 +35,7 @@ Dates: compare every date with Today, never with the verb tense -- a date before
 The user's screen: the chatbot cannot see or change the dashboard page the user has open. 'What filters are applied on my page / what am I looking at' -> kind chitchat, reply that you cannot see their page and offer to fetch the data if they name the project, period or other filters (never mention tables).
 Decide everything about the user's message and reply with JSON only:
 {"kind": "data" | "explain" | "chitchat" | "out_of_scope",
- "question": "one standalone English question: translate Hindi/Hinglish/any Indian language and fix spelling. Translate literally, in plain fixed wording, so the same ask in any language becomes the same English question: periods as 'last N days/weeks/months' / 'yesterday' / 'this month' with N in digits (never 'past six months'), breakdowns as '<x>-wise' (month-wise, zone-wise, OEM-wise) -- never drop a breakdown the user asked for. A garbled or cut-off KPI name is completed to the reading that keeps the characters the user typed (e.g. '&M productivity' = O&M productivity, not MI) -- never swap it for a different KPI -- and that reading goes in assumption so the user sees it. Keep the form of the ask: 'tickets on meter X' / 'complaints of consumer X' / 'details of ticket X' ask to SEE the records ('Show the tickets on meter X'), never rewrite them as 'how many'. ONLY if the message is an incomplete follow-up ('and in agra?', 'same for SAT', 'break it down by zone', 'which OEM?', 'only in kashi', 'and three months ago?', 'draft a message about it') fill in what it refers to from the conversation, keeping ALL its filters and entities. A follow-up continues the LATEST TURN: keep its topic/measure (e.g. 'what about agra' after a SAT question = Agra's SAT figure, not an earlier turn's topic; 'Which OEM?' after 'How many burnt meters?' = 'Burnt meters OEM-wise', never a defect-rate question) and its place/OEM/period unless the message replaces them (a follow-up naming only PART of a date -- just a year, or just a month -- replaces only that part: 'closed on 18 November' then 'tell about 2025' = 'closed on 18 November 2025'; 'installs in March 2026' then 'and 2025?' = 'installs in March 2025'; only 'whole / entire / full year 2025' or '2025 overall' means the whole year); take something from an earlier turn only when the message names it. 'that/it/this/there' points at what the PREVIOUS ANSWER singled out (e.g. the project it named as worst) -- carry that entity as a filter: 'Which project is worst?' -> A: 'Triveni ...' then 'Break that down by age' = 'Break down Triveni's eligible pending SAT meters by age'. A message addressed to a project's head ('draft a message to the Agra project head about it') is about THAT project's own figures for the topic: 'Draft a message to the Agra project head about Agra's eligible pending SAT meters by age'. A message that is complete on its own is a NEW question: never add places, periods or filters the user did not say (a past-tense verb -- 'install hue', 'were installed', 'lage' -- is NOT 'yesterday'; no period words = no period, i.e. all time) (a question naming a technician / person plus a measure is complete -- never carry the previous turn's place onto it). A request about the reply language ('Hindi mein batao', 'explain in English') is not part of the question -- leave it out",
+ "question": "one standalone English question: translate Hindi/Hinglish/any Indian language and fix spelling. Translate literally, in plain fixed wording, so the same ask in any language becomes the same English question: periods as 'last N days/weeks/months' / 'yesterday' / 'this month' with N in digits (never 'past six months'), breakdowns as '<x>-wise' (month-wise, zone-wise, OEM-wise) -- never drop a breakdown the user asked for. A garbled or cut-off KPI name is completed to the reading that keeps the characters the user typed (e.g. '&M productivity' = O&M productivity, not MI) -- never swap it for a different KPI -- and that reading goes in assumption so the user sees it. Keep the form of the ask: 'tickets on meter X' / 'complaints of consumer X' / 'details of ticket X' ask to SEE the records ('Show the tickets on meter X'), never rewrite them as 'how many'. ONLY if the message is an incomplete follow-up ('and in agra?', 'same for SAT', 'break it down by zone', 'which OEM?', 'only in kashi', 'and three months ago?', 'draft a message about it') fill in what it refers to from the conversation, keeping ALL its filters and entities. A follow-up continues the LATEST TURN: keep its topic/measure (e.g. 'what about agra' after a SAT question = Agra's SAT figure, not an earlier turn's topic; 'Which OEM?' after 'How many burnt meters?' = 'Burnt meters OEM-wise', never a defect-rate question) and its place/OEM/period unless the message replaces them (a follow-up naming only PART of a date the USER typed -- just a year, or just a month -- replaces only that part: 'closed on 18 November' then 'tell about 2025' = 'closed on 18 November 2025'; 'installs in March 2026' then 'and 2025?' = 'installs in March 2025'; but when the earlier day came from 'yesterday' / 'today' / 'the day before' / 'last N days', a bare year is the whole year: 'installed yesterday' then 'tell me about 2025' = 'installed in 2025'; 'whole / entire / full year 2025' or '2025 overall' always means the whole year); take something from an earlier turn only when the message names it. 'that/it/this/there' points at what the PREVIOUS ANSWER singled out (e.g. the project it named as worst) -- carry that entity as a filter: 'Which project is worst?' -> A: 'Triveni ...' then 'Break that down by age' = 'Break down Triveni's eligible pending SAT meters by age'. A message addressed to a project's head ('draft a message to the Agra project head about it') is about THAT project's own figures for the topic: 'Draft a message to the Agra project head about Agra's eligible pending SAT meters by age'. A message that is complete on its own is a NEW question: never add places, periods or filters the user did not say (a past-tense verb -- 'install hue', 'were installed', 'lage' -- is NOT 'yesterday'; no period words = no period, i.e. all time) (a question naming a technician / person plus a measure is complete -- never carry the previous turn's place onto it). A request about the reply language ('Hindi mein batao', 'explain in English') is not part of the question -- leave it out",
  "followup": true only for such an incomplete follow-up,
  "parts": ["only when the message asks SEVERAL things ('X and Y', 'also tell me', a list of asks): each ask as its own standalone English question, in order"] or [],
  "examples": [0-3 ids from EXAMPLES whose question MEANS the same as (an ask in) this message, even if worded very differently, best first],
@@ -1022,6 +1022,27 @@ _WHOLE_YEAR_RE = re.compile(r"\b(?:whole|entire|full|overall|complete|total|all 
                             r"month[- ]?wise|compare\w*|vs\.?|versus|trend\w*)\b", re.I)
 
 
+def _user_named_month(month: str, prior_turns: list[dict]) -> bool:
+    """The carried date's month was typed by the user in a recent turn ('closed on 18 november'), not resolved
+    from 'yesterday' / 'the day before'. 19 Nov UAT: 'installed yesterday' -> 'and the day before?' -> 'Tell me
+    about 2025' became '17 Nov 2025'; it means the whole of 2025."""
+    key = month[:3].lower()
+    return any(key == w[:3].lower() for t in prior_turns[-3:]
+               for w in re.findall(_MONTHS, str(t.get("question") or ""), re.I))
+
+
+def _whole_year(state: dict, triage: dict, year: str) -> bool:
+    """The model carried a relative day into the bare year ('on 17 Nov 2025'): make it the whole year."""
+    q = triage["question"]
+    hit = _LATEST_DATE_RE.search(q)
+    if not hit or hit.group(6) != year:
+        return False
+    fixed = re.sub(rf"\b(?:(?:on|for|in|during)\s+)?(?:the\s+)?{re.escape(hit.group(0))}", f"in {year}", q, count=1)
+    _step(state, "period_carry", time.perf_counter(), was=q[:140], now=fixed[:140])
+    triage.update(question=fixed, followup=True)
+    return True
+
+
 def carry_partial_date(state: dict, triage: dict, prior_turns: list[dict] | None) -> bool:
     """'tell about 2025' after 'closed on 18 November 2026' = 'closed on 18 November 2025'. True if changed."""
     if triage["kind"] != "data" or not prior_turns:
@@ -1035,6 +1056,8 @@ def carry_partial_date(state: dict, triage: dict, prior_turns: list[dict] | None
     m = _LATEST_DATE_RE.search(str(latest.get("resolved_question") or latest.get("question") or ""))
     if not m or m.group(6) == year:
         return False
+    if not _user_named_month(m.group(2) or m.group(3) or m.group(5), prior_turns):
+        return _whole_year(state, triage, year)
     if m.group(5):
         new, prep = f"{m.group(5)} {year}", "in"
     elif m.group(1):
