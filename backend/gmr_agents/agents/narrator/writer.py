@@ -17,7 +17,7 @@ from gmr_agents.checks import extreme_check, freshness, grounding, number_check,
 import logging
 from gmr_agents.agents.common import _ALL_TIME_LEAD_RE, _ANSWER_ROWS, _PAST_DATE_RE, _PERIOD_RE, _emit, _step, _today
 from gmr_agents.agents.followups import _followup_options, _options_text, _pick_followups
-from gmr_agents.presentation.analyst import _date_window, _month_to_date, _partial_periods, _stated_figures, _result_facts, _result_preview, _short_weeks
+from gmr_agents.presentation.analyst import _clear_date, _date_window, _month_to_date, _partial_periods, _stated_figures, _result_facts, _result_preview, _short_weeks
 from gmr_agents.presentation.blocks import _tidy_ts
 from gmr_agents.presentation import drivers as _drivers, investigate as _investigate, stats as _stats
 
@@ -167,6 +167,11 @@ def _write_answer(state: dict, triage: dict, plan: dict, result: dict, extras: l
     window = _date_window(plan, result.get("result"))
     if window:
         parts.append(window)
+    cleared = _clear_date(f"{state['question']} || {triage['question']}",
+                          [result.get("result")] + [ex.get("result") for ex in extras or []])
+    if cleared:
+        parts.append(cleared)
+        why = f"{why}\n{cleared}" if why else cleared  # its date figures are code-computed: allowed by number_check
     short = _short_weeks(result.get("result"))[1]
     if short:
         parts.append("SHORT WEEKS (checked by code): " + ", ".join(f"{k} has only {v} day(s)" for k, v in short.items())
@@ -378,6 +383,13 @@ def _write_answer(state: dict, triage: dict, plan: dict, result: dict, extras: l
         summary, insights = rebuilt, [i for i in insights if not number_check.unsupported(i, own)][:1]
         if state.get("emit") is not None:
             _emit(state, "summary_replace", text=summary)
+    # Bare result counts ('KASHI 15087') grouped like the tables (15,087) -- code only, exact result values only.
+    grouped = number_check.group_digits(summary, frames)
+    if grouped != summary:
+        summary = grouped
+        if state.get("emit") is not None:
+            _emit(state, "summary_replace", text=summary)
+    insights = [number_check.group_digits(i, frames) for i in insights]
     # Sources of a data answer: built by code from what actually ran (never by the LLM).
     # The refresh time is the WFM gold snapshot's -- it says nothing about MDM tables.
     refreshed = answer_cache.current_version().split("|")[0] if state.get("agent") != "mdm" else ""

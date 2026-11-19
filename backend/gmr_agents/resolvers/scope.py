@@ -30,6 +30,8 @@ _RESET_RE = re.compile(
     # a Kashi turn was resolved as '... all clusters in the Kashi project' (Kashi carried, 'all' ignored).
     r"(project|cluster|discom)[- ]?wise|by (project|cluster|discom)s?|(each|every) (project|cluster|discom)|"
     r"per (project|cluster|discom)|sab|poore|"
+    # 19 Nov: 'Go back to project level, but for last month' after a Kashi zone / circle drill-down kept Kashi.
+    r"(project|cluster|discom)[- ]level|back to (the )?(all )?(projects?|clusters?|discoms?)\b|"
     # An explicit fresh start drops the earlier turns' places (12 Nov: 'New topic: what is the total stock available
     # in all warehouses?' after Kashi turns was answered for Kashi's warehouses only).
     r"new (topic|question|query)|different (topic|question)|unrelated|change of topic|start over|start fresh|"

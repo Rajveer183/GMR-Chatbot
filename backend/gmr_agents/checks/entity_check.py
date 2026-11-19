@@ -1657,6 +1657,7 @@ def check(question: str, sql_texts: list[str], columns: set[str] | None = None, 
     problems += _null_band_sum_problems(low)
     problems += _athena_slip_problems(sql_texts)
     problems += _rollup_coalesce_problems(sql_texts)
+    problems += _dead_filter_problems(sql_texts)
     problems += _defect_rate_base_problems(f"{question} {asked_words or ''}", low)
     problems += _bare_count_problems(f"{asked_words or ''} {question}", sql)
     problems += _week_window_problems(f"{asked_words or ''} {question}", low)
@@ -1895,6 +1896,46 @@ def _rollup_coalesce_problems(sql_texts: list[str]) -> list[str]:
 # today's week, so 'last week' was one day (358 closures) against a full week (1,497): a fake 76% drop.
 _LAST_WEEK_RE = re.compile(r"\blast week\b|\bprevious week\b|\bweek before\b|\bpichl[ea] (?:hafte|hafta)\b|"
                            r"\bweek[- ]on[- ]week\b|\bwow\b", re.I)
+
+
+_FILTER_RANGE_RE = re.compile(r"filter\s*\(\s*where\s+(?:\w+\.)?(\w+)\s+between\s+(.+?)\s+and\s+(.+?)\s*\)")
+_BOUND_RE = re.compile(r"^\(?\s*(?:current_date(?:\s*-\s*(\d+))?|(?:date\s*)?'(\d{4}-\d{2}-\d{2})'(?:::date)?)\s*\)?$")
+
+
+def _bound_day(text: str) -> int | None:
+    import datetime as _dt
+    m = _BOUND_RE.match(text.strip())
+    if not m:
+        return None
+    if m.group(2):
+        return _dt.date.fromisoformat(m.group(2)).toordinal()
+    return _dt.date.today().toordinal() - int(m.group(1) or 0)
+
+
+def _dead_filter_problems(sql_texts: list[str]) -> list[str]:
+    """Two periods as FILTER columns while the WHERE keeps only one of them: the other column is always empty.
+    19 Nov: 'Compare with the week before' ran FILTER (last 7 days) and FILTER (week before) under WHERE <week before>,
+    and the answer said the last 7 days were 'not available'."""
+    for s in sql_texts:
+        low = re.sub(r"\s+", " ", (s or "").lower())
+        filters = _FILTER_RANGE_RE.findall(low)
+        if len(filters) < 2:
+            continue
+        outside = _FILTER_RANGE_RE.sub(" ", low)
+        for col in {f[0] for f in filters}:
+            m = re.search(rf"\bwhere\b[^()]*?\b(?:\w+\.)?{col}\s+between\s+(.+?)\s+and\s+(.+?)(?=\s+(?:and|or|group|order|limit)\b|\)|$)",
+                          outside)
+            if not m:
+                continue
+            w = (_bound_day(m.group(1)), _bound_day(m.group(2)))
+            if None in w:
+                continue
+            for c, lo, hi in filters:
+                f = (_bound_day(lo), _bound_day(hi))
+                if c == col and None not in f and (f[1] < w[0] or f[0] > w[1]):
+                    return [f"the WHERE keeps only {col} {m.group(1)} .. {m.group(2)}, so the FILTER column for "
+                            f"{lo} .. {hi} is always empty: widen the WHERE to cover every period the FILTERs compare"]
+    return []
 
 
 def _week_window_problems(question: str, low: str) -> list[str]:

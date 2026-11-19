@@ -115,6 +115,31 @@ _THRESHOLD_RE = re.compile(r"(?:more|less|fewer|greater|higher|lower) than\s*$|\
                            r"|[<>=]\s*$", re.I)
 
 
+_CLEAR_ASK_RE = re.compile(r"\bwhen\b[^?]*\b(?:clear\w*|finish\w*|complet\w*|done|run(?:s)? out|exhaust\w*)|"
+                           r"\bby when\b|\bwhat date\b|\bwhich date\b", re.I)
+_DAYS_COL_RE = re.compile(r"^(?:\w+_)?days(?:_(?:required|needed|left|remaining|to_\w+))?$", re.I)
+
+
+def _clear_date(question: str, frames: list, today: pd.Timestamp | None = None) -> str:
+    """'When will it be cleared?' with a one-row day count from the SQL: the date by code. 19 Nov: 37,917 pending at
+    3,000 a day = 13 days was written 'by November 2' (2 December); the model adds days to today by hand."""
+    if not _CLEAR_ASK_RE.search(question):
+        return ""
+    today = today or pd.Timestamp(datetime.now(_IST).date())
+    for f in frames:
+        if not isinstance(f, pd.DataFrame) or len(f) != 1:
+            continue
+        for c in f.columns:
+            if not _DAYS_COL_RE.match(str(c)) or str(c).lower().endswith(("_ago", "_since", "_old")):
+                continue
+            v = pd.to_numeric(pd.Series([f.iloc[0][c]]), errors="coerce").iloc[0]
+            if pd.notna(v) and 0 < float(v) <= 3650:
+                n = int(-(-float(v) // 1))
+                return (f"CLEAR DATE (computed by code): {n} days from today ({today:%d %b %Y}) = "
+                        f"{today + pd.Timedelta(days=n):%d %b %Y}. Quote this date; never work out a date yourself.")
+    return ""
+
+
 def _stated_figures(question: str, frames: list) -> str:
     """A large figure the user states as a fact ('Kashi has already installed 5 million meters, so how many are
     left?') that no value in the results comes near: the answer must correct it, not build on it. 12 Nov: the
@@ -222,7 +247,9 @@ def _date_window(plan: dict, df: pd.DataFrame | None) -> str:
             return ""
         hi = f"GREATEST({', '.join(highs)})"
         if any(t.name.lower().endswith("_month_agg") for t in root.find_all(exp.Table)):
-            hi = f"(DATE_TRUNC('month', {hi}) + INTERVAL '1 month - 1 day')::date"  # a month row covers its month
+            # A month row covers its month -- up to today for the current one. 19 Nov: 'Installations by project this
+            # month' was told '01 Nov .. 30 Nov 2026' and the answer said '01-30 Nov' on the 19th.
+            hi = f"LEAST((DATE_TRUNC('month', {hi}) + INTERVAL '1 month - 1 day')::date, CURRENT_DATE)"
         row = executor._run_postgres(f"SELECT LEAST({', '.join(lows)}) AS lo, {hi} AS hi").iloc[0]
         window = f"{pd.Timestamp(row['lo']):%d %b %Y} .. {pd.Timestamp(row['hi']):%d %b %Y}"
     except Exception:  # a hint only -- never fail the answer over it

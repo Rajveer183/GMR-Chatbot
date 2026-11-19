@@ -272,3 +272,35 @@ def repair(text: str, allowed: set[float], frames: list[pd.DataFrame]) -> tuple[
 
 _STUB = re.compile(r"^(?:(?:of|across|among|in|for|from|with|between|out of)\s+(?:these|them|which|those|this|the)"
                    r"\b[^.!?\d]{0,30}|[^.!?\d\s]+(?:\s+[^.!?\d\s]+){0,2})[.!?]?$", re.I)
+
+
+# A whole number written with no thousands separator ('KASHI 15087', '1334 meters') that IS a value of the result:
+# grouped like the tables show it (15,087). 19 Nov: gpt-oss-20b answers printed bare counts beside comma tables.
+# Only exact result values, never years, never identifier columns (consumer numbers, codes, serials).
+_BARE_INT = re.compile(r"(?<![\w.,/:#-])(\d{4,})(?![\w/:]|[,.-]\d)")
+_ID_COL = re.compile(r"(?:^|_)(?:id|no|num|number|code|serial|account|acct|phone|mobile|pin|pincode|year|yr|batch)(?:$|_)",
+                     re.I)
+
+
+def group_digits(text: str, frames: list) -> str:
+    if not text or not _BARE_INT.search(text):
+        return text
+    values: set[int] = set()
+    for df in frames:
+        if not isinstance(df, pd.DataFrame) or df.empty:
+            continue
+        for c in df.columns:
+            if _ID_COL.search(str(c)) or not pd.api.types.is_numeric_dtype(df[c]):
+                continue
+            for v in pd.to_numeric(df[c].head(500), errors="coerce").dropna():
+                if math.isfinite(float(v)) and float(v).is_integer() and abs(v) >= 1000:
+                    values.add(int(abs(v)))
+    if not values:
+        return text
+
+    def fix(m: re.Match) -> str:
+        n = int(m.group(1))
+        if 1900 <= n <= 2100 or n not in values:
+            return m.group(0)
+        return f"{n:,}"
+    return _BARE_INT.sub(fix, text)

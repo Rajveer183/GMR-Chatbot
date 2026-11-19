@@ -752,7 +752,7 @@ def fix_scope(state: dict, triage: dict, prior_turns: list[dict] | None) -> bool
         mine = place_scope.found(triage["question"], names)
         if len(mine) > 1 and set(mine) <= set(place_scope.found(recent, names)):
             return False
-    latest = prior_turns[-1]
+    latest = latest_data_turn(prior_turns)
     latest_domain = (latest.get("context") or {}).get("domain")
     hierarchy.refresh_in_background()
     hierarchy.wait_first_load()
@@ -773,6 +773,16 @@ _PLURAL_REF_RE = re.compile(r"\b(?:both|their|them|they|these|those|each of them
                             r"unka|unke|inka|inke)\b|दोनों|उनके|इनके", re.I)
 
 
+def latest_data_turn(prior_turns: list[dict]) -> dict:
+    """The latest turn that answered from the data. An out-of-scope / chitchat reply stores no domain, and it is
+    not what a follow-up continues: 19 Nov, 'What's the weather in Varanasi today?' (refused) then 'Ok, back to SAT
+    - show it by zone' carried Varanasi -> Kashi onto a Triveni SAT conversation."""
+    for turn in reversed(prior_turns[-4:]):
+        if (turn.get("context") or {}).get("domain"):
+            return turn
+    return prior_turns[-1]
+
+
 _FRAME_WORDS = set("""
 provide give show tell me us a an the of for and or vs versus v between among across all both each every compare
 comparison comparing compared breakdown break down split it its this that these those same now also please again then
@@ -785,9 +795,15 @@ has have had many much get got there their there's can could would should will b
 english hindi hinglish language mein me main explain samjhao
 contributed contribute contributes contributing contribution most least biggest largest smallest drove drives
 driving caused causing responsible behind mainly
+day days improved improve improves improving improvement better worse worsened worsening declined decline declining
+dropped drop drops dropping fell rose grew growth increased increase decreased decrease changed getting still
+happening last previous earlier
 """.split())
 # ^ 'Which feeder contributed most?' after 'Why did installations drop last week?' (19 Nov) counted 'contributed'
 # / 'most' as its own measure, so nothing was carried and it was answered as MDM feeder energy loss.
+# Grain and change words are not measures either (19 Nov, second chain set): 'Which day was the best?' after two
+# day-wise installation weeks was answered as the best day ever (20 Jan); 'Which zone improved the most compared to
+# last month?' after SAT by zone went to MDM supply reliability. Log replay: 3 of 1,271 follow-ups re-triage.
 
 
 def _content_words(text: str) -> set[str]:
@@ -805,7 +821,7 @@ def fix_measure(state: dict, triage: dict, prior_turns: list[dict] | None) -> bo
     own = {w for w in _content_words(state["question"]) if w not in places}
     if own:
         return False  # the message names its own measure
-    latest = prior_turns[-1]
+    latest = latest_data_turn(prior_turns)
     latest_q = str(latest.get("resolved_question") or latest.get("question") or "")
     measure = _content_words(latest_q) - places
     if not measure or measure & _content_words(triage["question"]):
@@ -822,6 +838,115 @@ def fix_measure(state: dict, triage: dict, prior_turns: list[dict] | None) -> bo
     elif again["tables"] and again["domain"] == triage["domain"]:
         triage.update(tables=again["tables"])
     triage.update(question=again["question"], followup=True)
+    return True
+
+
+_FILTER_FOLLOWUP_RE = re.compile(r"^\s*(?:ok(?:ay)?,?\s+|now\s+|and\s+|but\s+)?(?:only|just|exclude|excluding|except|"
+                                 r"without|leave out|remove|limit (?:it |this |that )?to)\b", re.I)
+
+
+def rescue_filter_followup(state: dict, triage: dict, prior_turns: list[dict] | None) -> bool:
+    """'Only single phase meters' after 'Meter stock by warehouse' is a filter on that answer, not small talk. 19 Nov:
+    triage called it chitchat and asked which measure was meant (1 of 81 logged filter follow-ups). Re-triaged once
+    with the latest data question as the hint -- only when the first triage said chitchat."""
+    if triage["kind"] != "chitchat" or not prior_turns or not _FILTER_FOLLOWUP_RE.search(state["question"]):
+        return False
+    latest = latest_data_turn(prior_turns)
+    latest_q = str(latest.get("resolved_question") or latest.get("question") or "")
+    if not (latest.get("context") or {}).get("domain") or not latest_q:
+        return False
+    again = _triage({**state, "question": f"{state['question']} (follow-up: a filter on the latest question -- {latest_q})"},
+                    prior_turns)
+    if not again or again["kind"] != "data":
+        return False
+    _step(state, "filter_followup", time.perf_counter(), was="chitchat", now=again["question"][:140])
+    triage.update({k: again[k] for k in ("kind", "question", "domain", "topics", "tables", "examples", "assumption")},
+                  followup=True, reply="")
+    return True
+
+
+_THE_ONE_RE = re.compile(r"\b(?:the|that) (?:worst|top|best|highest|lowest|biggest|largest|first|leading|bottom|same) "
+                         r"one\b|\bthat one\b", re.I)
+# A feeder / DT / meter code: 8+ capitals and digits with at least one of each (41644120174YPR, AL1157049).
+_CODE_RE = re.compile(r"\b(?=[A-Z0-9]*\d)(?=[A-Z0-9]*[A-Z])[A-Z0-9]{8,}\b")
+
+
+def carry_named_code(state: dict, triage: dict, prior_turns: list[dict] | None) -> bool:
+    """'the worst one' = the feeder / DT / meter the previous answer named first, by its code. 19 Nov: 'Feeders with
+    the highest loss in July' -> 'Only for Kashi' (41644120174YPR named) -> 'Daily trend for the worst one' was
+    resolved as 'the worst feeder in Kashi', and the next turn re-ranked by loss % and picked another feeder."""
+    if triage["kind"] != "data" or not prior_turns or not _THE_ONE_RE.search(state["question"]) \
+            or _CODE_RE.search(triage["question"]):
+        return False
+    codes = _CODE_RE.findall(str(latest_data_turn(prior_turns).get("summary") or ""))
+    if not codes:
+        return False
+    triage["question"] = re.sub(r"[\s?.]*$", "", triage["question"]) + f" (the one the previous answer named: {codes[0]})?"
+    _step(state, "named_code", time.perf_counter(), carried=codes[0])
+    return True
+
+
+_ORDINAL_ONE_RE = re.compile(r"\b(?:the )?(first|second|third|last|latter|former) one\b|\bthe (latter|former)\b", re.I)
+_ORDINAL_INDEX = {"first": 0, "former": 0, "second": 1, "third": 2, "last": -1, "latter": -1}
+
+
+def pick_ordinal_place(state: dict, triage: dict, prior_turns: list[dict] | None) -> bool:
+    """'Just the first one' after a question naming two places keeps the first of them. 19 Nov: 'Both their pending
+    counts' (Kashi, Triveni) -> 'Just the first one, month-wise.' was answered for both projects."""
+    m = _ORDINAL_ONE_RE.search(state["question"])
+    if triage["kind"] != "data" or not prior_turns or not m:
+        return False
+    hierarchy.refresh_in_background()
+    hierarchy.wait_first_load()
+    names = hierarchy.place_names()
+    if place_scope.found(state["question"], names):
+        return False
+    latest = latest_data_turn(prior_turns)
+    latest_q = str(latest.get("resolved_question") or latest.get("question") or "")
+    low = latest_q.lower()
+    named = sorted(place_scope.found(latest_q, names).items(), key=lambda kv: low.find(kv[0].split()[0]))
+    have = place_scope.found(triage["question"], names)
+    idx = _ORDINAL_INDEX[(m.group(1) or m.group(2)).lower()]
+    if len(named) < 2 or sum(n in have for n, _ in named) < 2 or idx >= len(named):
+        return False
+    keep = named[idx]
+    fixed = triage["question"]
+    for name, lvl in named:
+        if name != keep[0] and name in have:
+            # A list first ('Kashi and Triveni', 'for Agra, Kashi and Triveni'), then 'in / for <place>'.
+            alias = r"\s+".join(map(re.escape, name.split()))
+            fixed = re.sub(rf"\s*(?:,|\band\b|&)\s*{alias}\b(\s+(?:project|zone|circle|division)s?\b)?|"
+                           rf"\b{alias}(\s+(?:project|zone|circle|division))?\s*(?:,|\band\b|&)\s*", " ", fixed,
+                           count=1, flags=re.I)
+            fixed = re.sub(r"\s{2,}", " ", fixed).strip()
+            if name in place_scope.found(fixed, names):
+                fixed = place_scope._strip(fixed, name, lvl)
+    if keep[0] not in place_scope.found(fixed, names) or len(place_scope.found(fixed, names)) != 1:
+        return False  # the wording could not be narrowed cleanly -- leave it to the model
+    _step(state, "ordinal_place", time.perf_counter(), was=triage["question"][:140], now=fixed[:140])
+    triage["question"] = fixed
+    return True
+
+
+_COMPARE_WITH_RE = re.compile(r"^\s*(?:and\s+|now\s+|ok(?:ay)?,?\s+)?compar\w*\s+(?:it\s+|this\s+|that\s+|them\s+)?"
+                              r"(?:with|to|against)\b", re.I)
+_COMPARE_WORD_RE = re.compile(r"\bcompar\w*|\bvs\.?(?=\s|$)|\bversus\b|\bagainst\b|\bside by side\b", re.I)
+
+
+def keep_comparison(state: dict, triage: dict, prior_turns: list[dict] | None) -> bool:
+    """'Compare with the week before' asks for BOTH periods. 19 Nov: it was resolved as the week before alone, and
+    the answer invented the difference ('3,626 fewer ... a 20% increase'; really 3,346 and +24.9%)."""
+    if triage["kind"] != "data" or not prior_turns or not _COMPARE_WITH_RE.search(state["question"]) \
+            or _COMPARE_WORD_RE.search(triage["question"]):
+        return False
+    latest = latest_data_turn(prior_turns)
+    latest_q = str(latest.get("resolved_question") or latest.get("question") or "").strip().rstrip("?.")
+    if not latest_q:
+        return False
+    triage["question"] = (re.sub(r"[\s?.]*$", "", triage["question"])
+                          + f", compared with the latest question ({latest_q}) -- both side by side with the change?")
+    triage["followup"] = True
+    _step(state, "comparison", time.perf_counter(), kept=latest_q[:100])
     return True
 
 
@@ -850,10 +975,14 @@ def fix_question(state: dict, triage: dict, prior_turns: list[dict] | None) -> b
     understand_node). True if it changed."""
     if clarify_vague(state, triage, prior_turns):
         return True
-    changed = drop_invented_period(state, triage, prior_turns)
+    changed = rescue_filter_followup(state, triage, prior_turns)
+    changed = drop_invented_period(state, triage, prior_turns) or changed
     changed = carry_partial_date(state, triage, prior_turns) or changed
     changed = fix_measure(state, triage, prior_turns) or changed
     changed = fix_scope(state, triage, prior_turns) or changed
+    changed = carry_named_code(state, triage, prior_turns) or changed
+    changed = pick_ordinal_place(state, triage, prior_turns) or changed
+    changed = keep_comparison(state, triage, prior_turns) or changed
     if triage["kind"] == "data" and festivals.resolve(state["question"]):
         # 'since Diwali': the festival's date pinned by code (resolvers/festivals.py) -- the resolved question
         # often keeps the name only, or the model's guess of the wrong year.

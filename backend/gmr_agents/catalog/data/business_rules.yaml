@@ -165,7 +165,7 @@ topics:
       - "Total MI includes replacements; eligible MI = installed on/before the project's SAT cutoff (public.sat_eligibility_config). % SAT vs eligible can exceed 100%."
       - "On the dashboard's MI vs SAT bars, the two percentages are % SAT vs MI and % SAT vs eligible MI."
       - "Label each % exactly by its column: sat_pct_vs_mi = 'of installed meters', sat_pct_vs_eligible = 'of eligible meters'."
-      - "Total MI here includes replacement meters, so it is larger than the Meter Installation card's count: call it 'installed meters (incl. replacements)' -- never plain 'total installed meters'."
+      - "Snapshot Total MI includes replacements: call it 'installed meters (incl. replacements)', never 'total installed meters'; period counts from gold_mi_installation_* are plain installs."
       - "'Worst'/'best' project: say which measure decides it (count or %) and give both when they disagree."
     rules:
       - "public.gold_mi_sat_invoice_snapshot (no dates, replacements included; columns project.., category, meter_type, sat_stage, is_sat_eligible, has_lumpsum_invoice, has_pmpm_invoice, meter_count)."
@@ -288,7 +288,7 @@ topics:
       - "Amounts are filed per project only. When the question asks for a category (consumer / DT / feeder), meter type, zone or date split, open with one plain sentence that this split is not recorded, then give the project-level figures as the closest answer."
     rules:
       - "public.revenue_receivables: operator-entered amounts already in crore; columns lumpsum_/pmpm_/cable_ x invoiced, realised, within_timeline; project lower-case; created_at."
-      - "Current figures = each project's LATEST row: ROW_NUMBER() OVER (PARTITION BY project ORDER BY created_at DESC, id DESC) = 1, then SUM across projects."
+      - "Current figures = each project's LATEST row: ROW_NUMBER() OVER (PARTITION BY project ORDER BY created_at DESC, id DESC) = 1, then SUM across projects. 'This month' / 'now' / 'current' = that latest row too -- never filter created_at to the month (a project that has not filed this month drops out and a comparison or 'why' comes back empty)."
       - "Dashboard card (Receivables summary - Delay analysis), per stream: Invoice Amount (Net) = <stream>_invoiced; Realised = <stream>_realised; Within Timeline = <stream>_within_timeline = UNPAID money that is not yet due; Overdue = invoiced - realised - within_timeline (unpaid and past due). Realised + Within Timeline + Overdue = Invoice Amount. Outstanding (all unpaid) = invoiced - realised = Within Timeline + Overdue; % realised = realised / invoiced x 100. Never 'realised - within_timeline' and never call within_timeline 'realised on time'."
       - "Default answer and 'delay analysis' / 'overdue' / 'invoice vs revenue released': per stream (Lumpsum, PMPM, Cable) plus All streams -- invoice_amount_net, realised, within_timeline, overdue, % realised. A negative overdue means the operator's figures do not add up (within_timeline larger than the unpaid amount): show it and say so."
       - "History/trend/change: every row ORDER BY project, created_at (latest vs previous submission per project). To-date amounts should not fall - flag a decrease as a correction."
@@ -552,6 +552,7 @@ topics:
       - "Closures by technician (no technician column on the card table): public.gold_om_technician_productivity_day_agg WHERE category = 'ALL', SUM(complaint_count) by technician_name (a named one: technician_name ILIKE '%<name>%'), period_start = closing day."
       - "Closed ticket ROWS ('list the closures', 'show the complaints closed on <day>'): Athena unified_non_qc_complaints (helpdesk_ticket_id) UNION ALL unified_complaints (QC) WHERE CAST(work_completed_at AT TIME ZONE 'Asia/Kolkata' AS date) in the window, place LOWER(TRIM(project)) = 'x', LIMIT 200 -- by work completion (silver closed_date is mostly empty: 4 Triveni rows in Sep 2026 against the card's 2,333). Category = CASE WHEN UPPER(TRIM(complaint_entity_type)) IN ('DT','DTR') THEN 'DT' WHEN UPPER(TRIM(complaint_entity_type)) = 'FEEDER' THEN 'FEEDER' ELSE 'CONSUMER' END; complaint type TRIM(sub_complaint_type)."
       - "No date given = last 30 days ending yesterday (CURRENT_DATE - 31 .. CURRENT_DATE - 1) unless 'all time' / 'month wise' over all data; say the default was used."
+      - "NEW / raised / registered / received / incoming complaints (a count or trend) are NOT closures: public.gold_om_open_ticket_detail_snapshot SUM(ticket_count) by raised_month -- only still-open tickets keep a raised date, so say these are tickets raised then and still open."
     example:
       question: "Closed tickets month-wise in Kashi this year"
       sql: |
@@ -1169,6 +1170,7 @@ topics:
     tables: [feeder_loss, dt_loss, feeder_loss_ai, feeder_loss_consumers, dt_loss_consumers, feeder_loss_ai_consumers]
     answer_notes:
       - "Always name the month (data_month). With no month asked it is the dashboard default month (July 2026). These tables hold June and July 2026 only -- August was never computed: say so instead of showing an empty answer."
+      - "One row per feeder / DT per MONTH (\"current_date\" = the last day with data in it): a daily trend is not stored -- say so and give the month row(s); never call the window end a day's figure."
       - "Loss % = (energy fed in - energy recorded at the mapped consumers) / energy fed in. An area's loss is fleet-weighted (its feeders' kWh summed, then divided) -- never an average of feeder percentages. Quote energy totals in MU (million kWh, 2 decimals) and single feeders/DTs in kWh."
       - "Caveat every loss figure in one sentence: the feeder input carries the feeder meter's multiplying factor (2,000-8,000) while consumers use 1, and HES delivery is partial-month, so the absolute % (about 61% fleet-wide) is not a commercial loss; rankings between feeders are usable. Only 1.29% of feeders (92 of 7,154 in July) pass the dashboard's 'credible' gate. LT (DT) loss uses a placeholder MF of 1.0 and comes out NEGATIVE fleet-wide (-482%): say it is not a usable figure yet, give the counts."
       - "Best-by-loss lists are led by feeders/DTs with impossible negative loss (consumers recorded more than the feeder meter -- a meter or mapping error); worst lists are led by feeders at 100% (input recorded, consumers reported nothing). Say which it is, and offer the credible-only ranking."
