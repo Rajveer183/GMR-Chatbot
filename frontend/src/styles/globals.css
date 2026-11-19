@@ -3760,9 +3760,30 @@ button {
 }
 
 .snapshot-header {
+  display: flex;
+  align-items: center;
+  gap: 14px;
   margin-bottom: 16px;
   padding-bottom: 12px;
   border-bottom: 2px solid var(--accent);
+}
+
+.snapshot-logo {
+  display: block;
+  height: 40px;
+  width: auto;
+  flex: none;
+  object-fit: contain;
+}
+
+.snapshot-header-text {
+  min-width: 0;
+}
+
+:root[data-theme="dark"] .snapshot-logo {
+  background: #f1f5f9;
+  border-radius: 6px;
+  padding: 3px 6px;
 }
 
 .snapshot-title {

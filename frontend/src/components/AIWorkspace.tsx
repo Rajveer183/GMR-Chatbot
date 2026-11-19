@@ -22,7 +22,7 @@ import { modeTransition, originOf, runNow } from "../utils/modeTransition";
 import type { Wrap } from "../utils/modeTransition";
 import type { ChatInputHandle } from "./ChatInput";
 import gmrLogo from "../assets/gmr_logo.png";
-import { downloadSnapshotHtml, prepareSnapshotFonts, printSnapshot, renderSnapshotPng, triggerDownload } from "../utils/snapshot";
+import { downloadSnapshotHtml, prepareSnapshotFonts, renderSnapshotPdf, renderSnapshotPng, triggerDownload } from "../utils/snapshot";
 import type { SnapshotPart } from "../utils/snapshot";
 
 const LOADING_STATUS_MESSAGES = [
@@ -761,10 +761,10 @@ export const AIWorkspace: React.FC<AIWorkspaceProps> = ({ filters }) => {
     if (!parts.length) return;
     // Let the menu close first so it is not in the copy.
     window.setTimeout(() => {
-      if (format === "png") {
-        // Drawing the image takes a second or more; it is saved as soon as it is ready.
+      if (format === "png" || format === "pdf") {
+        // Drawing the image / pages takes a second or more; the file is saved as soon as it is ready.
         setExportNotice({ kind: "working" });
-        renderSnapshotPng(title, parts)
+        (format === "png" ? renderSnapshotPng : renderSnapshotPdf)(title, parts)
           .then(({ blob, filename }) => {
             triggerDownload(blob, filename);
             setExportNotice(null);
@@ -775,8 +775,7 @@ export const AIWorkspace: React.FC<AIWorkspaceProps> = ({ filters }) => {
           });
         return;
       }
-      const run = format === "pdf" ? printSnapshot(title, parts) : Promise.resolve(downloadSnapshotHtml(title, parts));
-      run.catch((err: any) => {
+      downloadSnapshotHtml(title, parts).catch((err: any) => {
         console.error("[ui] export failed:", err);
         setExportNotice({ kind: "error", text: err?.message || "Export failed" });
       });
