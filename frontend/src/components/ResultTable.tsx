@@ -11,7 +11,7 @@ import {
 } from "@tanstack/react-table";
 import { ArrowDown, ArrowUp, ArrowUpDown, ChevronLeft, ChevronRight, Download } from "lucide-react";
 import { apiClient, type AITableSpec } from "../api/client";
-import { formatTableCell, numericValueOf } from "../utils/formatters";
+import { formatTableCell, monthColumns, monthLabel, monthValueOf, numericValueOf } from "../utils/formatters";
 import { tableToPayload } from "../utils/clipboard";
 import { CopyButton } from "./CopyButton";
 
@@ -27,8 +27,8 @@ type TableRow = Record<string, unknown>;
 const numericAwareSort: SortingFn<TableRow> = (rowA, rowB, columnId) => {
   const rawA = rowA.getValue(columnId);
   const rawB = rowB.getValue(columnId);
-  const numA = numericValueOf(rawA);
-  const numB = numericValueOf(rawB);
+  const numA = numericValueOf(rawA) ?? monthValueOf(rawA);   // 'Nov 2025' sorts as a month, not as text
+  const numB = numericValueOf(rawB) ?? monthValueOf(rawB);
 
   if (numA !== null && numB !== null) return numA - numB;
   if (numA !== null) return -1;
@@ -93,6 +93,9 @@ export const ResultTable: React.FC<ResultTableProps> = ({ table, traceId, tableI
   const [exporting, setExporting] = useState<"csv" | "xlsx" | null>(null);
   const [exportNote, setExportNote] = useState<string | null>(null);
 
+  // Month columns read 'Nov 2025', not '2025-11-01' -- also for answers saved before the backend did it.
+  // The ISO value stays underneath, so a header click still sorts by date.
+  const months = useMemo(() => monthColumns(table.columns, table.rows ?? []), [table.columns, table.rows]);
   const columns = useMemo<ColumnDef<TableRow>[]>(
     () =>
       table.columns.map((name) => ({
@@ -103,10 +106,10 @@ export const ResultTable: React.FC<ResultTableProps> = ({ table, traceId, tableI
         accessorFn: (row: TableRow) => row[name],
         // Shown in the answer's language when translated; the row key stays the column.
         header: (table.column_labels?.[name] || name.replace(/_/g, " ")).toUpperCase(),
-        cell: (info) => formatTableCell(info.getValue()),
+        cell: (info) => (months.has(name) ? monthLabel(formatTableCell(info.getValue())) : formatTableCell(info.getValue())),
         sortingFn: numericAwareSort,
       })),
-    [table.columns, table.column_labels]
+    [table.columns, table.column_labels, months]
   );
 
   // A grand-total row (first cell "Total", e.g. the month-wise installation

@@ -1,5 +1,5 @@
 import type { AIKPI, AIQueryResponse, AITableSpec } from "../api/client";
-import { formatTableCell } from "./formatters";
+import { formatTableCell, monthColumns, monthLabel } from "./formatters";
 
 /**
  * A copy payload in two flavours. Rich targets (Excel, Word, Outlook, Google
@@ -29,7 +29,9 @@ function markdownToHtml(text: string): string {
 }
 
 // A tab or newline inside a cell would break the column/row grid on paste.
-const tsvCell = (value: unknown) => formatTableCell(value).replace(/[\t\r\n]+/g, " ");
+// A month column reads 'Nov 2025', as the table shows it.
+const tsvCell = (value: unknown, month = false) =>
+  (month ? monthLabel(formatTableCell(value)) : formatTableCell(value)).replace(/[\t\r\n]+/g, " ");
 
 const headerLabel = (name: string) => name.replace(/_/g, " ").toUpperCase();
 
@@ -37,9 +39,10 @@ const CELL_STYLE = "border:1px solid #cbd5e1;padding:4px 8px;";
 
 export function tableToPayload(table: AITableSpec): CopyPayload {
   const rows = table.rows ?? [];
+  const months = monthColumns(table.columns, rows);
   const text = [
     table.columns.map(headerLabel).join("\t"),
-    ...rows.map((row) => table.columns.map((c) => tsvCell(row[c])).join("\t")),
+    ...rows.map((row) => table.columns.map((c) => tsvCell(row[c], months.has(c))).join("\t")),
   ].join("\n");
 
   const head = table.columns
@@ -49,7 +52,7 @@ export function tableToPayload(table: AITableSpec): CopyPayload {
     .map(
       (row) =>
         `<tr>${table.columns
-          .map((c) => `<td style="${CELL_STYLE}">${escapeHtml(formatTableCell(row[c]))}</td>`)
+          .map((c) => `<td style="${CELL_STYLE}">${escapeHtml(tsvCell(row[c], months.has(c)))}</td>`)
           .join("")}</tr>`
     )
     .join("");

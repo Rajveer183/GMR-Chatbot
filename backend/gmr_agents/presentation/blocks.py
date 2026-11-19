@@ -77,6 +77,37 @@ def raw_cols(columns: Any) -> set[int]:
     return {i for i, c in enumerate(columns) if _RAW_COL_RE.search(str(c).strip().lower().replace(" ", "_"))}
 
 
+_MONTH_START_RE = re.compile(r"^(\d{4})-(0[1-9]|1[0-2])(?:-01)?$")
+_MONTH_NAME_RE = re.compile(r"month|mon$|^mth|_mth", re.I)
+
+
+def month_cols(df: pd.DataFrame) -> set[int]:
+    """Positions of the columns that hold months: every value is the 1st of a month (or 'YYYY-MM'),
+    and the column is named as a month or has more than one row. Shown 'Nov 2025', not '2025-11-01'
+    (user, 19 Nov). A lone '2025-11-01' under a day column (install_date) stays a day."""
+    out = set()
+    for i, c in enumerate(df.columns):
+        if pd.api.types.is_numeric_dtype(df[c]) or pd.api.types.is_bool_dtype(df[c]):
+            continue
+        texts = [_cell(v) for v in df[c]]
+        texts = [t for t in texts if t != "" and not _is_subtotal(t)]   # a ROLLUP 'Total' row keeps its label
+        if texts and all(isinstance(t, str) and _MONTH_START_RE.match(t) for t in texts) \
+                and (_MONTH_NAME_RE.search(str(c)) or len(texts) > 1):
+            out.add(i)
+    return out
+
+
+def _month_label(text: Any) -> Any:
+    m = _MONTH_START_RE.match(text) if isinstance(text, str) else None
+    return f"{datetime(int(m.group(1)), int(m.group(2)), 1):%b %Y}" if m else text
+
+
+def table_cell(v: Any, raw: bool = False, month: bool = False) -> Any:
+    """`_cell`, with a month column's dates shown as 'Nov 2025'."""
+    text = _cell(v, raw)
+    return _month_label(text) if month else text
+
+
 _MULTI_SERIES = {"grouped_bar", "stacked_bar", "stacked_horizontal_bar", "percent_stacked_bar", "heatmap"}
 
 _SINGLE_SERIES = {"pie", "donut", "funnel", "radial"}
@@ -376,8 +407,9 @@ def _blocks(plan: dict, result: dict) -> dict:
             or (len(df) == 1 and len(df.columns) > len(kpis))):
         shown = df.head(_TABLE_ROWS)
         cols = [_label(plan, c) for c in shown.columns]
-        raw = raw_cols(shown.columns)
-        rows = [{cols[i]: _cell(v, i in raw) for i, v in enumerate(r)} for r in shown.itertuples(index=False)]
+        raw, months = raw_cols(shown.columns), month_cols(shown)
+        rows = [{cols[i]: table_cell(v, i in raw, i in months) for i, v in enumerate(r)}
+                for r in shown.itertuples(index=False)]
         total = max(len(df), int(result.get("group_count") or 0))
         tables.append({"id": "primary_table", "title": plan.get("table_title") or "Result", "heading": None,
                        "columns": cols, "rows": rows, "page": 1, "page_size": _TABLE_ROWS, "total_rows": total,

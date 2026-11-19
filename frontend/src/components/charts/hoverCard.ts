@@ -13,6 +13,7 @@
 import type { AIChartSpec } from "../../api/client";
 import type { ChartLayout } from "../chartOptions";
 import { fullNumber } from "./dataviz";
+import { monthLabels } from "../../utils/formatters";
 
 export interface HoverRow { name: string; value: string; color?: string; strong?: boolean; divider?: boolean; heading?: boolean }
 export interface HoverCard { title: string; sub?: string; rows: HoverRow[] }
@@ -65,7 +66,7 @@ export function seriesAreParts(chart: AIChartSpec, layout: ChartLayout): boolean
 
 /** The dashboard hover card for category j. */
 export function hoverCard(chart: AIChartSpec, layout: ChartLayout, j: number, colours: string[]): HoverCard {
-  const cats = (chart.x ?? []).map(String);
+  const cats = monthLabels((chart.x ?? []).map(String));
   const title = cats[j] ?? "";
   const sub = weekRange(title);
   const unit = chart.unit || undefined;

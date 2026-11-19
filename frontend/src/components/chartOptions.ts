@@ -32,6 +32,7 @@
  */
 import type { ApexOptions } from "apexcharts";
 import type { AIChartSpec } from "../api/client";
+import { monthLabels } from "../utils/formatters";
 import { DV, MONO, axisNumber, fullNumber, isOrderedBands, niceAxis, truncate } from "./charts/dataviz";
 import { GMR, GMR_PALETTE, canonicalKey, dashboardColour, distinctColours, getColor, getContrastText } from "./charts/dashboardPalette";
 
@@ -86,7 +87,7 @@ export function resolveKind(type: AIChartSpec["type"]): ChartLayout {
 }
 
 export function chartCategories(chart: AIChartSpec): string[] {
-  return (chart.x ?? []).map((x) => String(x ?? ""));
+  return monthLabels((chart.x ?? []).map((x) => String(x ?? "")));
 }
 
 type Named = { name: string; data: number[]; type?: "bar" | "line" };

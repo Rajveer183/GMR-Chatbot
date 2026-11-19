@@ -1111,7 +1111,7 @@ def table_page(req: TablePageRequest) -> dict:
     validated SQL (looked up by trace_id) is re-checked by the SQL guard and the
     read-only layer and run with OFFSET / LIMIT -- no LLM call, no new SQL, and
     the rows never enter an LLM prompt."""
-    from gmr_agents.llm_pipeline import _cell, raw_cols
+    from gmr_agents.presentation.blocks import month_cols, raw_cols, table_cell
     from gmr_agents.execution import executor
 
     if req.page < 1 or not 1 <= req.page_size <= _MAX_PAGE_SIZE:
@@ -1135,9 +1135,10 @@ def table_page(req: TablePageRequest) -> dict:
         log.warning("table page %s/%s failed: %s", req.trace_id, req.page, exc)
         raise HTTPException(status_code=503, detail="The page could not be loaded -- please try again.") from None
     pages = max(1, -(-total // req.page_size))
-    raw = raw_cols(df.columns)
+    raw, months = raw_cols(df.columns), month_cols(df)
     has_next = offset + len(df) < total
-    return {"columns": [str(c) for c in df.columns], "rows": [[_cell(v, i in raw) for i, v in enumerate(r)] for r in df.itertuples(index=False)],
+    return {"columns": [str(c) for c in df.columns], "rows": [[table_cell(v, i in raw, i in months) for i, v in enumerate(r)]
+                                                         for r in df.itertuples(index=False)],
             "pagination": {"page": req.page, "page_size": req.page_size, "total_count": total, "total_pages": pages,
                            "has_next": has_next, "has_previous": offset > 0, "offset": offset}}
 

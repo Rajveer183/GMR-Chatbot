@@ -50,3 +50,45 @@ export function formatChartValue(value: number, unit?: string): string {
   const text = value.toLocaleString(undefined, { maximumFractionDigits: 2 });
   return unit ? `${text} ${unit}` : text;
 }
+
+const MONTH_NAMES = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"];
+const MONTH_START_RE = /^(\d{4})-(0[1-9]|1[0-2])(?:-01)?$/;
+const MONTH_LABEL_RE = /^(Jan|Feb|Mar|Apr|May|Jun|Jul|Aug|Sep|Oct|Nov|Dec) (\d{4})$/;
+
+/**
+ * Chart categories that are all months ('2025-11-01' / '2025-11') read 'Nov 2025', as the table's
+ * month columns do (backend blocks.month_cols). Display only: chart.x keeps the ISO text, which the
+ * date checks (chronological, graph modes) depend on. Days and mixed axes are left as sent.
+ */
+export function monthLabels(cats: string[]): string[] {
+  if (cats.length < 2 || !cats.every((c) => MONTH_START_RE.test(c))) return cats;
+  return cats.map(monthLabel);
+}
+
+/** '2025-11-01' / '2025-11' -> 'Nov 2025'; anything else unchanged. */
+export function monthLabel(text: string): string {
+  const m = MONTH_START_RE.exec(text);
+  return m ? `${MONTH_NAMES[Number(m[2]) - 1]} ${m[1]}` : text;
+}
+
+/**
+ * Table columns that hold months, by the backend's rule (blocks.month_cols): every value apart from a
+ * Total row is the 1st of a month (or 'YYYY-MM'), and the column is named as a month or has 2+ rows.
+ * Done here too so answers saved before the backend did it (and cached ones) read 'Nov 2025' as well.
+ */
+export function monthColumns(columns: string[], rows: Record<string, unknown>[]): Set<string> {
+  const out = new Set<string>();
+  for (const name of columns) {
+    const values = rows
+      .map((row) => (row[name] == null ? "" : String(row[name]).trim()))
+      .filter((v) => v !== "" && !/^(grand )?total$/i.test(v));
+    if (values.length && values.every((v) => MONTH_START_RE.test(v)) && (/month/i.test(name) || values.length > 1)) out.add(name);
+  }
+  return out;
+}
+
+/** 'Nov 2025' -> a sortable number (year * 12 + month); null for anything else. */
+export function monthValueOf(value: unknown): number | null {
+  const m = typeof value === "string" ? MONTH_LABEL_RE.exec(value.trim()) : null;
+  return m ? Number(m[2]) * 12 + MONTH_NAMES.indexOf(m[1]) : null;
+}
