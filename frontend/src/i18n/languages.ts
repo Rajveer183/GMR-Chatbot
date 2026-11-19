@@ -44,6 +44,32 @@ export function storeLanguage(language: LanguagePreference) {
   }
 }
 
+// The sidebar and Settings menu have their own language (Settings > Language), English by
+// default -- changing the answer language never moves them.
+const UI_LANGUAGE_KEY = "gmr-chat.uiLanguage";
+
+/** Languages the Settings > Language menu offers (no Auto-detect: the menu text needs one language). */
+export const UI_LANGUAGE_OPTIONS = LANGUAGE_OPTIONS.filter(
+  (o): o is { value: LanguageCode; label: string } => o.value !== "auto"
+);
+
+export function readUiLanguage(): LanguageCode {
+  try {
+    const stored = window.localStorage.getItem(UI_LANGUAGE_KEY);
+    return stored && stored !== "auto" && PREFERENCES.has(stored) ? (stored as LanguageCode) : "en";
+  } catch {
+    return "en";
+  }
+}
+
+export function storeUiLanguage(language: LanguageCode) {
+  try {
+    window.localStorage.setItem(UI_LANGUAGE_KEY, language);
+  } catch {
+    // Non-fatal -- see readStoredLanguage.
+  }
+}
+
 /** BCP 47 tag for the `lang` attribute (correct font shaping and screen-reader voice). */
 export function langTag(language: string | null | undefined): string {
   if (language === "hinglish") return "hi-Latn";

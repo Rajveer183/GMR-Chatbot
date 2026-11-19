@@ -4822,3 +4822,9 @@ html.tc-vt-out::view-transition-old(root) {
 html.tc-vt-out::view-transition-new(root) {
   z-index: 1;
 }
+
+/* Settings > Language flyout: wider for the native-script names. */
+.chat-profile-submenu-lang {
+  min-width: 200px;
+  white-space: nowrap;
+}

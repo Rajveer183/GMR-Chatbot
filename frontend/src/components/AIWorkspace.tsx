@@ -4,7 +4,8 @@ import { apiClient, QueryStoppedError } from "../api/client";
 import type { FeedbackRating } from "../api/client";
 import type { AIQueryResponse, AIStreamEvent, ChatFolder, DatasetSummary, FilterRequest, SessionPatch, SessionSummary, SessionDetail, SessionMessage, TranslatedAnswer } from "../api/client";
 import { LanguageSelect } from "./LanguageSelect";
-import { langTag, readStoredLanguage, screenLanguage, sessionLabel, speechLocale, statusText, storeLanguage, uiText } from "../i18n/languages";
+import { langTag, readStoredLanguage, readUiLanguage, screenLanguage, sessionLabel, speechLocale, statusText, storeLanguage, storeUiLanguage, uiText } from "../i18n/languages";
+import type { LanguageCode } from "../i18n/languages";
 import type { LanguagePreference } from "../i18n/languages";
 import { ResultRenderer } from "./ResultRenderer";
 import { LoadingStatus } from "./LoadingStatus";
@@ -279,6 +280,13 @@ export const AIWorkspace: React.FC<AIWorkspaceProps> = ({ filters }) => {
   // re-presents the latest answer through POST /api/translate -- the stored answer is never
   // changed, so switching back and forth always starts from the original.
   const [responseLanguage, setResponseLanguage] = useState<LanguagePreference>(readStoredLanguage);
+  // The sidebar (history, folders, Settings menu and its dialogs) has its own language, picked in
+  // Settings > Language -- English by default, and never moved by the answer language.
+  const [sidebarLang, setSidebarLang] = useState<LanguageCode>(readUiLanguage);
+  const changeSidebarLang = (language: LanguageCode) => {
+    setSidebarLang(language);
+    storeUiLanguage(language);
+  };
   // "<trace_id>:<language>" -> its translated text, or the request's state
   const [translations, setTranslations] = useState<Record<string, TranslatedAnswer | "pending" | "failed">>({});
   // message index -> the language that answer is shown in (absent / "auto" = as written)
@@ -913,6 +921,7 @@ export const AIWorkspace: React.FC<AIWorkspaceProps> = ({ filters }) => {
   }
   const uiLang = screenLanguage(responseLanguage, latestAnswerLanguage);
   const t = (key: Parameters<typeof uiText>[1], vars?: Record<string, string | number>) => uiText(uiLang, key, vars);
+  const st = (key: Parameters<typeof uiText>[1], vars?: Record<string, string | number>) => uiText(sidebarLang, key, vars);
 
   const isTemporary = !!activeSession && (activeSession.session_id === tempId || !!activeSession.temporary);
   const activeSessionName = useMemo(
@@ -1036,7 +1045,7 @@ export const AIWorkspace: React.FC<AIWorkspaceProps> = ({ filters }) => {
       sessions={sessions}
       folders={folders}
       activeId={activeSession?.session_id ?? null}
-      t={t}
+      t={st}
       onOpen={(id) => {
         openSession(id, true);
         afterOpen?.();
@@ -1063,14 +1072,14 @@ export const AIWorkspace: React.FC<AIWorkspaceProps> = ({ filters }) => {
             } as React.CSSProperties)
       }
     >
-      <aside className="chat-sidebar">
+      <aside className="chat-sidebar" lang={langTag(sidebarLang)}>
         {sidebarCollapsed ? null : (
           <div
             className="chat-sidebar-resizer"
             role="separator"
             aria-orientation="vertical"
-            aria-label={t("resizeSidebar")}
-            title={t("resizeSidebar")}
+            aria-label={st("resizeSidebar")}
+            title={st("resizeSidebar")}
             aria-valuemin={SIDEBAR_WIDTH_MIN}
             aria-valuemax={SIDEBAR_WIDTH_MAX}
             aria-valuenow={sidebarWidth}
@@ -1081,20 +1090,20 @@ export const AIWorkspace: React.FC<AIWorkspaceProps> = ({ filters }) => {
           />
         )}
         {sidebarCollapsed ? (
-          <nav className="chat-sidebar-rail" aria-label={t("showSidebar")}>
+          <nav className="chat-sidebar-rail" aria-label={st("showSidebar")}>
             <img className="chat-rail-logo-img" src={gmrLogo} alt="GMR" />
             <button
               className="chat-sidebar-icon chat-sidebar-rail-btn"
               type="button"
               onClick={toggleSidebar}
               aria-expanded={false}
-              aria-label={t("showSidebar")}
-              data-tip={t("showSidebar")}
+              aria-label={st("showSidebar")}
+              data-tip={st("showSidebar")}
             >
               <PanelLeft size={18} />
             </button>
             <button className="chat-sidebar-icon chat-sidebar-rail-btn" onClick={() => createNewSession()} type="button"
-                    data-tip={t("newChat")} aria-label={t("newChat")}>
+                    data-tip={st("newChat")} aria-label={st("newChat")}>
               <SquarePen size={18} />
             </button>
             <button
@@ -1103,8 +1112,8 @@ export const AIWorkspace: React.FC<AIWorkspaceProps> = ({ filters }) => {
               onClick={toggleTemporary}
               disabled={loading}
               aria-pressed={isTemporary}
-              aria-label={t(isTemporary ? "temporaryChatOff" : "temporaryChatOn")}
-              data-tip={t(isTemporary ? "temporaryChatOff" : "temporaryChatOn")}
+              aria-label={st(isTemporary ? "temporaryChatOff" : "temporaryChatOn")}
+              data-tip={st(isTemporary ? "temporaryChatOff" : "temporaryChatOn")}
             >
               <MessageCircleDashed size={18} />
             </button>
@@ -1116,12 +1125,12 @@ export const AIWorkspace: React.FC<AIWorkspaceProps> = ({ filters }) => {
                   type="button"
                   onClick={() => setHistorySearchOpen(true)}
                   aria-haspopup="dialog"
-                  aria-label={t("searchHistory")}
-                  data-tip={`${t("searchHistory")} (Ctrl+K)`}
+                  aria-label={st("searchHistory")}
+                  data-tip={`${st("searchHistory")} (Ctrl+K)`}
                 >
                   <Search size={18} />
                 </button>
-                <RailRecents t={t} renderHistory={(close) => historyEl(close)} />
+                <RailRecents t={st} renderHistory={(close) => historyEl(close)} />
               </>
             )}
           </nav>
@@ -1134,8 +1143,8 @@ export const AIWorkspace: React.FC<AIWorkspaceProps> = ({ filters }) => {
             onClick={() => setHistorySearchOpen(true)}
             disabled={isTemporary}
             aria-haspopup="dialog"
-            aria-label={t("searchHistory")}
-            data-tip-pos="below" data-tip={`${t("searchHistory")} (Ctrl+K)`}
+            aria-label={st("searchHistory")}
+            data-tip-pos="below" data-tip={`${st("searchHistory")} (Ctrl+K)`}
           >
             <Search size={18} />
           </button>
@@ -1144,8 +1153,8 @@ export const AIWorkspace: React.FC<AIWorkspaceProps> = ({ filters }) => {
             type="button"
             onClick={toggleSidebar}
             aria-expanded={!sidebarCollapsed}
-            aria-label={t(sidebarCollapsed ? "showSidebar" : "hideSidebar")}
-            data-tip-pos="below" data-tip={t(sidebarCollapsed ? "showSidebar" : "hideSidebar")}
+            aria-label={st(sidebarCollapsed ? "showSidebar" : "hideSidebar")}
+            data-tip-pos="below" data-tip={st(sidebarCollapsed ? "showSidebar" : "hideSidebar")}
           >
             <PanelLeft size={18} />
           </button>
@@ -1155,7 +1164,7 @@ export const AIWorkspace: React.FC<AIWorkspaceProps> = ({ filters }) => {
         {sidebarCollapsed ? null : (
           <div className="chat-new-row">
             <button className="chat-new-btn" onClick={() => createNewSession()} type="button">
-              <SquarePen size={17} /> {t("newChat")}
+              <SquarePen size={17} /> {st("newChat")}
             </button>
             <button
               className={`chat-sidebar-icon chat-temp-toggle${isTemporary ? " is-on" : ""}`}
@@ -1163,9 +1172,9 @@ export const AIWorkspace: React.FC<AIWorkspaceProps> = ({ filters }) => {
               onClick={toggleTemporary}
               disabled={loading}
               aria-pressed={isTemporary}
-              aria-label={t(isTemporary ? "temporaryChatOff" : "temporaryChatOn")}
+              aria-label={st(isTemporary ? "temporaryChatOff" : "temporaryChatOn")}
               data-tip-pos="below"
-              data-tip={t(isTemporary ? "temporaryChatOff" : "temporaryChatOn")}
+              data-tip={st(isTemporary ? "temporaryChatOff" : "temporaryChatOn")}
             >
               <MessageCircleDashed size={18} />
             </button>
@@ -1180,14 +1189,16 @@ export const AIWorkspace: React.FC<AIWorkspaceProps> = ({ filters }) => {
           sessions={sessions}
           folders={folders}
           activeId={activeSession?.session_id ?? null}
-          t={t}
+          t={st}
           onOpen={(id, query) => openSession(id, true, query)}
           onClose={() => setHistorySearchOpen(false)}
         />
 
         <ProfileMenu
+          uiLanguage={sidebarLang}
+          onUiLanguage={changeSidebarLang}
           archivedCount={sessions.filter((s) => s.archived).length}
-          t={t}
+          t={st}
           onOpenArchived={() => setShowArchivedDialog(true)}
         />
       </aside>
@@ -1507,7 +1518,7 @@ export const AIWorkspace: React.FC<AIWorkspaceProps> = ({ filters }) => {
         <ArchivedChatsDialog
           open={showArchivedDialog}
           sessions={sessions}
-          t={t}
+          t={st}
           blocked={confirmDelete.open}
           onClose={() => setShowArchivedDialog(false)}
           onOpenChat={(id) => openSession(id, true)}
@@ -1516,11 +1527,11 @@ export const AIWorkspace: React.FC<AIWorkspaceProps> = ({ filters }) => {
         />
         <ConfirmDialog
           open={confirmDelete.open}
-          title={t("confirmDelete")}
-          message={t("deleteMessage", { name: confirmDelete.sessionName ? sessionLabel(uiLang, confirmDelete.sessionName) : t("thisChat") })}
-          confirmLabel={t("delChat")}
-          cancelLabel={t("cancel")}
-          closeLabel={t("closeDialog")}
+          title={st("confirmDelete")}
+          message={st("deleteMessage", { name: confirmDelete.sessionName ? sessionLabel(sidebarLang, confirmDelete.sessionName) : st("thisChat") })}
+          confirmLabel={st("delChat")}
+          cancelLabel={st("cancel")}
+          closeLabel={st("closeDialog")}
           onCancel={cancelDeleteSession}
           onConfirm={() => confirmDeleteSession(confirmDelete.sessionId)}
         />

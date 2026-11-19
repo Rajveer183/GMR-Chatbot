@@ -1,7 +1,8 @@
 import React, { useEffect, useMemo, useRef, useState } from "react";
-import { Archive, ArchiveRestore, Check, ChevronRight, Settings, SunMoon, Trash2, X } from "lucide-react";
+import { Archive, ArchiveRestore, Check, ChevronRight, Languages, Settings, SunMoon, Trash2, X } from "lucide-react";
 import type { SessionSummary } from "../api/client";
 import type { UIKey } from "../i18n/uiStrings";
+import { UI_LANGUAGE_OPTIONS, type LanguageCode } from "../i18n/languages";
 import { readThemePref, setThemePref, type ThemePref } from "../utils/theme";
 
 const THEME_OPTIONS: { value: ThemePref; label: UIKey }[] = [
@@ -12,7 +13,8 @@ const THEME_OPTIONS: { value: ThemePref; label: UIKey }[] = [
 
 type T = (key: UIKey, vars?: Record<string, string | number>) => string;
 
-// Sidebar footer: a Settings button whose menu opens the archived chats and the theme picker.
+// Sidebar footer: a Settings button whose menu opens the archived chats, the theme picker and
+// the sidebar language (the sidebar keeps its own language; the answer language never moves it).
 // Archived chats live only here -- they are deleted by the backend 30 days after archiving
 // unless unarchived (or continued) first.
 
@@ -20,17 +22,22 @@ interface ProfileMenuProps {
   archivedCount: number;
   t: T;
   onOpenArchived: () => void;
+  uiLanguage: LanguageCode;
+  onUiLanguage: (language: LanguageCode) => void;
 }
 
-export const ProfileMenu: React.FC<ProfileMenuProps> = ({ archivedCount, t, onOpenArchived }) => {
+export const ProfileMenu: React.FC<ProfileMenuProps> = ({ archivedCount, t, onOpenArchived, uiLanguage, onUiLanguage }) => {
   const [open, setOpen] = useState(false);
-  const [themeOpen, setThemeOpen] = useState(false);
+  // which flyout is showing: theme or language (one at a time)
+  const [sub, setSub] = useState<"theme" | "language" | null>(null);
+  const themeOpen = sub === "theme";
+  const langOpen = sub === "language";
   const [theme, setTheme] = useState<ThemePref>(readThemePref);
   const ref = useRef<HTMLDivElement>(null);
 
   useEffect(() => {
     if (!open) {
-      setThemeOpen(false);
+      setSub(null);
       return;
     }
     const onDown = (e: MouseEvent) => {
@@ -52,7 +59,7 @@ export const ProfileMenu: React.FC<ProfileMenuProps> = ({ archivedCount, t, onOp
           <button
             type="button"
             role="menuitem"
-            onMouseEnter={() => setThemeOpen(false)}
+            onMouseEnter={() => setSub(null)}
             onClick={() => {
               setOpen(false);
               onOpenArchived();
@@ -61,14 +68,14 @@ export const ProfileMenu: React.FC<ProfileMenuProps> = ({ archivedCount, t, onOp
             <Archive size={14} /> {t("archivedChatsTitle")}
             {archivedCount ? <span className="chat-profile-count">{archivedCount}</span> : null}
           </button>
-          <div className="chat-profile-sub" onMouseEnter={() => setThemeOpen(true)}>
+          <div className="chat-profile-sub" onMouseEnter={() => setSub("theme")}>
             <button
               type="button"
               role="menuitem"
               aria-haspopup="menu"
               aria-expanded={themeOpen}
               className={themeOpen ? "is-active" : undefined}
-              onClick={() => setThemeOpen((v) => !v)}
+              onClick={() => setSub((v) => (v === "theme" ? null : "theme"))}
             >
               <SunMoon size={14} /> {t("theme")}
               <ChevronRight size={14} className="chat-profile-chevron" />
@@ -89,6 +96,38 @@ export const ProfileMenu: React.FC<ProfileMenuProps> = ({ archivedCount, t, onOp
                   >
                     {t(o.label)}
                     {theme === o.value ? <Check size={14} className="chat-profile-check" /> : null}
+                  </button>
+                ))}
+              </div>
+            ) : null}
+          </div>
+          <div className="chat-profile-sub" onMouseEnter={() => setSub("language")}>
+            <button
+              type="button"
+              role="menuitem"
+              aria-haspopup="menu"
+              aria-expanded={langOpen}
+              className={langOpen ? "is-active" : undefined}
+              onClick={() => setSub((v) => (v === "language" ? null : "language"))}
+            >
+              <Languages size={14} /> {t("menuLanguage")}
+              <ChevronRight size={14} className="chat-profile-chevron" />
+            </button>
+            {langOpen ? (
+              <div className="chat-profile-submenu chat-profile-submenu-lang" role="menu">
+                {UI_LANGUAGE_OPTIONS.map((o) => (
+                  <button
+                    key={o.value}
+                    type="button"
+                    role="menuitemradio"
+                    aria-checked={uiLanguage === o.value}
+                    onClick={() => {
+                      onUiLanguage(o.value);
+                      setOpen(false);
+                    }}
+                  >
+                    {o.label}
+                    {uiLanguage === o.value ? <Check size={14} className="chat-profile-check" /> : null}
                   </button>
                 ))}
               </div>
