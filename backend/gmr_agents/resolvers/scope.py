@@ -111,7 +111,13 @@ def apply(message: str, resolved: str, latest: dict | None, same_area: bool,
         return resolved, changes
     rank = compared_rank(message)
     latest_q = str(latest.get("resolved_question") or latest.get("question") or "")
-    in_latest_q = {n: lvl for n, lvl in found(latest_q, places).items() if rank is None or _RANK[lvl] < rank}
+    named = found(latest_q, places)
+    # Two or more places AT the compared level = the group being broken down, kept. 19 Nov: 'MI progress for
+    # Varanasi' (= zones Varanasi I + II) then 'Break it down by zone.' stripped 'for Varanasi I' only, leaving
+    # 'MI progress and Varanasi II zones ...'. A single place at that level is still dropped ('which zone is worst').
+    group = {n for n, lvl in named.items() if rank is not None and _RANK[lvl] == rank}
+    group = group if len(group) >= 2 else set()
+    in_latest_q = {n: lvl for n, lvl in named.items() if rank is None or _RANK[lvl] < rank or n in group}
     allowed = {**in_latest_q, **{n: lvl for n, lvl in found(str(latest.get("summary") or ""), places).items()
                                  if rank is None or _RANK[lvl] < rank}}
     changes: dict = {}
@@ -122,7 +128,13 @@ def apply(message: str, resolved: str, latest: dict | None, same_area: bool,
                 resolved = stripped
                 changes.setdefault("stripped", []).append(name)
     if in_latest_q and same_area:
-        missing = [(n, lvl) for n, lvl in in_latest_q.items() if n not in found(resolved, places)]
+        # A level the resolved question already narrowed to one of the latest turn's places is decided: its siblings
+        # are not carried back in. 19 Nov: 'Which one is lagging?' (Varanasi I) -> 'Show that in detail.' was resolved
+        # as Varanasi I, then got 'in Varanasi II zone' appended, and the answer called both zones' figures Varanasi I.
+        # ('both' / 'their' wording never reaches here -- triage.fix_scope keeps those places.)
+        have = found(resolved, places)
+        narrowed = {lvl for n, lvl in have.items() if n in in_latest_q}
+        missing = [(n, lvl) for n, lvl in in_latest_q.items() if n not in have and lvl not in narrowed]
         if missing:
             where = " and ".join(display(n, lvl) for n, lvl in missing)
             resolved = re.sub(r"\s*([?.])?\s*$", "", resolved) + f" in {where}" + ("?" if resolved.rstrip().endswith("?") else "")

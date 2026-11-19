@@ -39,6 +39,49 @@ _RATE_RE = re.compile(r"pct|percent|%|rate|ratio|share|avg|average|mean|median|i
 _PREV_RE = re.compile(r"prev|previous|prior|last_?(?:month|week|year|period|quarter)|before|earlier|baseline|old|^p1_|_p1$|base_", re.I)
 _CURR_RE = re.compile(r"curr|current|this_?(?:month|week|year|period|quarter)|latest|now|recent|after|^p2_|_p2$|new_", re.I)
 _DELTA_RE = re.compile(r"change|delta|diff|growth|gap|variance|vs", re.I)
+_STRONG_PREV_RE = re.compile(r"\b(?:before|prev\w*|prior|earlier|baseline|old)\b", re.I)
+_CURR_LABEL_RE = re.compile(r"\b(?:this|current|latest|now|recent)\b", re.I)
+_LAST_LABEL_RE = re.compile(r"\b(?:last|previous|prev|prior)\b", re.I)
+
+
+def _labelled_periods(df: pd.DataFrame, question: str = "") -> pd.DataFrame:
+    """Long rows whose period column holds two period NAMES ('Last Week' / 'Week Before', 'This Month' / 'Last
+    Month', '2025' / '2026') pivoted to one row per group with p1_<m> / p2_<m> columns, which the wide
+    reader understands. 19 Nov: 'Why did installations drop last week?' came back as period x zone rows; with no
+    dates nothing was tested, the totals were left out as unsupported and the answer was one bare sentence."""
+    if not isinstance(df, pd.DataFrame) or len(df) < 4:
+        return df
+    labels = [c for c in df.columns if not pd.api.types.is_numeric_dtype(df[c])]
+    nums = [c for c in df.columns if c not in labels and pd.api.types.is_numeric_dtype(df[c])
+            and not _DELTA_RE.search(str(c)) and not re.search(r"(^|_)(id|rank|year)$", str(c), re.I)]
+    if len(labels) != 2 or not nums:
+        return df
+    for per in labels:
+        vals = [str(v).strip() for v in df[per].dropna().unique()]
+        if len(vals) != 2:
+            continue
+        a, b = vals
+        prev = curr = None
+        if all(re.fullmatch(r"(?:19|20)\d\d", v) for v in vals):
+            prev, curr = sorted(vals)
+        elif bool(_STRONG_PREV_RE.search(a)) != bool(_STRONG_PREV_RE.search(b)):
+            prev, curr = (a, b) if _STRONG_PREV_RE.search(a) else (b, a)
+        elif bool(_CURR_LABEL_RE.search(a)) != bool(_CURR_LABEL_RE.search(b)) \
+                and (_LAST_LABEL_RE.search(a) or _LAST_LABEL_RE.search(b)):
+            curr, prev = (a, b) if _CURR_LABEL_RE.search(a) else (b, a)
+        if prev is None:
+            continue
+        grp = next(c for c in labels if c != per)
+        key = df[per].astype(str).str.strip()
+        out = pd.DataFrame(index=pd.Index(sorted(df[grp].dropna().astype(str).unique()), name=grp))
+        for m in [_pick(nums, question)]:
+            vals_m = pd.to_numeric(df[m], errors="coerce")
+            for tag, name in (("p1", prev), ("p2", curr)):   # p1_ / p2_: _PREV_RE / _CURR_RE, no measure word eaten
+                out[f"{tag}_{m}"] = vals_m[key == name].groupby(df[grp][key == name].astype(str)).sum(min_count=1)
+        out = out.reset_index()
+        out.attrs["period_names"] = (prev, curr)
+        return out
+    return df
 
 
 def asked(question: str) -> bool:
@@ -184,6 +227,12 @@ def pair(question: str, df: pd.DataFrame | None, today: pd.Timestamp | None = No
         return None
     today = today or pd.Timestamp.now().normalize()
     rows, label, dates, nums = _split(df)
+    names = None
+    if dates is None:
+        wide = _labelled_periods(df, question)
+        if wide is not df:
+            names = wide.attrs.get("period_names")
+            rows, label, dates, nums = _split(wide)
     if dates is not None and label is not None and pd.api.types.is_numeric_dtype(rows[label]):
         dates = None
         label = next((c for c in rows.columns if not pd.api.types.is_numeric_dtype(rows[c])), None)
@@ -201,7 +250,8 @@ def pair(question: str, df: pd.DataFrame | None, today: pd.Timestamp | None = No
     both = both.apply(pd.to_numeric, errors="coerce")
     both = both.groupby(level=0).sum(min_count=1)
     measure = re.sub(_PREV_RE, "", str(p[0])).strip("_ ") or str(p[0])
-    return both, measure, label, str(p[0]), str(p[1]), None
+    p0, p1 = names or (str(p[0]), str(p[1]))
+    return both, measure, label, p0, p1, None
 
 
 def breakdown(question: str, df: pd.DataFrame | None, today: pd.Timestamp | None = None) -> str:

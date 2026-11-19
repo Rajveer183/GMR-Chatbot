@@ -5,6 +5,7 @@ Moved from gmr_agents/llm_pipeline.py unchanged.
 """
 
 from __future__ import annotations
+import itertools
 import re
 from datetime import datetime
 import pandas as pd
@@ -197,7 +198,9 @@ def _date_window(plan: dict, df: pd.DataFrame | None) -> str:
         lows, highs = [], []
         for node in root.find_all(exp.Between, exp.GTE, exp.GT, exp.LTE, exp.LT, exp.EQ):
             col = node.this
-            if not isinstance(col, exp.Column) or col.name.lower() not in _DATE_COLS:
+            # Any *_date column too: 19 Nov, O&M closed tickets filtered closed_date to the last 31 days and this note
+            # said 'no date filter -- ALL TIME', so the answer called a 31-day figure 'all time'.
+            if not isinstance(col, exp.Column) or not (col.name.lower() in _DATE_COLS or col.name.lower().endswith("_date")):
                 continue
             if isinstance(node, exp.Between):
                 lo, hi = node.args.get("low"), node.args.get("high")
@@ -238,6 +241,29 @@ def _date_window(plan: dict, df: pd.DataFrame | None) -> str:
             "may show only the first rows, so never infer the start or end date from the rows you see.")
 
 
+_TOTAL_COL_RE = re.compile(r"^(?:total|grand_total|total_\w+|\w+_total)$", re.I)
+
+
+def headline_column(df: pd.DataFrame | None) -> tuple[str, list[str]] | None:
+    """(total column, the columns it is the exact sum of) -- e.g. total = consumer + dtr + feeder.
+    19 Nov: 'MI progress for Varanasi this month' was answered as 9,011 (the consumer column, listed first)
+    instead of the total 9,265; the 'total' column was in the facts but nothing said it was the headline."""
+    if not isinstance(df, pd.DataFrame) or df.empty:
+        return None
+    nums = [c for c in df.columns if pd.api.types.is_numeric_dtype(df[c])]
+    for cand in [c for c in nums if _TOTAL_COL_RE.match(str(c)) and not _RATE_COL_RE.search(str(c))]:
+        others = [c for c in nums if c != cand and not _RATE_COL_RE.search(str(c)) and not _TOTAL_COL_RE.match(str(c))][:6]
+        target = pd.to_numeric(df[cand], errors="coerce").fillna(0)
+        if len(others) < 2 or not target.abs().sum():
+            continue
+        # The largest set of columns whose row-wise sum is the total (consumer + dtr + feeder, not sat_done too).
+        for size in range(len(others), 1, -1):
+            for parts in itertools.combinations(others, size):
+                if ((df[list(parts)].apply(pd.to_numeric, errors="coerce").fillna(0).sum(axis=1) - target).abs() < 0.5).all():
+                    return cand, list(parts)
+    return None
+
+
 def _result_facts(df: pd.DataFrame | None, max_cols: int = 4) -> str:
     """Highest / lowest item per numeric column, Total row excluded -- so 'which is lagging'
     never depends on the model reading the middle of a table (or mistaking Total for a row).
@@ -263,11 +289,18 @@ def _result_facts(df: pd.DataFrame | None, max_cols: int = 4) -> str:
     groups = [c for c in labels if c != label][:1] if period_col else []
     fmt = lambda v: str(int(v)) if float(v).is_integer() else f"{v:.4f}".rstrip("0").rstrip(".")
     lines = []
+    # A total column made of the other columns leads every list below and is named as the headline figure.
+    head = headline_column(rows if len(rows) else df)
+    numeric = [c for c in df.columns if pd.api.types.is_numeric_dtype(df[c])]
+    if head:
+        numeric = [head[0], *[c for c in numeric if c != head[0]]]
+        lines.append(f"- HEADLINE FIGURE = column {head[0]} ({' + '.join(map(str, head[1]))}); the overall count "
+                     f"(e.g. 'meters installed') is {head[0]}, the other columns are only its parts")
     if is_total.sum() == 1 and len(rows) >= 2:
         # The overall figure is the Total row, never the item that shares the place's name: 'agra
         # zone wise' once reported the AGRA zone row (193.96 days) as the Agra project (171.03).
         tot = df[is_total].iloc[0]
-        nums = [c for c in df.columns if pd.api.types.is_numeric_dtype(df[c]) and pd.notna(tot[c])][:8]
+        nums = [c for c in numeric if pd.notna(tot[c])][:8]
         lines.append("- OVERALL (Total row = the whole scope asked): "
                      + ", ".join(f"{c} {fmt(float(tot[c]))}" for c in nums))
         lines.append(f"- BREAKDOWN ITEMS ({len(rows)}; each is one part, never the overall): "
@@ -287,8 +320,8 @@ def _result_facts(df: pd.DataFrame | None, max_cols: int = 4) -> str:
         # No Total row: the overall figure is the sum of the items (counts / money only, never rates). 11 Nov: a
         # per-project revenue-at-risk table had no Total row and the answer quoted Agra's row (Rs 111.9 cr) as the
         # programme figure.
-        additive = [c for c in df.columns if pd.api.types.is_numeric_dtype(df[c])
-                    and (not _RATE_COL_RE.search(str(c))      # 'meters_older_than_90_days' is a count, not days
+        additive = [c for c in numeric
+                    if (not _RATE_COL_RE.search(str(c))      # 'meters_older_than_90_days' is a count, not days
                          or re.match(r"(?:meters|meter_count|tickets|consumers|complaints|installations)(?:_|$)", str(c), re.I))
                     and not re.search(r"pct|percent|rate|ratio|share|avg|average|mean|per_|_per", str(c), re.I)]
         for col in additive[:max_cols]:
@@ -303,7 +336,7 @@ def _result_facts(df: pd.DataFrame | None, max_cols: int = 4) -> str:
         for c in labels:
             blank &= df[c].isna() | df[c].astype(str).str.strip().str.lower().isin({"", "none", "nan", "total", "grand total"})
         per_period = df[is_total & ~blank]
-        for col in [c for c in df.columns if pd.api.types.is_numeric_dtype(df[c]) and not _RATE_COL_RE.search(str(c))][:max_cols]:
+        for col in [c for c in numeric if not _RATE_COL_RE.search(str(c))][:max_cols]:
             v = df.loc[blank, col].iloc[0] if blank.sum() == 1 else (
                 pd.to_numeric(per_period[col], errors="coerce").sum() if len(per_period) > 1 else None)
             if v is not None and pd.notna(v):
@@ -313,7 +346,7 @@ def _result_facts(df: pd.DataFrame | None, max_cols: int = 4) -> str:
             break
         body = part[~part[label].astype(str).str.strip().isin(partial)] if partial else part
         prefix = f"{key} " if key is not None else ""
-        for col in [c for c in df.columns if pd.api.types.is_numeric_dtype(df[c])][:max_cols]:
+        for col in [c for c in numeric][:max_cols]:
             # Sum over the periods asked for, so 'how many ... monthwise' can lead with the total.
             if period_col and len(part) > 1 and not _RATE_COL_RE.search(str(col)):
                 lines.append(f"- {prefix}{col}: total across the {len(part)} periods = {fmt(pd.to_numeric(part[col], errors='coerce').sum())}")

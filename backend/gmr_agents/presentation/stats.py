@@ -960,6 +960,17 @@ def analyse(question: str, df: pd.DataFrame | None, today: pd.Timestamp | None =
         if not isinstance(frame, pd.DataFrame) or len(frame) < 3:
             continue
         rows, label, dates, nums = _split(frame)
+        # Rows the query itself marks as not actual ('projected (June -> July trend)', 'actual (partial, 2-3 days)')
+        # are not history. 19 Nov: 'Forecast next month' fitted a line through the SQL's own September projection
+        # and the partial August, and quoted October (248,070) beside the table's September (242,710).
+        texts = [c for c in rows.columns if not pd.api.types.is_numeric_dtype(rows[c])]
+        if texts:
+            marked = rows[texts].astype(str).apply(
+                lambda s: s.str.contains(r"\b(?:projected|forecast\w*|estimated?|partial)\b", case=False, regex=True)
+            ).any(axis=1).to_numpy()
+            if marked.any() and (~marked).sum() >= 2:
+                rows = rows[~marked].reset_index(drop=True)
+                dates = dates[~marked].reset_index(drop=True) if dates is not None else None
         if dates is not None and dates.nunique() <= 1:
             # One date on every row (HES cards return MAX(data_date) AS data_month) labels the month -- the rows are
             # items, not a series. 16 Nov: 35 circles were collapsed into one 'period' and no correlation was computed.

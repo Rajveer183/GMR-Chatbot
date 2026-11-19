@@ -399,10 +399,44 @@ def relabel_stages(sql: str, df: pd.DataFrame) -> pd.DataFrame:
     return out
 
 
+def _blank(s: pd.Series) -> pd.Series:
+    return s.isna() | s.astype(str).str.strip().isin({"", "None", "nan", "NaT"})
+
+
+def drop_echo_subtotals(sql: str, df: pd.DataFrame) -> pd.DataFrame:
+    """ROLLUP over a column AND its own label (ROLLUP(EXTRACT(MONTH ..), TO_CHAR(.., 'Month'))) adds, per group, a
+    subtotal row with a blank label and the same numbers as the group's row. 19 Nov: 'add last year for
+    comparison' listed every month twice (once blank) and the chart drew a 'nan' bar. Blank-label rows whose
+    numbers equal the next or previous labelled row are dropped -- only when it happens 2+ times (the pattern
+    repeats per group; a lone blank row is the grand total, see relabel_total). Padded labels (TO_CHAR 'Month'
+    pads to 9 characters) are trimmed."""
+    if not isinstance(df, pd.DataFrame) or df.empty:
+        return df
+    labels = _labels(df)
+    out = df
+    padded = [c for c in labels if df[c].map(lambda v: isinstance(v, str) and v != v.strip()).any()]
+    if padded:
+        out = df.copy()
+        for c in padded:
+            out[c] = out[c].map(lambda v: v.strip() if isinstance(v, str) else v)
+    if len(out) < 4 or not labels or not re.search(r"\b(rollup|cube|grouping\s+sets)\b", sql or "", re.I):
+        return out
+    nums = [c for c in out.columns if c not in labels and pd.api.types.is_numeric_dtype(out[c])]
+    if not nums:
+        return out
+    blank = out[labels].apply(_blank).all(axis=1).tolist()
+    vals = out[nums].round(6).astype(object).where(out[nums].notna(), None).values.tolist()
+    echo = [i for i in range(len(out)) if blank[i] and any(
+        0 <= j < len(out) and not blank[j] and vals[j] == vals[i] for j in (i - 1, i + 1))]
+    if len(echo) < 2:
+        return out
+    return out.drop(index=out.index[echo]).reset_index(drop=True)
+
+
 def relabel(sql: str, df: pd.DataFrame) -> pd.DataFrame:
-    """Every Postgres result: unlabelled ROLLUP total -> 'Total' (first, so it is not taken
-    for stock), blank places -> in stock, raw meter types / stages -> dashboard names."""
-    return relabel_stages(sql, relabel_types(relabel_stock(sql, relabel_total(sql, df))))
+    """Every Postgres result: per-group echo subtotals dropped, unlabelled ROLLUP total -> 'Total' (first, so it
+    is not taken for stock), blank places -> in stock, raw meter types / stages -> dashboard names."""
+    return relabel_stages(sql, relabel_types(relabel_stock(sql, relabel_total(sql, drop_echo_subtotals(sql, df)))))
 
 
 def relabel_stock(sql: str, df: pd.DataFrame) -> pd.DataFrame:

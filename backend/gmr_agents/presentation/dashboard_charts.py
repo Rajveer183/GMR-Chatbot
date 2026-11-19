@@ -71,6 +71,19 @@ _RATE_RE = re.compile(r"%|\bpct\b|percent|\brate\b|productivity|per (?:team|tech
 # 'Installed Meters' per OEM, and 'SAT Done' on 'Installed Meters'.
 _WHOLE_RE = re.compile(r"\b(?:total|suppl(?:y|ied|ies)|inventory|received|eligible)\b|^escalated tickets$|"
                        r"^(?:installed(?: meters)?|meters installed)$", re.I)
+# Series that are the same measure in different periods ('2025 Installs' / '2026 Installs', 'Last Week' /
+# 'Week Before') are compared side by side, never stacked. 19 Nov: 'Add last year for comparison' stacked
+# 2025 on 2026 into one column per month.
+_PERIOD_TOKEN_RE = re.compile(r"(?<!\d)(?:19|20)\d{2}(?!\d)|\b(?:this|last|previous|prev|current|prior|same)\s+"
+                              r"(?:week|month|year|quarter|period|fy)\b|\b(?:week|month|year) before\b", re.I)
+
+
+def period_series(names: list) -> bool:
+    """Two or more series, each naming a different period."""
+    toks = [_PERIOD_TOKEN_RE.search(str(n or "")) for n in names]
+    return len(names) > 1 and all(toks) and len({t.group(0).lower() for t in toks}) == len(names)
+
+
 # Geography / organisation only -- seen live: x = 'technician_remark' counted as a place, and the
 # escalations-by-remark donut became bars.
 _GEO_RE = re.compile(r"project|discom|zone|circle|division|cluster|warehouse|\boem\b|vendor|\bsku\b|region", re.I)
@@ -290,7 +303,8 @@ def shape(kpi: str, planned: str, cats: list[str], series: list[dict], x_alias: 
     # seen live 27 Oct, Agra's and Kashi's monthly productivity were stacked into one column per month.
     nested = k > 1 and (kpi in ("sat_invoice_funnel", "mi_productivity", "monthly_productivity", "om_productivity")
                         or any(_WHOLE_RE.search(s["name"]) for s in bars)
-                        or all(_RATE_RE.search(s["name"]) for s in bars))
+                        or all(_RATE_RE.search(s["name"]) for s in bars)
+                        or period_series([s["name"] for s in bars]))
 
     if planned == "radial" and k == 1 and not rates and n <= 4 and all(0 <= v <= 100 for v in bars[0]["data"]):
         ctype = "radial"                                   # the dashboard's utilization gauge

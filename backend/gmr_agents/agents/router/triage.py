@@ -436,7 +436,10 @@ _TECHNICAL_RES = (
         r"|\bimbalanced (?:half[- ]hours|days|blocks)\b|\b3[- ]sigma\b"
         r"|\bimbalance\b[^?]*\b(?:improv\w*|drop\w*|fell|reduc\w*|30 (?:points|%))|\bimbalance (?:details|of meter)\b)",
         re.I | re.S)),
-    ("mdm_power_factor", re.compile(r"\bpower[- ]factor\b|\bpf\b|\bkvah\b|\blagging\b|\bleading pf\b|\bbelow 0?\.9\b", re.I)),
+    # 'lagging' alone is WFM's 'behind' (19 Nov: 'Which one is lagging?' after a Varanasi MI-progress breakdown was
+    # sent to the PF cards and refused) -- only 'lagging' + a PF / reactive word is the power-factor sense.
+    ("mdm_power_factor", re.compile(r"\bpower[- ]factor\b|\bpf\b|\bkvah\b|\blagging (?:reactive|kvarh?|current|load)\b"
+                                    r"|\bleading pf\b|\bbelow 0?\.9\b", re.I)),
     ("mdm_hidden_outage", re.compile(
         r"\bhidden (?:outage|power)|\boutages? (?:not|never) (?:recorded|logged|reported)|\b(?:unrecorded|unlogged|unreported) (?:outage|power cut)"
         r"|\b(?:outages?|power cuts?)\b[^?]*\bnobody (?:logged|recorded|reported)|\bblock[- ]?load gap|\babnormal current"
@@ -621,6 +624,7 @@ def multi_card_tables(text: str, topic: str) -> tuple[list[str], list[str]]:
 
 
 _WFM_WORDS_RE = re.compile(r"\b(?:tickets?|complaints?|install\w*|sat\b|invoic\w*|stock|technicians?|o&m|journey|"
+                           r"mi (?:progress|productivity)|"
                            r"escalat\w*|discom (?:officer|supervisor)s?|"
                            r"(?<!lose )(?<!lost )(?<!losing )supply|warehouse|replac\w*|defect\w*)", re.I)
 
@@ -779,7 +783,11 @@ side kar karo do dikhao batao sab overall only just more detail details view see
 consumer consumers dt dtr feeder feeders meter meters type types wise? category-wise zone-wise project-wise
 has have had many much get got there their there's can could would should will be been being with
 english hindi hinglish language mein me main explain samjhao
+contributed contribute contributes contributing contribution most least biggest largest smallest drove drives
+driving caused causing responsible behind mainly
 """.split())
+# ^ 'Which feeder contributed most?' after 'Why did installations drop last week?' (19 Nov) counted 'contributed'
+# / 'most' as its own measure, so nothing was carried and it was answered as MDM feeder energy loss.
 
 
 def _content_words(text: str) -> set[str]:
@@ -932,6 +940,10 @@ _VAGUE_CUES = (
                 r"\bkaisa chal\w*\b|\bkaise chal\w*\b", re.I),
      "installation progress, SAT completion, technician productivity, open O&M complaints or Low PF meters -- and "
      "for which project or zone"),
+    # A follow-up with nothing to follow. 19 Nov: a new chat's 'And for Kashi?' was answered as Kashi's revenue
+    # receivables (a guessed KPI); 'What about yesterday?' as installations.
+    (re.compile(r"^\s*(?:and|also|what about|how about|same (?:for|in)|now (?:for|in))\b", re.I),
+     "installation progress, SAT completion, stock, open O&M complaints or revenue receivables"),
 )
 
 _PARTICULAR_RE = re.compile(r"\b(?:a|one|some|any|certain)\s+(?:particular|specific|certain|given|single)\s+"

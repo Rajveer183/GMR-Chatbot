@@ -348,7 +348,24 @@ def _clean_sql(raw: Any) -> str:
                    f"WHERE month_date >= DATE '{m.group('since') or '2026-06-01'}' GROUP BY month_date "
                    "HAVING COUNT(DISTINCT data_date) >= 10) c)"), text)
     text = _band_total_without_rollup(text)
+    text = _total_first_limit(text.rstrip(";").strip())
     return text.rstrip(";").strip()
+
+
+_TOTAL_FIRST_LIMIT_RE = re.compile(r"\bORDER\s+BY\s+GROUPING\s*\([^)]*\)\s+DESC\b[^;]*?\bLIMIT\s+(\d+)\s*$",
+                                   re.IGNORECASE | re.S)
+
+
+def _total_first_limit(text: str) -> str:
+    """A ROLLUP Total sorted first takes one LIMIT slot: 'top 5' showed the Total and 4 rows, 'only the top zone'
+    (LIMIT 1) the Total alone (19 Nov). LIMIT n -> n + 1 keeps the Total AND the n rows asked for -- by code, so no
+    repair round."""
+    if not re.search(r"\b(?:rollup|grouping\s+sets|cube)\b", text, re.IGNORECASE):
+        return text
+    m = _TOTAL_FIRST_LIMIT_RE.search(text)
+    if not m or int(m.group(1)) > 100:
+        return text
+    return text[:m.start(1)] + str(int(m.group(1)) + 1) + text[m.end(1):]
 
 
 _BAND_TOTAL_RE = re.compile(r"\bNULL\s*,\s*'Total'\s*\)", re.IGNORECASE)
@@ -683,6 +700,13 @@ def _widened_tables(triage: dict) -> list[str]:
         for sql in [ex.get("sql") or ""] + [x.get("sql") or "" for x in ex.get("extra") or []]:
             names += _TABLE_REF_RE.findall(sql)
     have = {t.lower() for t in triage["tables"]}
-    return [t for t in dict.fromkeys(n.lower() for n in names) if t not in have]
+    out = [t for t in dict.fromkeys(n.lower() for n in names) if t not in have]
+    if not triage.get("cross_domain") and triage.get("domain") in ("wfm", "mdm"):
+        # Only the planning catalog's own tables: the SQL guard rejects any other system's table, so offering one
+        # (19 Nov: gold_mi_installation_day_agg from a SAT example on an MDM-routed question) wastes the retry.
+        from gmr_agents.catalog.catalog import get_catalog
+        own = {t.table_name.lower() for t in get_catalog(triage["domain"]).list_tables()}
+        out = [t for t in out if t in own] if own else out
+    return out
 
 _PLAN_SYSTEM += "\n- " + injection.UNTRUSTED_RULE

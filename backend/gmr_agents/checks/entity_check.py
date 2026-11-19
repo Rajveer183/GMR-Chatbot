@@ -1517,6 +1517,35 @@ def check(question: str, sql_texts: list[str], columns: set[str] | None = None, 
                     problems.append(f"the ROLLUP total row has {col} = NULL: label it first -- CASE WHEN GROUPING({col}) = 1 "
                                     f"THEN 'Total' WHEN {col} IS NULL OR {col} = '' THEN 'Unmapped' ELSE ... END, or the "
                                     "total is shown as 'Unmapped' and counted twice")
+    # (A top-N LIMIT eaten by a Total-first ROLLUP row is fixed by code: planner._total_first_limit.)
+    # Last year's rows shifted twice: 19 Nov, 'add last year for comparison' moved the 2025 months forward a year in
+    # the CTE (period_start + INTERVAL '1 year' AS month) AND joined ON p.month = c.month + INTERVAL '1 year' -- no
+    # row matched, COALESCE gave 0 and the answer said '0 meters installed in the same period last year'.
+    for s in sql_texts:
+        sl = (s or "").lower()
+        for sign, alias in re.findall(r"([+-])\s*interval\s*'1 year'\s*\)?\s*(?:::\s*date\s*)?as\s+(\w+)", sl):
+            esc = re.escape(sign)
+            if re.search(rf"\bon\b[^;]*?\b\w+\.{alias}\s*=\s*\(?\s*\w+\.\w+\s*{esc}\s*interval\s*'1 year'", sl) or \
+                    re.search(rf"\bon\b[^;]*?\(?\s*\w+\.\w+\s*{esc}\s*interval\s*'1 year'\s*\)?(?:::date)?\s*=\s*\w+\.{alias}\b", sl):
+                problems.append(f"last year's rows are shifted by a year twice ('{alias}' already adds the year, and the "
+                                "JOIN adds it again), so no row matches and every last-year value becomes 0: join ON "
+                                f"p.{alias} = c.<month> (shift once)")
+                break
+        else:
+            continue
+        break
+    # 'Meters with low PF for 3+ months' is a per-METER condition. 19 Nov: 'which Varanasi zone is worst' grouped by
+    # zone with HAVING COUNT(DISTINCT data_date) >= 3 -- that tests the zone (always true), not each meter.
+    for s in sql_texts:
+        sl = (s or "").lower()
+        m = re.search(r"\bgroup\s+by\s+([^()]{1,120}?)\s+having\s+count\s*\(\s*distinct\s+(?:\w+\.)?(?:data_date|month_date)\s*\)", sl)
+        if m and "meter_no" in sl and "meter_no" not in m.group(1) \
+                and re.search(r"\b(?:zone|circle|division|project|cluster|discom\w*|category|severity)\b", m.group(1)) \
+                and not re.search(r"\b(?:month_date|data_date)\b", m.group(1)):
+            problems.append("'for N+ months' is per meter: count months per meter first -- (SELECT meter_no, zone FROM ... "
+                            "GROUP BY meter_no, zone HAVING COUNT(DISTINCT data_date) >= N) -- then count those meters "
+                            "by zone; a HAVING on the zone groups tests the zone, not the meter")
+            break
     # dt_loading holds one row per DT x loading band: counting rows (COUNT_IF / COUNT(*)) counts bands, not DTs.
     # Live 10 Nov: 'DTs that peaked above rating per project' said Kashi 648 for 85.
     for s in sql_texts:
@@ -1571,7 +1600,11 @@ def check(question: str, sql_texts: list[str], columns: set[str] | None = None, 
                     question.lower())
     if top:
         n = _NUM_WORDS.get(top.group(1)) or int(top.group(1))
-        if not re.search(rf"(limit\s+{n}\b|<=\s*{n}\b|<\s*{n + 1}\b)", low):
+        # A ROLLUP Total sorted first takes a slot: LIMIT n + 1 = Total + the n asked for (planner._total_first_limit).
+        total_first = bool(re.search(r"\border\s+by\s+grouping\s*\([^)]*\)\s+desc\b", low)
+                           and re.search(r"\b(?:rollup|grouping\s+sets|cube)\b", low))
+        if not re.search(rf"(limit\s+{n}\b|<=\s*{n}\b|<\s*{n + 1}\b)", low) \
+                and not (total_first and re.search(rf"\blimit\s+{n + 1}\b", low)):
             problems.append(f"the question asks for {n} items but the SQL has no LIMIT {n}")
 
     # 'Last month' is the previous calendar month. Live 27 Oct: 'which technician closed the most complaints in agra

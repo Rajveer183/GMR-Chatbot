@@ -139,6 +139,8 @@ def _chart_fallback(ctype: str, cats: list[str], series: list[dict], y2_count: i
     # adds it twice: zone-wise supplied + installed was drawn as an '11,37,105 meters' bar.
     if ctype in _STACKED and any(_WHOLE_SERIES_RE.search(str(s.get("name", ""))) for s in series):
         return ("grouped_bar" if n <= 12 else "line"), "a total is not a part to stack"
+    if ctype in _STACKED and dashboard_charts.period_series([s.get("name") for s in series]):
+        return ("grouped_bar" if n <= 12 else "line"), "periods are compared, not added"
     if ctype == "heatmap" and n < 2:
         return "bar", "heatmap needs 2+ columns"
     long_names = max((len(c) for c in cats), default=0) > 14
@@ -354,9 +356,16 @@ def _blocks(plan: dict, result: dict) -> dict:
                                                                             regex=True)).any(axis=1)] if texts else df.iloc[0:0]
         if len(proj) == 1:
             head, head_label = proj.iloc[0], "Projected "
+    # A pure time series (one row per day / month, nothing else): a count's card is the sum over the periods, not
+    # the first period. 19 Nov: 'MI progress for Varanasi this month' (daily rows) showed 'Total 15' -- 1 Nov alone
+    # -- while the month's total was 9,265. Rates / stock / cumulative columns keep the first-row behaviour.
+    from gmr_agents.presentation import analyst  # lazy: analyst imports this module
+    series = (len(df) > 1 and not head_label
+              and [c for c in df.columns if not pd.api.types.is_numeric_dtype(df[c])] == [analyst._partial_periods(df)[0]])
     for alias in [m["alias"] for m in plan["metrics"]]:
         if alias in df.columns:
-            value = _number(head[alias])
+            additive = series and pd.api.types.is_numeric_dtype(df[alias]) and not analyst._RATE_COL_RE.search(str(alias))
+            value = _number(pd.to_numeric(df[alias], errors="coerce").sum() if additive else head[alias])
             label = _label(plan, alias)
             label = label if not head_label or re.search(r"project|forecast", label, re.I) else head_label + label
             kpis.append({"label": label, "value": value if value is not None else 0.0,
