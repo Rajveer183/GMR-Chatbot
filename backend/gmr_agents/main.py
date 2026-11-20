@@ -527,9 +527,13 @@ def _feeder_compare_answer(question: str, req: dict, trace_id: str, session_id: 
     if built.get("panel"):
         response["feeder_compare"] = built["panel"]   # drawn by the frontend's FeederComparePanel
     meter = built.get("meter")
+    panel = built.get("panel") or {}
     context = {"domain": "mdm", "answer_kind": "feeder_compare", "topics": ["mdm_autoindexing"],
                "filters": [f"meter_no = '{meter}'"] if meter else [], "meter_no": meter,
-               "kpis": [f"{k['label']}: {k['formatted_value']}" for k in built["kpis"]]}
+               "kpis": [f"{k['label']}: {k['formatted_value']}" for k in built["kpis"]],
+               # the month shown + the meter's audited months: 'What about last month?' = the audit month before
+               "audit_month": panel.get("month"),
+               "audit_months": [m["month"] for m in panel.get("months") or [] if m.get("month")]}
     append_jsonl("questions", {
         "at": datetime.now(timezone(timedelta(hours=5, minutes=30))).strftime("%Y-%m-%dT%H:%M:%S"),
         "trace_id": trace_id, "session_id": session_id, "question": question, "kind": "feeder_compare",

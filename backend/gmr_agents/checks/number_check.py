@@ -282,6 +282,17 @@ _ID_COL = re.compile(r"(?:^|_)(?:id|no|num|number|code|serial|account|acct|phone
                      re.I)
 
 
+_COUNT_BEFORE_RE = re.compile(r"[:=]\s*$")
+_COUNT_AFTER_RE = re.compile(r"\s+(?:meters?|units?|consumers?|tickets?|complaints?|installations?|feeders?|dtrs?|"
+                             r"transformers?|readings?|kwh|cases?|batches?|items?)\b", re.I)
+
+
+def _count_context(text: str, m: re.Match) -> bool:
+    """A 1900-2100 figure that is a count, not a year: right after 'label:' / '=' or followed by a unit word.
+    20 Nov: month-wise list 'Jun 2025: 1958' stayed bare among grouped values."""
+    return bool(_COUNT_BEFORE_RE.search(text[:m.start()]) or _COUNT_AFTER_RE.match(text, m.end()))
+
+
 def group_digits(text: str, frames: list) -> str:
     if not text or not _BARE_INT.search(text):
         return text
@@ -300,7 +311,9 @@ def group_digits(text: str, frames: list) -> str:
 
     def fix(m: re.Match) -> str:
         n = int(m.group(1))
-        if 1900 <= n <= 2100 or n not in values:
+        if n not in values:
             return m.group(0)
+        if 1900 <= n <= 2100 and not _count_context(text, m):
+            return m.group(0)   # a year, unless it is plainly a count ('Jun 2025: 1958', '1958 meters')
         return f"{n:,}"
     return _BARE_INT.sub(fix, text)

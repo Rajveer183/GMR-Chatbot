@@ -16,7 +16,7 @@ from sqlglot import exp
 from gmr_agents.presentation import dashboard_charts
 from gmr_agents.supervisor import context
 from gmr_agents.supervisor.state import AgentState
-from gmr_agents.guards import idempotency, limits, sql_validator
+from gmr_agents.guards import idempotency, limits, serial_lookup, sql_validator
 from gmr_agents.catalog import business_rules
 from gmr_agents.catalog.catalog import get_catalog
 from gmr_agents.execution.tools import calling, registry
@@ -291,6 +291,11 @@ def validate_node(state: AgentState, config: RunnableConfig) -> dict[str, Any]:
         return {"last_error": None, "step_count": _tick(state),
                 "validated": {"key": key, "tool": "calculator", "sql": f"calculator: {expr}", "reuse": False}}
     sql = str((call.get("args") or {}).get("sql") or "") if isinstance(call.get("args"), dict) else ""
+    fixed = serial_lookup.fix(sql)
+    if fixed != sql:
+        # A meter serial filtered on consumer_id (digits only) can never match: meter_no by code, before the guard.
+        call = {**call, "args": {**call["args"], "sql": fixed}}
+        sql = fixed
 
     # Plumbing (tools/calling.py): parse -> allowlist lookup -> Pydantic args -> the tool's
     # own validator (run_sql: the SQL guard). Any failure comes back as a structured result.

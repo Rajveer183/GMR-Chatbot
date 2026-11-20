@@ -18,7 +18,7 @@ import logging
 from gmr_agents.agents.common import _ALL_TIME_LEAD_RE, _ANSWER_ROWS, _PAST_DATE_RE, _PERIOD_RE, _emit, _step, _today
 from gmr_agents.agents.followups import _followup_options, _options_text, _pick_followups
 from gmr_agents.presentation.analyst import _clear_date, _date_window, _month_to_date, _partial_periods, month_spans, _stated_figures, _result_facts, _result_preview, _short_weeks
-from gmr_agents.presentation.blocks import _tidy_ts
+from gmr_agents.presentation.blocks import _tidy_ts, month_words
 from gmr_agents.presentation import drivers as _drivers, investigate as _investigate, stats as _stats
 
 log = logging.getLogger("gmr_agents.llm_pipeline")  # same logger name as before the split
@@ -417,14 +417,20 @@ def _write_answer(state: dict, triage: dict, plan: dict, result: dict, extras: l
             _emit(state, "summary_replace", text=summary)
     # Bare result counts ('KASHI 15087') grouped like the tables (15,087) -- code only, exact result values only.
     grouped = number_check.group_digits(summary, frames)
+    # Month-column dates written as '2026-10-01' -> 'Oct 2026', like the table (20 Nov). Before the bracket step, so
+    # a partial month written as a date still gets its days.
+    grouped = month_words(grouped, frames)
     # A partial month of the window carries its days, as in the table: 'Nov 2026 (partial)' / a bare 'Nov 2026' ->
     # 'Nov 2026 (1-19 Nov)' at its first mention (user, 20 Nov). Code only; the model wrote '(partial)' in the retest.
     grouped = _bracket_partial_months(grouped, spans)
+    # Column names copied into the text ('installed_not_sat 184,657') -> the table's words (20 Nov). Code only.
+    grouped = wording_check.plain_columns(grouped, frames, plan.get("labels"))
     if grouped != summary:
         summary = grouped
         if state.get("emit") is not None:
             _emit(state, "summary_replace", text=summary)
-    insights = [number_check.group_digits(i, frames) for i in insights]
+    insights = [wording_check.plain_columns(month_words(number_check.group_digits(i, frames), frames), frames,
+                                            plan.get("labels")) for i in insights]
     # Sources of a data answer: built by code from what actually ran (never by the LLM).
     # The refresh time is the WFM gold snapshot's -- it says nothing about MDM tables.
     refreshed = answer_cache.current_version().split("|")[0] if state.get("agent") != "mdm" else ""

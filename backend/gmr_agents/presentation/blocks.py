@@ -97,6 +97,30 @@ def month_cols(df: pd.DataFrame) -> set[int]:
     return out
 
 
+_DASH = "[-‐‑‒–]"   # models write '2024‑06' with a non-breaking hyphen too
+
+
+def month_words(text: str, frames: list) -> str:
+    """Month values of RESULT's month columns written into the answer as dates ('2026-10-01', '2024‑06') ->
+    'Oct 2026', as the table and chart show them (user, 20 Nov). Only values of a month column (month_cols) are
+    touched; a day date (2026-10-15, or a lone install_date) stays as written."""
+    if not text or not re.search(r"\d{4}" + _DASH + r"\d{2}", text):
+        return text
+    months: set[tuple[int, int]] = set()
+    for df in frames:
+        if not isinstance(df, pd.DataFrame) or df.empty:
+            continue
+        for i in month_cols(df):
+            for v in df.iloc[:, i]:
+                m = _MONTH_START_RE.match(str(_cell(v)))
+                if m:
+                    months.add((int(m.group(1)), int(m.group(2))))
+    for y, mo in months:
+        text = re.sub(rf"(?<![\w.]){y}{_DASH}{mo:02d}(?:{_DASH}01)?(?!\w|{_DASH}?\d)",
+                      f"{datetime(y, mo, 1):%b %Y}", text)
+    return text
+
+
 def _month_label(text: Any) -> Any:
     m = _MONTH_START_RE.match(text) if isinstance(text, str) else None
     return f"{datetime(int(m.group(1)), int(m.group(2)), 1):%b %Y}" if m else text

@@ -828,6 +828,14 @@ def _technical_problems(question: str, sql_texts: list[str]) -> list[str]:
     return problems
 
 
+def _calendar_last_month_pin(low: str) -> bool:
+    """data_date pinned to the calendar month before today's (IST) -- 'last month' counted from today."""
+    first = _ist_today().replace(day=1)
+    prev = (first.replace(year=first.year - 1, month=12) if first.month == 1
+            else first.replace(month=first.month - 1))
+    return bool(re.search(rf"\bdata_date\s*(?:=|>=)\s*date\s*'{prev.isoformat()}'", low))
+
+
 def _mapping_problems(question: str, sql_texts: list[str]) -> list[str]:
     """Consumer-to-feeder mapping audit (the dashboard's mapping_audit / _feeder / _summary tables)."""
     problems: list[str] = []
@@ -848,8 +856,10 @@ def _mapping_problems(question: str, sql_texts: list[str]) -> list[str]:
                             "(the audit month), not the latest month")
         # The audit is monthly runs (June-August 2026): a calendar 'last month' from today has no rows. 19 Nov:
         # 'Compare it with its feeder' (August) -> 'What about last month?' pinned October and said 'no data'.
+        # 20 Nov retest: the model wrote the calendar month itself (data_date = DATE '2026-10-01') -- same miss.
         if not named and re.search(r"\b(?:last|previous|prev|prior|pichl[ea]) (?:month|mahin[ea])\b|\bmonth before\b",
-                                   question, re.I) and re.search(r"\bcurrent_date\b|\bnow\(\)|current_timestamp", low):
+                                   question, re.I) and (re.search(r"\bcurrent_date\b|\bnow\(\)|current_timestamp", low)
+                                                        or _calendar_last_month_pin(low)):
             problems.append("the mapping audit is a monthly run (June, July, August 2026): 'last / previous month' = the "
                             "audit month before the latest -- data_date = (SELECT MAX(data_date) FROM "
                             "hes_gold.mapping_audit_summary WHERE data_date < (SELECT MAX(data_date) FROM "
@@ -1671,6 +1681,7 @@ def check(question: str, sql_texts: list[str], columns: set[str] | None = None, 
     problems += _week_window_problems(f"{asked_words or ''} {question}", low)
     problems += _last_n_months_problems(f"{asked_words or ''} {question}", low)
     problems += _snapshot_history_problems(low)
+    problems += _non_sat_label_problems(low)
     problems += _receivables_month_problems(low)
     problems += _entity_grain_problems(asked.get("breakdown_by") or [], low, cols)
     problems += _all_projects_problems(asked_words or "", low)
@@ -2001,6 +2012,59 @@ def _receivables_month_problems(low: str) -> list[str]:
                 "project ORDER BY created_at DESC, id DESC) = 1) -- never filter created_at to the month (a project that "
                 "has not filed this month drops out)"]
     return []
+
+
+_ELIGIBLE_ALIAS_RE = re.compile(r"\bas\s+\"?\w*eligib\w*", re.I)
+_INSTALL_FROM_RE = re.compile(r"\bfrom\s+(?:public\.)?gold_mi_installation_(?:day|month)_agg\b(?:\s+(?:as\s+)?(?!where\b)\w+)?"
+                              r"\s+where\b")
+_CLAUSE_END_RE = re.compile(r"\b(?:group\s+by|order\s+by|limit|union|having)\b")
+
+
+def _install_where_clauses(low: str) -> list[str]:
+    """The WHERE text of each SELECT that reads gold_mi_installation_*_agg directly, up to its GROUP BY / ORDER BY
+    / LIMIT / UNION or the parenthesis that closes its subquery."""
+    out = []
+    for m in _INSTALL_FROM_RE.finditer(low):
+        i, depth = m.end(), 0
+        while i < len(low):
+            ch = low[i]
+            if ch == "(":
+                depth += 1
+            elif ch == ")":
+                depth -= 1
+                if depth < 0:
+                    break
+            elif ch == ";" or (depth == 0 and _CLAUSE_END_RE.match(low, i)):
+                break
+            i += 1
+        out.append(low[m.end():i])
+    return out
+
+
+def _non_sat_label_problems(low: str) -> list[str]:
+    """is_non_sat_pending = every installed meter without SAT (eligible + not yet due). 20 Nov: 'Just the first
+    one, month-wise.' (Kashi pending SAT) summed it per installation month as eligible_pending_sat -- 184,652, the
+    installed-not-SAT figure; the eligible pending card says 75,067."""
+    problems = []
+    # 20 Nov retest: month-wise installed-not-SAT read the installation table with the installation filters
+    # (NOT is_replacement, has_meter_serial, progress_category) -- its months added up to 170,356 right after the
+    # answer said 184,657. The SAT snapshot counts replacements and every row: sat_stage IS NULL alone matches it.
+    # Only the installation table's own WHERE: a FILTER column or another subquery (pace, MI progress) is untouched.
+    if any(re.search(r"\b(?:sat_stage\s+is\s+null|is_non_sat_pending)\b", w)
+           and re.search(r"\bnot\s+(?:\w+\.)?is_replacement\b|\bis_replacement\s*=\s*false\b|\bhas_meter_serial\b|"
+                         r"\bprogress_category\s+is\s+not\s+null\b", w)
+           for w in _install_where_clauses(low)):
+        problems.append("installed-not-SAT by installation month must add up to the SAT snapshot's figure, which counts "
+                        "replacements and every row: filter sat_stage IS NULL only -- drop NOT is_replacement, "
+                        "has_meter_serial and progress_category IS NOT NULL")
+    if "is_non_sat_pending" not in low or not _ELIGIBLE_ALIAS_RE.search(low):
+        return problems
+    if "sat_eligibility_config" in low or "eligibility_cutoff" in low:
+        return problems
+    return problems + ["is_non_sat_pending counts every installed meter without SAT (eligible pending + not yet due), so the "
+            "column is not eligible pending: name it installed_not_sat, or keep eligible meters only with "
+            "period_start <= the project's eligibility_cutoff_date (JOIN public.sat_eligibility_config c ON "
+            "LOWER(c.project) = LOWER(project)) -- and give both when month-wise pending SAT is asked"]
 
 
 def _snapshot_history_problems(low: str) -> list[str]:

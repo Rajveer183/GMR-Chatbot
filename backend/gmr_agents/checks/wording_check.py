@@ -197,3 +197,32 @@ def drop_sentences(text: str, phrases: list[str]) -> str:
     parts = re.split(r"(?<=[.!?])\s+(?=[A-Z*(\d])", text or "")
     keep = [p for p in parts if not any(ph in p for ph in phrases)]
     return " ".join(keep).strip() if keep else text
+
+
+_ACRONYMS = {"sat", "mi", "dt", "dtr", "pf", "kwh", "kvah", "om", "oem", "hes", "mdm", "pmpm", "dcu", "id"}
+
+
+def plain_columns(text: str, frames: list, labels: dict | None = None) -> str:
+    """Result column names written into the answer ('KASHI: installed_not_sat 184,657, eligible_pending_sat
+    75,067' -- live 20 Nov) -> the table's words ('installed not SAT 184,657'). Only exact snake_case column
+    names of RESULT are touched."""
+    if not text or "_" not in text:
+        return text
+    cols = {str(c) for df in frames if isinstance(df, pd.DataFrame) for c in df.columns if "_" in str(c)}
+    if not cols:
+        return text
+    labels = labels or {}
+
+    def words(col: str) -> str:
+        if labels.get(col):
+            return str(labels[col])
+        return " ".join("%" if w.lower() == "pct" else w.upper() if w.lower() in _ACRONYMS else w
+                        for w in col.split("_") if w)
+
+    def sub(m: re.Match) -> str:
+        found = m.group(0)
+        col = next(c for c in cols if c.lower() == found.lower())
+        out = words(col)
+        return out[:1].upper() + out[1:] if found[:1].isupper() else out
+    pattern = r"(?<![\w.])(?:" + "|".join(re.escape(c) for c in sorted(cols, key=len, reverse=True)) + r")(?![\w])"
+    return re.sub(pattern, sub, text, flags=re.I)

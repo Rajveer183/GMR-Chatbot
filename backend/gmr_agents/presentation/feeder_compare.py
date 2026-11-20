@@ -57,6 +57,12 @@ _FOLLOW_RE = re.compile(r"\bfeeders?\b|\bsub[- ]?stations?\b", re.I)
 
 _MONTHS = {m: i for i, m in enumerate(["jan", "feb", "mar", "apr", "may", "jun", "jul", "aug", "sep", "oct", "nov", "dec"], 1)}
 _MONTH_RE = re.compile(r"\b(jan|feb|mar|apr|may|jun|jul|aug|sep|sept|oct|nov|dec)[a-z]*\.?(?:\s*[-,']?\s*(20\d\d|\d\d))?\b", re.I)
+# A follow-up that is only a period: 'What about last month?', 'And July?', 'previous month', 'for June 2026'.
+_PERIOD_ONLY_RE = re.compile(
+    r"(?:(?:ok|okay|and|now|then|so)[,\s]+)*(?:(?:what|how) about|same for|show|and|for|in)?\s*(?:the\s+)?"
+    r"(?:(?:last|previous|prev|prior|pichl[ea])\s+(?:month|mahin[ea])|(?:the\s+)?month before"
+    r"|(?:jan|feb|mar|apr|may|jun|jul|aug|sep|sept|oct|nov|dec)[a-z]*\.?(?:\s*[-,']?\s*(?:20\d\d|\d\d))?)"
+    r"(?:\s+(?:then|instead|too))?\s*[?.!]*", re.I)
 _VERDICT_TEXT = {
     "CONFIRMED": "the declared feeder matches the outage evidence -- the tagging is correct",
     "REASSIGN": "the outage evidence points to another feeder -- the consumer should be re-tagged",
@@ -73,10 +79,49 @@ def _serial(text: str) -> str | None:
     return None
 
 
+def _shown_month(turn: dict) -> date | None:
+    """The audit month a feeder-comparison turn showed: its context, else the 'mapping audit Aug 2026' line."""
+    ctx = turn.get("context") or {}
+    if ctx.get("audit_month"):
+        return date.fromisoformat(str(ctx["audit_month"])[:7] + "-01")
+    m = re.search(r"mapping audit ([A-Z][a-z]{2}) (20\d\d)", turn.get("summary") or "")
+    return date(int(m.group(2)), _MONTHS[m.group(1).lower()], 1) if m and m.group(1).lower() in _MONTHS else None
+
+
+def _period_followup(q: str, prior_turns: list[dict] | None, today: date | None) -> dict | None:
+    """'What about last month?' / 'And July?' straight after a feeder comparison: the same consumer, that audit
+    month. 'Last / previous month' = the audit month before the one shown (the audit is a monthly run -- a month
+    counted back from today has no rows). 20 Nov retest: the pipeline pinned October and dropped the consumer."""
+    if not _PERIOD_ONLY_RE.fullmatch((q or "").strip()) or not prior_turns:
+        return None
+    last = prior_turns[-1]
+    ctx = last.get("context") or {}
+    if ctx.get("answer_kind") != "feeder_compare" or not ctx.get("meter_no"):
+        return None
+    month = None
+    for m in _MONTH_RE.finditer(q):
+        word = m.group(1).lower()[:3]
+        y = m.group(2)
+        month = date((2000 + int(y) if len(y) == 2 else int(y)) if y else (today or _ist_today()).year, _MONTHS[word], 1)
+        break
+    if month is None:
+        shown = _shown_month(last)
+        if shown is None:
+            return None
+        audited = sorted(date.fromisoformat(f"{a}-01") for a in (ctx.get("audit_months") or []))
+        earlier = [a for a in audited if a < shown]
+        month = earlier[-1] if earlier else (shown.replace(year=shown.year - 1, month=12) if shown.month == 1
+                                             else shown.replace(month=shown.month - 1))
+    return {"meter": ctx["meter_no"], "consumer_id": None, "month": month}
+
+
 def request(question: str, prior_turns: list[dict] | None = None, today: date | None = None) -> dict | None:
     """{meter, consumer_id, month} when the question asks for one consumer's feeder mapping / substation feeder
     comparison; None otherwise. No query here."""
     q = question or ""
+    follow = _period_followup(q, prior_turns, today)
+    if follow is not None:
+        return follow
     # Only when a COMPARISON is asked (user, 16 Nov): 'which feeder is X on' / 'mapping of X' / 'why was X
     # reassigned' get just what they ask, from the normal pipeline.
     if not _COMPARE_ASK_RE.search(q):
