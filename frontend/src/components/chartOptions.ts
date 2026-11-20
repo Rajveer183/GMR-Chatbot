@@ -34,7 +34,7 @@ import type { ApexOptions } from "apexcharts";
 import type { AIChartSpec } from "../api/client";
 import { monthLabels } from "../utils/formatters";
 import { DV, MONO, axisNumber, fullNumber, isOrderedBands, niceAxis, truncate } from "./charts/dataviz";
-import { GMR, GMR_PALETTE, canonicalKey, dashboardColour, distinctColours, getColor, getContrastText } from "./charts/dashboardPalette";
+import { GMR, GMR_PALETTE, canonicalKey, dashboardColour, getColor, getContrastText } from "./charts/dashboardPalette";
 
 // Kept for callers/tests that refer to the categorical palette by this name.
 export const SERIES_COLORS = DV.palette;
@@ -101,19 +101,37 @@ function namedSeries(chart: AIChartSpec): Named[] {
 }
 
 /** Series colours by the dashboard's rules: one hue for a single magnitude series,
- * band ramp for ordered bands (age buckets), categorical palette otherwise. */
+ * band ramp for ordered bands (age buckets), categorical palette otherwise. Exactly as the dashboard draws them:
+ * two series that map to the same dashboard key share its colour there, so they do here too (20 Nov, user). */
 function colours(chart: AIChartSpec, layout: ChartLayout): string[] {
-  const raw = rawColours(chart, layout);
-  // Technical boards' repeats mean something (two bands in one status share its colour); gauges / heatmaps have one hue.
-  if ((chart.dashboard && (chart.point_keys?.length || chart.series_keys?.length))
-      || layout.kind === "radialBar" || layout.kind === "heatmap") {
-    return raw;
-  }
-  const circular = layout.kind === "pie" || layout.kind === "donut" || layout.funnel;
-  const names = circular ? chartCategories(chart)
-    : [...namedSeries(chart).map((s) => s.name),
-       ...(chart.dashboard && layout.kind === "area" ? (chart.rates ?? []).map((r) => r.name) : [])];
-  return distinctColours(raw.slice(0, names.length), names, chart.dashboard).concat(raw.slice(names.length));
+  return stackedTrio(chart, layout, rawColours(chart, layout));
+}
+
+// The dashboard draws its 3-part stacked bars in the brand trio -- Consumer / DT / Feeder, Burnt / Faulty / Others,
+// Supplied / Installed / Utilization Rate, Total Supplies / Total Installed / Remaining Stock are all navy, gold, red
+// (SmartChart.jsx, chartUtils.js KEY_COLORS). 20 Nov, user: every chatbot stacked bar with 3 parts looks the same.
+const NAVY = "#0B3C6D", GOLD = "#FBBC04", RED = "#E31E24";
+const TRIO = [NAVY, GOLD, RED];
+// A part the dashboard names keeps its own trio colour wherever it sits (Burnt red, Faulty navy, DT gold ...).
+const TRIO_BY_NAME: [RegExp, string][] = [
+  [/burn/, RED], [/fault/, NAVY], [/^(?:meter )?others?$/, GOLD],
+  [/^consumers?(?: meters?)?$/, NAVY], [/^dtr?s?(?: meters?)?$/, GOLD], [/^feeders?(?: meters?)?$/, RED],
+];
+
+function stackedTrio(chart: AIChartSpec, layout: ChartLayout, raw: string[]): string[] {
+  if (!layout.stacked || layout.percent || chart.series?.length !== 3) return raw;
+  const names = chart.series.map((s) => s.name.toLowerCase().replace(/_/g, " ").replace(/\s+/g, " ").trim());
+  // Technical boards (status / band keys from the backend) and age bands keep their own scales. SAT-11 / SAT-12
+  // are SAT stages, not age bands (isOrderedBands counts them for the band ramp).
+  const ageBands = isOrderedBands(names) && !names.some((n) => /\bsat-?\d/.test(n));
+  if ((chart.dashboard && (chart.point_keys?.length || chart.series_keys?.length)) || ageBands) return raw;
+  // HHU Reading Trend is the one 3-part stack the dashboard draws in its palette slots (OK / Failed / Other).
+  if (chart.dashboard === "hhu_reading" && names.every((n) => /\bok\b|fail|other/.test(n))) return raw;
+  const own = names.map((n, i) => TRIO_BY_NAME.find(([re]) => re.test(n))?.[1] ?? (TRIO.includes(raw[i]) ? raw[i] : undefined));
+  // A trio colour two parts share (SAT-11 / SAT-12 / SAT-13 all map to Total SAT red) is no one's own.
+  const mine = own.map((c) => (c && own.filter((o) => o === c).length === 1 ? c : undefined));
+  const free = TRIO.filter((c) => !mine.includes(c));
+  return [...mine.map((c) => c ?? free.shift() ?? NAVY), ...raw.slice(3)];
 }
 
 function rawColours(chart: AIChartSpec, layout: ChartLayout): string[] {

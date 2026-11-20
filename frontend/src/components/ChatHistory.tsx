@@ -52,6 +52,35 @@ function SectionHead({ label, open, onToggle, action, drop }: {
   );
 }
 
+/** Rows drawn per step of a long chat list. */
+const LIST_STEP = 60;
+
+/** A long list of chats (thousands of them) drawn in steps: the first rows now, the next
+ * step once the end of the drawn part scrolls into view. Drawing every row at once put
+ * 100k+ nodes in the page and froze each re-render (opening a chat, streaming) for seconds.
+ * The open chat is always drawn, wherever it sits in the list. */
+function GrowList<V>({ items, render, activeIndex = -1 }: { items: V[]; render: (item: V) => React.ReactNode; activeIndex?: number }) {
+  const [shown, setShown] = useState(LIST_STEP);
+  const endRef = useRef<HTMLDivElement>(null);
+  const limit = Math.min(items.length, Math.max(shown, activeIndex + 1));
+  const more = limit < items.length;
+  useEffect(() => {
+    const el = endRef.current;
+    if (!more || !el || typeof IntersectionObserver === "undefined") return;
+    const io = new IntersectionObserver((entries) => {
+      if (entries.some((e) => e.isIntersecting)) setShown((n) => Math.max(n, limit) + LIST_STEP);
+    });
+    io.observe(el);
+    return () => io.disconnect();
+  }, [more, limit]);
+  return (
+    <>
+      {items.slice(0, limit).map(render)}
+      {more ? <div ref={endRef} className="chat-list-more" aria-hidden="true" /> : null}
+    </>
+  );
+}
+
 function readJSON<V>(key: string, fallback: V): V {
   try {
     const raw = window.localStorage.getItem(key);
@@ -355,7 +384,11 @@ export const ChatHistory: React.FC<ChatHistoryProps> = ({
         </div>
         {open ? (
           <div className="chat-folder-items">
-            {items.length ? items.map((s) => renderItem(s, dropKey)) : <div className="chat-folders-hint">{t("folderEmpty")}</div>}
+            {items.length ? (
+              <GrowList items={items} render={(s) => renderItem(s, dropKey)} activeIndex={items.findIndex((s) => s.session_id === activeId)} />
+            ) : (
+              <div className="chat-folders-hint">{t("folderEmpty")}</div>
+            )}
           </div>
         ) : null}
       </div>
@@ -434,7 +467,11 @@ export const ChatHistory: React.FC<ChatHistoryProps> = ({
                 label={t("recentSessions")}
                 drop={{ ...dropProps("recent", null), className: dropTarget === "recent" ? "drop" : "" }}
               />
-              {recent.length === 0 ? <div className="chat-section-empty">{t("noSessions")}</div> : recent.map((s) => renderItem(s))}
+              {recent.length === 0 ? (
+                <div className="chat-section-empty">{t("noSessions")}</div>
+              ) : (
+                <GrowList items={recent} render={(s) => renderItem(s)} activeIndex={recent.findIndex((s) => s.session_id === activeId)} />
+              )}
             </section>
 
         </>

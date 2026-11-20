@@ -4828,3 +4828,12 @@ html.tc-vt-out::view-transition-new(root) {
   min-width: 200px;
   white-space: nowrap;
 }
+
+/* Long chat lists (sidebar, search) draw in steps; this is the marker at the end of the
+   drawn part that loads the next step when it scrolls into view. */
+.chat-list-more { height: 1px; flex-shrink: 0; }
+
+/* Entrance motion: quicker, so a reopened chat settles at once instead of cascading. */
+.result-stagger { animation-duration: 240ms; animation-delay: calc(var(--stagger, 0) * 40ms); }
+.chat-response-enter { animation-duration: 240ms; }
+.chat-thread-enter { animation-duration: 200ms; }

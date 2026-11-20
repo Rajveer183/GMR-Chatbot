@@ -374,18 +374,32 @@ console.log(`  ok    ${modeRuns} graph-mode renders checked`);
   }
 }
 
-// Portal colours, one per place everywhere, never repeated inside a chart (18 Nov whole-project audit).
+// Portal colours exactly as the dashboard draws them (20 Nov, user: no chatbot-only rules): a named key keeps its
+// colour, anything else takes the 7 portal slots by position, repeating; two series on one key share its colour.
 {
+  const PORTAL = ["#2563eb", "#0d9488", "#c2410c", "#a21caf", "#e11d48", "#d97706", "#ef4444"];
   const ZONES = ["VARANASI II", "VARANASI I", "AZAMGARH", "PRAYAGRAJ II", "ETAH", "FIROZABAD", "ALIGARH", "PRAYAGRAJ I", "MIRZAPUR", "AGRA", "MATHURA"];
   const cols = (chart) => buildChartOptions(chart, resolveKind(chart.type)).colors;
   const zoneChart = (order) => ({ id: "z", title: "t", type: "stacked_bar", dashboard: "om_closed", x: ["2026-11-11", "2026-11-12"], y: [1, 1],
     series: order.map((n) => ({ name: n, data: [1, 2] })) });
-  const a = cols(zoneChart(ZONES)), b = cols(zoneChart([...ZONES].reverse()));
+  const a = cols(zoneChart(ZONES));
   const COLOUR = [
-    ["11 zones, 11 colours", () => new Set(a).size, 11],
-    ["a zone keeps its colour whatever the order", () => ZONES.every((z, i) => a[i] === b[ZONES.length - 1 - i]), true],
-    ["Total SAT keeps red beside SAT-11 / SAT-12", () => { const c = cols({ id: "s", title: "t", type: "grouped_bar", dashboard: "mi_vs_sat", x: ["AGRA"], y: [1],
-      series: [{ name: "SAT-11", data: [1] }, { name: "Total SAT", data: [2] }, { name: "SAT-12", data: [3] }] }); return [c[1], new Set(c).size]; }, ["#E31E24", 3]],
+    ["zones take the 7 portal slots by position (Agra keeps blue)", () => a.slice(0, ZONES.length),
+      ZONES.map((z, i) => (z === "AGRA" ? "#2563eb" : PORTAL[i % 7]))],
+    // 3-part stacked bars: the dashboard's brand trio navy / gold / red (20 Nov, user).
+    ...[["mi_progress", ["AGRA", "KASHI", "TRIVENI"], ["#0B3C6D", "#FBBC04", "#E31E24"]],
+        ["mi_vs_sat", ["SAT-11", "SAT-12", "SAT-13"], ["#0B3C6D", "#FBBC04", "#E31E24"]],
+        [undefined, ["Feeder", "DTR", "Consumer"], ["#E31E24", "#FBBC04", "#0B3C6D"]],
+        [undefined, ["Others", "Meter Burnt", "Meter Faulty"], ["#FBBC04", "#E31E24", "#0B3C6D"]],
+        ["hhu_reading", ["Upload OK", "Upload Failed", "Upload Other"], ["#2563eb", "#0d9488", "#c2410c"]],
+        ["stock_ageing", ["0-30 days", "31-60 days", "61-90 days"], ["#3987E5", "#FBBC04", "#0B3C6D"]]]
+      .map(([kpi, names, want]) => [`3-part stack ${names.join(" / ")}`, () => cols({ id: "t", title: "t", type: "stacked_bar", dashboard: kpi,
+        x: ["2026-11-10"], y: [1], series: names.map((n) => ({ name: n, data: [1] })) }).slice(0, 3), want]),
+    ["Triveni is the portal's fuchsia", () => cols({ id: "p", title: "t", type: "bar", x: ["x"], y: [1],
+      series: [{ name: "Agra", data: [1] }, { name: "Kashi", data: [2] }, { name: "Triveni", data: [3] }] }).slice(0, 3),
+      ["#2563eb", "#c2410c", "#a21caf"]],
+    ["SAT-11 / Total SAT / SAT-12 all take Total SAT red, as on the dashboard", () => cols({ id: "s", title: "t", type: "grouped_bar", dashboard: "mi_vs_sat", x: ["AGRA"], y: [1],
+      series: [{ name: "SAT-11", data: [1] }, { name: "Total SAT", data: [2] }, { name: "SAT-12", data: [3] }] }).slice(0, 3), ["#E31E24", "#E31E24", "#E31E24"]],
     ["Agra stays blue beside Total", () => cols({ id: "a", title: "t", type: "bar", x: ["x"], y: [1],
       series: [{ name: "Total", data: [1] }, { name: "AGRA", data: [2] }] })[1], "#2563eb"],
   ];

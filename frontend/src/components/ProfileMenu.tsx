@@ -75,7 +75,8 @@ export const ProfileMenu: React.FC<ProfileMenuProps> = ({ archivedCount, t, onOp
               aria-haspopup="menu"
               aria-expanded={themeOpen}
               className={themeOpen ? "is-active" : undefined}
-              onClick={() => setSub((v) => (v === "theme" ? null : "theme"))}
+              // Opens (never toggles): hovering already opened it, so a toggle made the click close it.
+              onClick={() => setSub("theme")}
             >
               <SunMoon size={14} /> {t("theme")}
               <ChevronRight size={14} className="chat-profile-chevron" />
@@ -108,7 +109,7 @@ export const ProfileMenu: React.FC<ProfileMenuProps> = ({ archivedCount, t, onOp
               aria-haspopup="menu"
               aria-expanded={langOpen}
               className={langOpen ? "is-active" : undefined}
-              onClick={() => setSub((v) => (v === "language" ? null : "language"))}
+              onClick={() => setSub("language")}
             >
               <Languages size={14} /> {t("menuLanguage")}
               <ChevronRight size={14} className="chat-profile-chevron" />

@@ -14,6 +14,8 @@ type T = (key: UIKey, vars?: Record<string, string | number>) => string;
 
 const OPENED_KEY = "gmr-chat.recentlyOpened";
 const OPENED_MAX = 10;
+/** Result rows drawn per step. */
+const ROW_STEP = 50;
 
 function readOpened(): string[] {
   try {
@@ -145,6 +147,26 @@ export const ChatSearchDialog: React.FC<ChatSearchDialogProps> = ({ open, sessio
     ? results.map((h) => ({ s: h, hit: h }))
     : [...(lastOpened ? [{ s: lastOpened }] : []), ...recent.map((s) => ({ s }))];
 
+  // Rows are drawn in steps (thousands of chats / hundreds of hits froze the dialog for
+  // seconds when all were drawn at once): the next step comes when the end of the list
+  // scrolls into view, or when the arrow keys move past it.
+  const [limit, setLimit] = useState(ROW_STEP);
+  useEffect(() => setLimit(ROW_STEP), [q, open]);
+  const drawn = Math.min(rows.length, Math.max(limit, cursor + 1));
+  const moreRef = useRef<HTMLDivElement>(null);
+  useEffect(() => {
+    const el = moreRef.current;
+    if (!el || drawn >= rows.length || typeof IntersectionObserver === "undefined") return;
+    const io = new IntersectionObserver(
+      (entries) => {
+        if (entries.some((e) => e.isIntersecting)) setLimit((n) => Math.max(n, drawn) + ROW_STEP);
+      },
+      { root: listRef.current, rootMargin: "200px" }
+    );
+    io.observe(el);
+    return () => io.disconnect();
+  }, [drawn, rows.length, open]);
+
   // Keep the highlighted row in view.
   useEffect(() => {
     listRef.current?.querySelector<HTMLElement>(`[data-row="${cursor}"]`)?.scrollIntoView({ block: "nearest" });
@@ -247,7 +269,7 @@ export const ChatSearchDialog: React.FC<ChatSearchDialogProps> = ({ open, sessio
               {results.length === 0 && !searching ? (
                 <div className="chat-search-empty">{t("noChatsMatch", { q })}</div>
               ) : (
-                rows.map((r) => renderRow(r, index++))
+                rows.slice(0, drawn).map((r) => renderRow(r, index++))
               )}
             </section>
           ) : (
@@ -263,11 +285,12 @@ export const ChatSearchDialog: React.FC<ChatSearchDialogProps> = ({ open, sessio
                 {recent.length === 0 ? (
                   <div className="chat-search-empty">{t("noSessions")}</div>
                 ) : (
-                  rows.slice(index).map((r) => renderRow(r, index++))
+                  rows.slice(index, drawn).map((r) => renderRow(r, index++))
                 )}
               </section>
             </>
           )}
+          {drawn < rows.length ? <div ref={moreRef} className="chat-list-more" aria-hidden="true" /> : null}
         </div>
       </div>
     </div>,
