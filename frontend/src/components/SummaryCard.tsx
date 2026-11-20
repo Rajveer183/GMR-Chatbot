@@ -44,6 +44,48 @@ function stripMarkdown(text: string) {
   return text.replace(/\*\*(.*?)\*\*/g, "$1").replace(/\[(.*?)\]\((.*?)\)/g, "$1");
 }
 
+// The Groq voice (Orpheus) reads English only: a Hindi / Tamil / ... answer goes
+// to the browser's own voice for that language instead of being read as noise.
+const GROQ_VOICE_LANGS = new Set(["", "en", "hinglish"]);
+
+const browserVoiceAvailable = () => typeof window !== "undefined" && "speechSynthesis" in window;
+
+/**
+ * Reads `text` with the browser's built-in voice. Used for non-English answers and
+ * whenever the backend voice fails (its daily character quota is small). It never
+ * skips text, but sounds like whatever voices the OS has. Returns false when the
+ * browser has no speech support.
+ */
+function speakInBrowser(text: string, lang: string | undefined, onDone: () => void): boolean {
+  if (!browserVoiceAvailable()) return false;
+  const synth = window.speechSynthesis;
+  synth.cancel();
+  const locale = !lang || lang === "en" || lang === "hinglish" ? "en-IN" : `${lang}-IN`;
+  const voices = synth.getVoices();
+  const voice = voices.find((v) => v.lang.replace("_", "-") === locale)
+    ?? voices.find((v) => v.lang.toLowerCase().startsWith(locale.slice(0, 2)));
+  const clean = text.replace(/_/g, " ").replace(/\s+\/\s+/g, ", ").replace(/\s+/g, " ").trim();
+  // Chrome cuts a single long utterance off after ~15s: queue sentence-sized pieces.
+  const pieces: string[] = [];
+  for (const s of clean.split(/(?<=[.!?।])\s+/)) {
+    const last = pieces.length - 1;
+    if (last >= 0 && pieces[last].length + s.length < 220) pieces[last] += ` ${s}`;
+    else pieces.push(s);
+  }
+  pieces.forEach((piece, i) => {
+    const u = new SpeechSynthesisUtterance(piece);
+    u.lang = voice?.lang ?? locale;
+    if (voice) u.voice = voice;
+    u.rate = 1.05;
+    if (i === pieces.length - 1) u.onend = onDone;
+    u.onerror = (e) => {
+      if (e.error !== "interrupted" && e.error !== "canceled") onDone();
+    };
+    synth.speak(u);
+  });
+  return true;
+}
+
 export const SummaryCard: React.FC<SummaryCardProps> = ({ summary, interpretedIntent, interpretedQuery, getFullCopyPayload, speechText, lang }) => {
   const [playing, setPlaying] = useState(false);
   const [loadingAudio, setLoadingAudio] = useState(false);
@@ -53,11 +95,17 @@ export const SummaryCard: React.FC<SummaryCardProps> = ({ summary, interpretedIn
   // pause/play on the same summary never re-hits the API, but a genuinely
   // different summary (a different message) always fetches fresh audio.
   const cachedAudioRef = useRef<{ text: string; url: string } | null>(null);
+  // Text the browser voice is reading (or paused on); null when it isn't in use.
+  const browserTextRef = useRef<string | null>(null);
 
   const plainTextSummary = useMemo(() => speechText || stripMarkdown(summary), [speechText, summary]);
 
   useEffect(() => {
     return () => {
+      if (browserTextRef.current !== null && browserVoiceAvailable()) {
+        window.speechSynthesis.cancel();
+        browserTextRef.current = null;
+      }
       if (audioRef.current) {
         audioRef.current.pause();
         audioRef.current = null;
@@ -76,6 +124,20 @@ export const SummaryCard: React.FC<SummaryCardProps> = ({ summary, interpretedIn
   const toggleSpeech = async () => {
     setAudioError(null);
 
+    // Browser voice in use: pause / resume it.
+    if (browserTextRef.current !== null && browserVoiceAvailable()) {
+      if (playing) {
+        window.speechSynthesis.pause();
+        setPlaying(false);
+        return;
+      }
+      if (browserTextRef.current === plainTextSummary && window.speechSynthesis.paused) {
+        window.speechSynthesis.resume();
+        setPlaying(true);
+        return;
+      }
+    }
+
     if (playing && audioRef.current) {
       audioRef.current.pause();
       setPlaying(false);
@@ -87,6 +149,20 @@ export const SummaryCard: React.FC<SummaryCardProps> = ({ summary, interpretedIn
       setPlaying(true);
       return;
     }
+
+    const readInBrowser = () => {
+      const started = speakInBrowser(plainTextSummary, lang, () => {
+        browserTextRef.current = null;
+        setPlaying(false);
+      });
+      if (started) {
+        browserTextRef.current = plainTextSummary;
+        setPlaying(true);
+      }
+      return started;
+    };
+
+    if (!GROQ_VOICE_LANGS.has(lang ?? "") && readInBrowser()) return;
 
     setLoadingAudio(true);
     try {
@@ -108,7 +184,8 @@ export const SummaryCard: React.FC<SummaryCardProps> = ({ summary, interpretedIn
       await audio.play();
       setPlaying(true);
     } catch (err: any) {
-      setAudioError(err?.message || uiText(lang, "audioFailed"));
+      // Backend voice unavailable (quota, network): read it with the browser's voice instead.
+      if (!readInBrowser()) setAudioError(err?.message || uiText(lang, "audioFailed"));
     } finally {
       setLoadingAudio(false);
     }

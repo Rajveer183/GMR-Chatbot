@@ -76,6 +76,8 @@ GROQ_TTS_MODEL = _env("GROQ_TTS_MODEL")
 GROQ_TTS_VOICE = _env("GROQ_TTS_VOICE")
 GROQ_TTS_SPEED = _env("GROQ_TTS_SPEED")
 GROQ_TTS_MAX_CHARS = _int("GROQ_TTS_MAX_CHARS")
+# Orpheus skips / repeats text on long inputs: each request is one short chunk.
+GROQ_TTS_CHUNK_CHARS = _int("GROQ_TTS_CHUNK_CHARS")
 GROQ_TTS_TIMEOUT = _float("GROQ_TTS_TIMEOUT")
 GROQ_TTS_CACHE_SIZE = _int("GROQ_TTS_CACHE_SIZE")
 

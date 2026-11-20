@@ -3,6 +3,9 @@ import { formatTableCell } from "./formatters";
 
 // TTS is billed per character, so tables are read as a short preview rather
 // than cell-by-cell: a 500-row table would otherwise cost thousands of chars.
+// The backend (shared/tts.py) cuts the text at a character cap and rewrites
+// symbols / dates / markup for the voice, so parts are ordered most-useful
+// first: summary, metric cards, insights, then the table preview.
 const SPOKEN_ROWS = 3;
 const SPOKEN_COLUMNS = 4;
 
@@ -22,7 +25,8 @@ function tableToSpeech(table: AITableSpec): string {
     lead !== undefined && formatTableCell(row[lead]).trim().toLowerCase() === "total";
   const rows = (table.rows ?? []).filter((row) => !isTotal(row)).slice(0, SPOKEN_ROWS);
   const total = table.total_rows;
-  const parts = [sentence(`Table ${table.title}, ${total} ${total === 1 ? "row" : "rows"}`)];
+  const title = table.display_title || table.title;
+  const parts = [sentence(`Table ${title}, ${total} ${total === 1 ? "row" : "rows"}`)];
   if (rows.length && lead !== undefined) {
     // "Jan 2026: total 406,285, feeder 48." -- the first column names the row,
     // so its header isn't repeated on every line.
@@ -40,14 +44,22 @@ function tableToSpeech(table: AITableSpec): string {
   return parts.join(" ");
 }
 
-/** What the Play button reads: summary, then metric cards, then a preview of each table. */
+/** What the Play button reads: what the answer shows, in the order it matters. */
 export function resultToSpeech(result: AIQueryResponse): string {
-  const parts = [sentence(stripMarkdown(result.summary))];
+  const summary = stripMarkdown(result.summary ?? "");
+  const parts = [sentence(summary)];
 
-  const kpis = result.kpis ?? [];
+  // Metric cards as shown (a feeder comparison hides them); a card whose value the
+  // summary already said is skipped -- it would only repeat the opening sentence.
+  const kpis = (result.feeder_compare ? [] : result.kpis ?? []).filter(
+    (k) => !(k.formatted_value && summary.includes(k.formatted_value)),
+  );
   if (kpis.length) {
-    parts.push(`Key metrics: ${kpis.map((k) => sentence(`${k.label}, ${k.formatted_value}`)).join(" ")}`);
+    parts.push(`Key metrics: ${kpis.map((k) => sentence(`${k.display_label || k.label}, ${k.formatted_value}`)).join(" ")}`);
   }
+
+  const insights = (result.insights ?? []).map((s) => s.trim()).filter(Boolean);
+  if (insights.length) parts.push(`Insights: ${insights.map(sentence).join(" ")}`);
 
   for (const table of result.tables ?? []) parts.push(tableToSpeech(table));
 
