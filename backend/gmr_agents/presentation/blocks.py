@@ -102,10 +102,16 @@ def _month_label(text: Any) -> Any:
     return f"{datetime(int(m.group(1)), int(m.group(2)), 1):%b %Y}" if m else text
 
 
-def table_cell(v: Any, raw: bool = False, month: bool = False) -> Any:
-    """`_cell`, with a month column's dates shown as 'Nov 2025'."""
+def table_cell(v: Any, raw: bool = False, month: bool = False, spans: dict[str, str] | None = None) -> Any:
+    """`_cell`, with a month column's dates shown as 'Nov 2025' -- and a partial month of the date window
+    with its days in brackets, 'Jul 2026 (19-31 Jul)' (`spans` from analyst.month_spans; user, 20 Nov)."""
     text = _cell(v, raw)
-    return _month_label(text) if month else text
+    if not month:
+        return text
+    label = _month_label(text)
+    if spans and isinstance(text, str) and text[:7] in spans and label != text:
+        return f"{label} ({spans[text[:7]]})"
+    return label
 
 
 _MULTI_SERIES = {"grouped_bar", "stacked_bar", "stacked_horizontal_bar", "percent_stacked_bar", "heatmap"}
@@ -400,6 +406,12 @@ def _blocks(plan: dict, result: dict) -> dict:
     except Exception:  # noqa: BLE001
         log.exception("chart: could not build from %s", list(df.columns))
         built = None
+    spans = analyst.month_spans(plan, df)   # partial first / last month of the window: '(19-31 Jul)'
+    if built and spans:
+        notes = {str(x): spans[str(x)[:7]] for x in built.get("x") or []
+                 if _MONTH_START_RE.match(str(x)[:10]) and str(x)[:7] in spans}
+        if notes:
+            built["x_notes"] = notes   # display only: chart.x stays ISO (the frontend relabels)
     charts = [built] if built else []
     # A main chart whose axis mixes dates and places ('2026-11-08 · agra') becomes one detailed trend: dates on
     # the axis, the place split in the hover card (multi_chart.py). Code only, exact sums, never fails the answer.
@@ -417,7 +429,7 @@ def _blocks(plan: dict, result: dict) -> dict:
         shown = df.head(_TABLE_ROWS)
         cols = [_label(plan, c) for c in shown.columns]
         raw, months = raw_cols(shown.columns), month_cols(shown)
-        rows = [{cols[i]: table_cell(v, i in raw, i in months) for i, v in enumerate(r)}
+        rows = [{cols[i]: table_cell(v, i in raw, i in months, spans) for i, v in enumerate(r)}
                 for r in shown.itertuples(index=False)]
         total = max(len(df), int(result.get("group_count") or 0))
         tables.append({"id": "primary_table", "title": plan.get("table_title") or "Result", "heading": None,

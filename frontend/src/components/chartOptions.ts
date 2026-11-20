@@ -87,7 +87,7 @@ export function resolveKind(type: AIChartSpec["type"]): ChartLayout {
 }
 
 export function chartCategories(chart: AIChartSpec): string[] {
-  return monthLabels((chart.x ?? []).map((x) => String(x ?? "")));
+  return monthLabels((chart.x ?? []).map((x) => String(x ?? "")), chart.x_notes);
 }
 
 type Named = { name: string; data: number[]; type?: "bar" | "line" };

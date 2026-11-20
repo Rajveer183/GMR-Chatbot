@@ -53,16 +53,18 @@ export function formatChartValue(value: number, unit?: string): string {
 
 const MONTH_NAMES = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"];
 const MONTH_START_RE = /^(\d{4})-(0[1-9]|1[0-2])(?:-01)?$/;
-const MONTH_LABEL_RE = /^(Jan|Feb|Mar|Apr|May|Jun|Jul|Aug|Sep|Oct|Nov|Dec) (\d{4})$/;
+// 'Nov 2025', or a partial month of the date window 'Jul 2026 (19-31 Jul)' (backend blocks.table_cell).
+const MONTH_LABEL_RE = /^(Jan|Feb|Mar|Apr|May|Jun|Jul|Aug|Sep|Oct|Nov|Dec) (\d{4})(?: \([^)]*\))?$/;
 
 /**
  * Chart categories that are all months ('2025-11-01' / '2025-11') read 'Nov 2025', as the table's
  * month columns do (backend blocks.month_cols). Display only: chart.x keeps the ISO text, which the
  * date checks (chronological, graph modes) depend on. Days and mixed axes are left as sent.
  */
-export function monthLabels(cats: string[]): string[] {
+export function monthLabels(cats: string[], notes?: Record<string, string>): string[] {
   if (cats.length < 2 || !cats.every((c) => MONTH_START_RE.test(c))) return cats;
-  return cats.map(monthLabel);
+  // A partial month of the window keeps its days in brackets: 'Jul 2026 (19-31 Jul)' (chart.x_notes).
+  return cats.map((c) => (notes?.[c] ? `${monthLabel(c)} (${notes[c]})` : monthLabel(c)));
 }
 
 /** '2025-11-01' / '2025-11' -> 'Nov 2025'; anything else unchanged. */

@@ -66,7 +66,7 @@ export function seriesAreParts(chart: AIChartSpec, layout: ChartLayout): boolean
 
 /** The dashboard hover card for category j. */
 export function hoverCard(chart: AIChartSpec, layout: ChartLayout, j: number, colours: string[]): HoverCard {
-  const cats = monthLabels((chart.x ?? []).map(String));
+  const cats = monthLabels((chart.x ?? []).map(String), chart.x_notes);
   const title = cats[j] ?? "";
   const sub = weekRange(title);
   const unit = chart.unit || undefined;

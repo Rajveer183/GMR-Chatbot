@@ -137,6 +137,12 @@ def _parse_triage(d: dict, state: dict, model: str) -> dict:
         # a definition (11 Nov: ~15 such questions got a textbook answer with no number). Replay over 864 logged
         # non-data triages: 17 flip, all analytical once 'tell me: what does X mean' is read as a definition.
         kind = "data"
+    elif kind in ("explain", "chitchat") and _BARE_RELATION_RE.search(state["question"]) \
+            and not _SUBJECT_RE.search(state["question"]) and _analytic_ask(str(d.get("question") or "")):
+        # 'Correlation or causation?' after 'How does SAT completion relate to revenue collected by project?': the
+        # message has no subject of its own, the resolved question does. 17 Nov it was triaged explain and refused
+        # ('the definitions do not provide any analysis of correlation') -- the same ask answered from data minutes earlier.
+        kind = "data"
     elif kind in ("out_of_scope", "explain") and _method_on_programme_data(state["question"]):
         # 'Using reinforcement learning, optimise technician allocation' / 'survival analysis of meter failures': the
         # named model is not run (presentation/stats.py says so in the answer), but the nearest real figures are --
@@ -271,6 +277,10 @@ _DEFINITION_RE = re.compile(
     r"(?:what (?:is|are|does|do)\b(?!.*\b(?:now|today|current\w*|latest|this (?:week|month)|right now)\b)|define\b|"
     r"definition|meaning of|what do you mean|how (?:is|are) .{0,60}\b(?:calculated|computed|defined|measured|derived)\b|"
     r"explain (?:what|the (?:term|kpi|formula|definition))|where does .{0,40}come from)", re.I)
+
+
+_BARE_RELATION_RE = re.compile(r"\b(?:correlat\w*|causa\w*|caus(?:e|ed|es|ing)|relat(?:ed|es|ion\w*)|linked|connected)\b",
+                               re.I)
 
 
 def _analytic_ask(question: str) -> bool:
@@ -798,6 +808,7 @@ driving caused causing responsible behind mainly
 day days improved improve improves improving improvement better worse worsened worsening declined decline declining
 dropped drop drops dropping fell rose grew growth increased increase decreased decrease changed getting still
 happening last previous earlier
+needed need needs reach reached target targets goal left remaining achieve achieved go
 """.split())
 # ^ 'Which feeder contributed most?' after 'Why did installations drop last week?' (19 Nov) counted 'contributed'
 # / 'most' as its own measure, so nothing was carried and it was answered as MDM feeder energy loss.
@@ -878,7 +889,8 @@ def carry_named_code(state: dict, triage: dict, prior_turns: list[dict] | None) 
     if triage["kind"] != "data" or not prior_turns or not _THE_ONE_RE.search(state["question"]) \
             or _CODE_RE.search(triage["question"]):
         return False
-    codes = _CODE_RE.findall(str(latest_data_turn(prior_turns).get("summary") or ""))
+    latest = latest_data_turn(prior_turns)
+    codes = _CODE_RE.findall(str(latest.get("summary") or "")) or list((latest.get("context") or {}).get("codes") or [])
     if not codes:
         return False
     triage["question"] = re.sub(r"[\s?.]*$", "", triage["question"]) + f" (the one the previous answer named: {codes[0]})?"
@@ -950,6 +962,48 @@ def keep_comparison(state: dict, triage: dict, prior_turns: list[dict] | None) -
     return True
 
 
+_WHY_IT_RE = re.compile(r"^\s*(?:and\s+|but\s+|so\s+|ok(?:ay)?,?\s+)?why\s+(?:is|are|was|were|did|does|has|have)\s+"
+                        r"(?:it|this|that|its|their)\b", re.I)
+
+
+def keep_pronoun_subject(state: dict, triage: dict, prior_turns: list[dict] | None) -> bool:
+    """'Why is it lower?' after 'Compare it with Kashi': 'it' is still the subject the user started with (Triveni),
+    Kashi only the comparison. 19 Nov: 'Revenue billed vs collected for Triveni this month' -> 'Compare it with
+    Kashi' -> 'Why is it lower?' was resolved as 'Why is Kashi's revenue collection lower than Triveni's'. A resolved
+    question that put the comparison place first and the subject after 'than' gets the two swapped back."""
+    if triage["kind"] != "data" or not prior_turns or len(prior_turns) < 2 or not _WHY_IT_RE.search(state["question"]):
+        return False
+    latest = latest_data_turn(prior_turns)
+    if not _COMPARE_WITH_RE.search(str(latest.get("question") or "")):
+        return False
+    hierarchy.refresh_in_background()
+    hierarchy.wait_first_load()
+    names = hierarchy.place_names()
+    i = max(j for j, t in enumerate(prior_turns) if t is latest)
+    before = next((t for t in reversed(prior_turns[:i]) if (t.get("context") or {}).get("domain")), None)
+    if not before:
+        return False
+    other = place_scope.found(str(latest.get("question") or ""), names)
+    subject = {n: l for n, l in place_scope.found(str(before.get("resolved_question") or before.get("question") or ""),
+                                                  names).items() if n not in other}
+    if len(other) != 1 or len(subject) != 1:
+        return False
+    (o_name, o_lvl), (s_name, s_lvl) = next(iter(other.items())), next(iter(subject.items()))
+    q = triage["question"]
+    low = q.lower()
+    o_at, s_at = low.find(o_name.split()[0]), low.find(s_name.split()[0])
+    than = low.find(" than ")
+    if o_at < 0 or s_at < 0 or not (o_at < than < s_at):
+        return False
+    o_word = re.search(rf"\b{re.escape(o_name.split()[0])}\w*", q, re.I).group(0)
+    s_word = re.search(rf"\b{re.escape(s_name.split()[0])}\w*", q, re.I).group(0)
+    fixed = re.sub(rf"\b{re.escape(o_word)}\b", "\x00", q, count=1)
+    fixed = re.sub(rf"\b{re.escape(s_word)}\b", o_word, fixed, count=1).replace("\x00", s_word)
+    _step(state, "pronoun_subject", time.perf_counter(), was=q[:140], now=fixed[:140])
+    triage["question"] = fixed
+    return True
+
+
 _DRILL_ORDER = ("project", "zone", "circle", "division", "sub_division")
 
 
@@ -983,6 +1037,7 @@ def fix_question(state: dict, triage: dict, prior_turns: list[dict] | None) -> b
     changed = carry_named_code(state, triage, prior_turns) or changed
     changed = pick_ordinal_place(state, triage, prior_turns) or changed
     changed = keep_comparison(state, triage, prior_turns) or changed
+    changed = keep_pronoun_subject(state, triage, prior_turns) or changed
     if triage["kind"] == "data" and festivals.resolve(state["question"]):
         # 'since Diwali': the festival's date pinned by code (resolvers/festivals.py) -- the resolved question
         # often keeps the name only, or the model's guess of the wrong year.

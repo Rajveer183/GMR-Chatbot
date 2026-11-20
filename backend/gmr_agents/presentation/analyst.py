@@ -18,10 +18,12 @@ from gmr_agents.presentation.blocks import _tidy_ts
 log = logging.getLogger("gmr_agents.llm_pipeline")  # same logger name as before the split
 
 
-def _partial_periods(df: pd.DataFrame | None) -> tuple[str | None, set[str], str]:
+def _partial_periods(df: pd.DataFrame | None, spans: dict[str, str] | None = None) -> tuple[str | None, set[str], str]:
     """(period column, its partial labels, a PERIODS line) for a month- or day-wise RESULT.
     Only the current IST month (monthly rows) or today (daily rows) is partial -- the model
-    otherwise guessed 'partial' for whichever month came last, e.g. a complete August."""
+    otherwise guessed 'partial' for whichever month came last, e.g. a complete August.
+    `spans` ({'YYYY-MM': '20-31 Jul'}, from month_spans) adds the partial FIRST / last month of a rolling
+    window: 'last 4 months' asked 20 Nov = 19 Jul .. 19 Nov, so July holds 19-31 Jul only."""
     if not isinstance(df, pd.DataFrame) or len(df) < 2:
         return None, set(), ""
     now = datetime.now(_IST)
@@ -36,6 +38,16 @@ def _partial_periods(df: pd.DataFrame | None) -> tuple[str | None, set[str], str
         if (dates.dt.day == 1).all():
             current = {v for v, d in zip(raw, dates) if (d.year, d.month) == (now.year, now.month)}
             unit, today_label = "month", f"{now:%Y-%m}"
+            if spans:
+                partial = {v for v in raw if v[:7] in spans}
+                if partial:
+                    named = "; ".join(f"{_month_name(v)} covers only {spans[v[:7]]}" for v in sorted(set(partial)))
+                    return col, partial | current, (
+                        f"PERIODS (checked by code): partial months -- {named}. Write each of them with its days in "
+                        f"brackets, e.g. '{_month_name(min(partial))} ({spans[min(partial)[:7]]})'. Their totals cover "
+                        "fewer days, so they are NOT comparable with a full month: keep them out of highest / lowest "
+                        "claims and never call the change into or out of them a rise, fall, decline or drop (compare "
+                        "per day if needed). Every other month in RESULT is complete.")
         else:
             current = {v for v, d in zip(raw, dates) if d.date() == now.date()}
             unit, today_label = "day", f"{now:%Y-%m-%d}"
@@ -206,15 +218,22 @@ def _short_weeks(df: pd.DataFrame | None) -> tuple[str | None, dict[str, int]]:
 
 _DATE_COLS = {"period_start", "mi_date"}
 
+# (sql, IST day) -> bounds: the writer, the facts and the table/chart labels all ask for one answer's window;
+# Postgres evaluates it once. Bounded so a long-running server does not grow it.
+_BOUNDS_CACHE: dict[tuple[str, str], object] = {}
 
-def _date_window(plan: dict, df: pd.DataFrame | None) -> str:
-    """The date range the SQL really covered -- its period_start bounds evaluated by Postgres -- plus the
-    row grain. The answer only sees the first rows of RESULT: live, 23 Oct, 'meters installed in last 3
-    months' returned 92 day rows newest-first, and the answer called the window '22 Aug to 22 Oct'
-    (it was 22 Jul .. 22 Oct) and a day 'the peak month'."""
+
+def _window_bounds(plan: dict) -> tuple[pd.Timestamp, pd.Timestamp] | str | None:
+    """(first day, last day) the SQL's date filter covers, evaluated by Postgres; 'all_time' for a day/month
+    table with no date filter; None when unknown (Athena, no filter on a snapshot, an expression on a column)."""
     sql = plan.get("sql") or ""
     if plan.get("data_engine") != "postgres" or not sql:
-        return ""
+        return None
+    from gmr_agents.execution import ist_today
+    key = (sql, str(ist_today.today()))
+    if key in _BOUNDS_CACHE:
+        return _BOUNDS_CACHE[key]
+    got: object = None
     try:
         import sqlglot
         from sqlglot import exp
@@ -239,22 +258,75 @@ def _date_window(plan: dict, df: pd.DataFrame | None) -> str:
                     bucket.append(f"CAST({bound.sql(dialect='postgres')} AS date){shift}")
         if not lows and not highs and any(t.name.lower().endswith(("_day_agg", "_month_agg"))
                                           for t in root.find_all(exp.Table)):
-            # No date asked = all time here, while the dashboard card defaults to the last 30 days.
-            return ("DATE WINDOW (checked by code): no date filter -- the figure is ALL TIME to date. Say 'so far' / "
-                    "'all time' in the answer; the dashboard card shows the last 30 days by default, so the user "
-                    "may see a smaller number there.")
-        if not lows or not highs:
-            return ""
-        hi = f"GREATEST({', '.join(highs)})"
-        if any(t.name.lower().endswith("_month_agg") for t in root.find_all(exp.Table)):
-            # A month row covers its month -- up to today for the current one. 19 Nov: 'Installations by project this
-            # month' was told '01 Nov .. 30 Nov 2026' and the answer said '01-30 Nov' on the 19th.
-            hi = f"LEAST((DATE_TRUNC('month', {hi}) + INTERVAL '1 month - 1 day')::date, CURRENT_DATE)"
-        row = executor._run_postgres(f"SELECT LEAST({', '.join(lows)}) AS lo, {hi} AS hi").iloc[0]
-        window = f"{pd.Timestamp(row['lo']):%d %b %Y} .. {pd.Timestamp(row['hi']):%d %b %Y}"
+            got = "all_time"
+        elif lows and highs:
+            hi = f"GREATEST({', '.join(highs)})"
+            if any(t.name.lower().endswith("_month_agg") for t in root.find_all(exp.Table)):
+                # A month row covers its month -- up to today for the current one. 19 Nov: 'Installations by project
+                # this month' was told '01 Nov .. 30 Nov 2026' and the answer said '01-30 Nov' on the 19th.
+                hi = f"LEAST((DATE_TRUNC('month', {hi}) + INTERVAL '1 month - 1 day')::date, CURRENT_DATE)"
+            row = executor._run_postgres(f"SELECT LEAST({', '.join(lows)}) AS lo, {hi} AS hi").iloc[0]
+            got = (pd.Timestamp(row["lo"]), pd.Timestamp(row["hi"]))
     except Exception:  # a hint only -- never fail the answer over it
         log.debug("date window: could not evaluate", exc_info=True)
+        return None
+    if len(_BOUNDS_CACHE) > 256:
+        _BOUNDS_CACHE.clear()
+    _BOUNDS_CACHE[key] = got
+    return got
+
+
+_MONTH_KEY_RE = re.compile(r"^(\d{4})-(0[1-9]|1[0-2])(?:-01)?(?:[ T]00:00(?::00)?)?$")
+
+
+def _month_name(value: str) -> str:
+    """'2026-07-01' / '2026-07' -> 'Jul 2026' (the table's month label)."""
+    return f"{pd.Timestamp(value[:7] + '-01'):%b %Y}"
+
+
+def month_spans(plan: dict, df: pd.DataFrame | None) -> dict[str, str]:
+    """{'YYYY-MM': '19-31 Jul'} for the months of a month-wise RESULT that its date window covers only in part.
+    User, 20 Nov: 'last 4 months' = rolling to yesterday -- July from the 19th, Aug-Oct full, November to the
+    19th -- and a partial month says its days in brackets. Only the first and last month can be partial.
+    A running balance (SUM .. OVER) is a month-END figure, so its first month is not partial."""
+    if not isinstance(df, pd.DataFrame) or len(df) < 2:
+        return {}
+    bounds = _window_bounds(plan)
+    if not isinstance(bounds, tuple):
+        return {}
+    lo, hi = bounds
+    for col in [c for c in df.columns if not pd.api.types.is_numeric_dtype(df[c])]:
+        vals = [str(v).strip() for v in df[col] if str(v).strip() and not str(v).strip().lower().startswith(("total", "grand total"))]
+        if len(set(vals)) < 2 or not all(_MONTH_KEY_RE.match(v) for v in vals):
+            continue
+        months = sorted({v[:7] for v in vals})
+        out: dict[str, str] = {}
+        first, last = pd.Timestamp(months[0] + "-01"), pd.Timestamp(months[-1] + "-01")
+        end_last = last + pd.offsets.MonthEnd(0)
+        running = bool(re.search(r"\bover\s*\(", (plan.get("sql") or "").lower()))
+        if (lo.year, lo.month) == (first.year, first.month) and lo.day > 1 and not running:
+            out[months[0]] = f"{lo.day}-{(first + pd.offsets.MonthEnd(0)).day} {first:%b}"
+        if (hi.year, hi.month) == (last.year, last.month) and hi.day < end_last.day:
+            start = lo.day if months[-1] in out else 1
+            out[months[-1]] = f"{start}-{hi.day} {last:%b}"
+        return out
+    return {}
+
+
+def _date_window(plan: dict, df: pd.DataFrame | None) -> str:
+    """The date range the SQL really covered -- its period_start bounds evaluated by Postgres -- plus the
+    row grain. The answer only sees the first rows of RESULT: live, 23 Oct, 'meters installed in last 3
+    months' returned 92 day rows newest-first, and the answer called the window '22 Aug to 22 Oct'
+    (it was 22 Jul .. 22 Oct) and a day 'the peak month'."""
+    bounds = _window_bounds(plan)
+    if bounds == "all_time":
+        # No date asked = all time here, while the dashboard card defaults to the last 30 days.
+        return ("DATE WINDOW (checked by code): no date filter -- the figure is ALL TIME to date. Say 'so far' / "
+                "'all time' in the answer; the dashboard card shows the last 30 days by default, so the user "
+                "may see a smaller number there.")
+    if not isinstance(bounds, tuple):
         return ""
+    window = f"{bounds[0]:%d %b %Y} .. {bounds[1]:%d %b %Y}"
     grain = ""
     if isinstance(df, pd.DataFrame) and len(df) >= 2:
         for c in df.columns:
@@ -291,7 +363,7 @@ def headline_column(df: pd.DataFrame | None) -> tuple[str, list[str]] | None:
     return None
 
 
-def _result_facts(df: pd.DataFrame | None, max_cols: int = 4) -> str:
+def _result_facts(df: pd.DataFrame | None, max_cols: int = 4, spans: dict[str, str] | None = None) -> str:
     """Highest / lowest item per numeric column, Total row excluded -- so 'which is lagging'
     never depends on the model reading the middle of a table (or mistaking Total for a row).
     The current (partial) month / day is left out too."""
@@ -307,7 +379,7 @@ def _result_facts(df: pd.DataFrame | None, max_cols: int = 4) -> str:
         # bottleneck was named as Total Journey, 186.76 days, instead of Installation to SAT, 86.2).
         is_total |= df[c].astype(str).str.strip().str.lower().str.match(r"(?:grand )?total\b")
     rows = df[~is_total]
-    period_col, partial, _ = _partial_periods(df)
+    period_col, partial, _ = _partial_periods(df, spans)
     week_col, short = _short_weeks(df)
     if week_col and not period_col:
         period_col = week_col

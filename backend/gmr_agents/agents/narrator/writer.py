@@ -17,7 +17,7 @@ from gmr_agents.checks import extreme_check, freshness, grounding, number_check,
 import logging
 from gmr_agents.agents.common import _ALL_TIME_LEAD_RE, _ANSWER_ROWS, _PAST_DATE_RE, _PERIOD_RE, _emit, _step, _today
 from gmr_agents.agents.followups import _followup_options, _options_text, _pick_followups
-from gmr_agents.presentation.analyst import _clear_date, _date_window, _month_to_date, _partial_periods, _stated_figures, _result_facts, _result_preview, _short_weeks
+from gmr_agents.presentation.analyst import _clear_date, _date_window, _month_to_date, _partial_periods, month_spans, _stated_figures, _result_facts, _result_preview, _short_weeks
 from gmr_agents.presentation.blocks import _tidy_ts
 from gmr_agents.presentation import drivers as _drivers, investigate as _investigate, stats as _stats
 
@@ -62,7 +62,29 @@ Reply with JSON only:
 _CHANGE_ASK_RE = re.compile(r"\b(?:increas\w*|decreas\w*|ris(?:e|es|ing|en)|rose|grow\w*|grew|growth|fell|fall\w*|"
                             r"drop\w*|declin\w*|jump\w*|spik\w*|went up|gone up|went down|change[sd]?|compared? (?:with|to) "
                             r"last|vs\.? last|since last)\b", re.I)
+_SERIES_ASK_RE = re.compile(r"\b(?:month|week|day|date|year)[- ]?wise\b|\bmonthly\b|\bweekly\b|\bdaily\b|\btrend\w*\b|"
+                            r"\bover time\b|\b(?:each|every|per|by) (?:month|week|day)\b|\bmahine (?:ke hisaab|wise)\b", re.I)
 _PERIOD_COL_RE = re.compile(r"date|month|week|period|year|day|prev|last|change|delta|growth", re.I)
+
+
+def _bracket_partial_months(text: str, spans: dict[str, str] | None) -> str:
+    """'Nov 2026 (partial)' or the first bare 'Nov 2026' / 'November 2026' -> 'Nov 2026 (1-19 Nov)' for each month
+    in `spans` ({'2026-11': '1-19 Nov'}, analyst.month_spans). A month already followed by its days is left alone."""
+    if not text or not spans:
+        return text
+    import calendar
+    for key, days in spans.items():
+        y, m = int(key[:4]), int(key[5:7])
+        short, full = calendar.month_abbr[m], calendar.month_name[m]
+        # Not a date: '19 Jul 2026' is a day, only 'Jul 2026' on its own is the month (20 Nov retest).
+        name = rf"(?<!\d )(?<!\d\d )(?<!\d-)(?<!\d\d-)(?:{short}|{full})\.?\s+{y}"
+        if re.search(rf"\b{name}\s*\(\s*{re.escape(days)}", text):
+            continue
+        text, n = re.subn(rf"\b({name})\s*\((?:partial|incomplete|in progress|so far|till date|to date|month to date)"
+                          rf"[^)]*\)", rf"\1 ({days})", text, count=1, flags=re.I)
+        if not n:
+            text = re.sub(rf"\b({name})\b(?!\s*\()", rf"\1 ({days})", text, count=1)
+    return text
 
 
 def _has_period_column(df) -> bool:
@@ -103,7 +125,15 @@ def _write_answer(state: dict, triage: dict, plan: dict, result: dict, extras: l
                      "question asks about cannot be measured. Say so in the first sentence, then answer with the "
                      "current levels: which items hold the largest share of today's total (with their share). "
                      "Never call a current level an increase or decrease.")
-    facts = _result_facts(result.get("result"))
+    elif tables and all(t.endswith("_snapshot") for t in tables) and _SERIES_ASK_RE.search(state["question"]) \
+            and not _has_period_column(result.get("result")):
+        # 19 Nov: 'Just the first one, month-wise.' (pending SAT, Kashi) was answered with today's three figures and
+        # no word that month-wise was asked -- the snapshot keeps no month-by-month history.
+        parts.append("DATA NOTE: every table used is a CURRENT snapshot with no history, so the month-wise / day-wise "
+                     "/ trend split asked for is not stored. Say so in the first sentence, then give the current "
+                     "figures as on the latest refresh.")
+    spans = month_spans(plan, result.get("result"))   # partial first / last month of a rolling window
+    facts = _result_facts(result.get("result"), spans=spans)
     parts.append(f"RESULT ({n} row(s){more}; total available: {result.get('group_count')}):\n"
                  + injection.wrap(preview, "database"))
     options = _followup_options(triage)
@@ -152,7 +182,7 @@ def _write_answer(state: dict, triage: dict, plan: dict, result: dict, extras: l
     if why:
         parts.append(why)
         _step(state, "drivers", time.perf_counter(), lines=why.count("\n"))
-    periods = _partial_periods(result.get("result"))[2]
+    periods = _partial_periods(result.get("result"), spans)[2]
     if periods:
         parts.append(periods)
     mtd = _month_to_date(state["question"] + " || " + str(triage["question"]), result.get("result"))
@@ -206,7 +236,9 @@ def _write_answer(state: dict, triage: dict, plan: dict, result: dict, extras: l
     # 'AGRA' -- right project, no figure, while RESULT held 96,372 of 263,243. One rewrite asks for the figures.
     df0 = result.get("result")
     has_numbers = df0 is not None and hasattr(df0, "select_dtypes") and not df0.empty and not df0.select_dtypes("number").empty
-    if has_numbers and len(summary.split()) < 6 and not re.search(r"\d", summary):
+    # Or an answer that quotes nothing from RESULT -- only a caveat (wording_check.quotes_nothing).
+    if has_numbers and ((len(summary.split()) < 6 and not re.search(r"\d", summary))
+                        or wording_check.quotes_nothing(summary, df0)):
         log.warning("answer: bare summary %r -- asking for the figures", summary)
         redo = llm_gateway.chat_json(
             "answer", prompt + "\n\nYOUR PREVIOUS ANSWER:\n" + json.dumps({"summary": summary}, ensure_ascii=False)
@@ -322,7 +354,7 @@ def _write_answer(state: dict, triage: dict, plan: dict, result: dict, extras: l
     # Highest / lowest check: a figure can be IN the result yet not be the max / min it is
     # called ('lowest feeder count (48)' when Feb had 29). Wrong insight = dropped; a wrong
     # summary gets one correction with the right figures, then the bad sentence is cut.
-    period_col, partial, _ = _partial_periods(result.get("result"))
+    period_col, partial, _ = _partial_periods(result.get("result"), spans)
     wrong = extreme_check.wrong_claims(summary, result.get("result"), period_col, partial)
     insights = [i for i in insights if not extreme_check.wrong_claims(i, result.get("result"), period_col, partial)]
     if wrong:
@@ -385,6 +417,9 @@ def _write_answer(state: dict, triage: dict, plan: dict, result: dict, extras: l
             _emit(state, "summary_replace", text=summary)
     # Bare result counts ('KASHI 15087') grouped like the tables (15,087) -- code only, exact result values only.
     grouped = number_check.group_digits(summary, frames)
+    # A partial month of the window carries its days, as in the table: 'Nov 2026 (partial)' / a bare 'Nov 2026' ->
+    # 'Nov 2026 (1-19 Nov)' at its first mention (user, 20 Nov). Code only; the model wrote '(partial)' in the retest.
+    grouped = _bracket_partial_months(grouped, spans)
     if grouped != summary:
         summary = grouped
         if state.get("emit") is not None:

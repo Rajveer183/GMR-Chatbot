@@ -67,6 +67,19 @@ def display(name: str, level: str) -> str:
     return f"{text} {_LEVEL_WORD[level]}".strip()
 
 
+_BARE_VARANASI_RE = re.compile(r"\bvaranasi\b(?!\s*(?:i|ii|1|2|project|cluster|hw|_hw|warehouse)\b)", re.IGNORECASE)
+
+
+def _carry_label(name: str, level: str, latest_q: str) -> str:
+    """How a carried place is written. A bare 'Varanasi' matches the Kashi project's alias, but by rule 'Places' it
+    means zones Varanasi I + II -- Azamgarh is a Kashi zone too. 19 Nov: 'Which Varanasi zone is worst?' ->
+    'Forecast next month.' was carried as 'in Kashi' and forecast all three Kashi zones."""
+    if name == "kashi" and level == "project" and _BARE_VARANASI_RE.search(latest_q) \
+            and not re.search(r"\b(?:kashi|kasi)\b", latest_q, re.IGNORECASE):
+        return "Varanasi"
+    return display(name, level)
+
+
 def _strip(question: str, name: str, level: str) -> str:
     alias = r"\s+".join(map(re.escape, re.sub(r"[^a-z0-9]+", " ", name).split()))
     aliases = [alias] + ([re.escape(a) for a in _PROJECTS.get(name, [])] if level == "project" else [])
@@ -129,6 +142,14 @@ def apply(message: str, resolved: str, latest: dict | None, same_area: bool,
             if name not in found(stripped, places):
                 resolved = stripped
                 changes.setdefault("stripped", []).append(name)
+    if _BARE_VARANASI_RE.search(latest_q) and not re.search(r"\b(?:kashi|kasi)\b", latest_q, re.IGNORECASE) \
+            and not re.search(r"\bvaranasi\b", resolved, re.IGNORECASE):
+        # The understanding model itself wrote 'in kashi' for a Varanasi conversation (20 Nov retest of 'Forecast next
+        # month.' after 'Which Varanasi zone ...'): the user's word stands -- Varanasi = zones I + II, not Azamgarh.
+        swapped = re.sub(r"\b(?:kashi|kasi)\b(?:\s+(?:project|cluster))?", "Varanasi", resolved, flags=re.IGNORECASE)
+        if swapped != resolved:
+            resolved = swapped
+            changes["varanasi"] = True
     if in_latest_q and same_area:
         # A level the resolved question already narrowed to one of the latest turn's places is decided: its siblings
         # are not carried back in. 19 Nov: 'Which one is lagging?' (Varanasi I) -> 'Show that in detail.' was resolved
@@ -138,7 +159,7 @@ def apply(message: str, resolved: str, latest: dict | None, same_area: bool,
         narrowed = {lvl for n, lvl in have.items() if n in in_latest_q}
         missing = [(n, lvl) for n, lvl in in_latest_q.items() if n not in have and lvl not in narrowed]
         if missing:
-            where = " and ".join(display(n, lvl) for n, lvl in missing)
+            where = " and ".join(_carry_label(n, lvl, latest_q) for n, lvl in missing)
             resolved = re.sub(r"\s*([?.])?\s*$", "", resolved) + f" in {where}" + ("?" if resolved.rstrip().endswith("?") else "")
             changes["carried"] = [n for n, _ in missing]
     return resolved, changes

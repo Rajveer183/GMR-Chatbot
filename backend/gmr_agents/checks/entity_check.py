@@ -846,6 +846,14 @@ def _mapping_problems(question: str, sql_texts: list[str]) -> list[str]:
         if len(named) == 1 and not month_wise and f"-{_MONTHS[named[0]]:02d}-01" not in low:
             problems.append(f"the question names {named[0].title()}: data_date = DATE '2026-{_MONTHS[named[0]]:02d}-01' "
                             "(the audit month), not the latest month")
+        # The audit is monthly runs (June-August 2026): a calendar 'last month' from today has no rows. 19 Nov:
+        # 'Compare it with its feeder' (August) -> 'What about last month?' pinned October and said 'no data'.
+        if not named and re.search(r"\b(?:last|previous|prev|prior|pichl[ea]) (?:month|mahin[ea])\b|\bmonth before\b",
+                                   question, re.I) and re.search(r"\bcurrent_date\b|\bnow\(\)|current_timestamp", low):
+            problems.append("the mapping audit is a monthly run (June, July, August 2026): 'last / previous month' = the "
+                            "audit month before the latest -- data_date = (SELECT MAX(data_date) FROM "
+                            "hes_gold.mapping_audit_summary WHERE data_date < (SELECT MAX(data_date) FROM "
+                            "hes_gold.mapping_audit_summary)) -- never a month counted back from today")
         # Feeder names carry their code ('METHAPAR_41638210383MET'): an exact match finds nothing.
         if re.search(r"\bfeeder_name\s*=\s*'", low):
             problems.append("feeder_name holds the name plus its code ('METHAPAR_41638210383MET'): match with "
@@ -1661,7 +1669,9 @@ def check(question: str, sql_texts: list[str], columns: set[str] | None = None, 
     problems += _defect_rate_base_problems(f"{question} {asked_words or ''}", low)
     problems += _bare_count_problems(f"{asked_words or ''} {question}", sql)
     problems += _week_window_problems(f"{asked_words or ''} {question}", low)
+    problems += _last_n_months_problems(f"{asked_words or ''} {question}", low)
     problems += _snapshot_history_problems(low)
+    problems += _receivables_month_problems(low)
     problems += _entity_grain_problems(asked.get("breakdown_by") or [], low, cols)
     problems += _all_projects_problems(asked_words or "", low)
     if re.search(r"\brollup\s*\(", low) and re.search(r"\bsum\s*\(\s*sum\s*\([^)]*\)\s*\)\s*over\s*\(\s*\)", low):
@@ -1938,6 +1948,33 @@ def _dead_filter_problems(sql_texts: list[str]) -> list[str]:
     return []
 
 
+# 'last N months' = rolling to yesterday (business rule since 23 Oct; user again 20 Nov: 'last 4 months' asked on
+# 20 Nov = 19 Jul .. 19 Nov, July and November partial). The logs held 170 whole-month answers against 54 rolling --
+# trend examples read the *_month_agg tables or a date_trunc('month', CURRENT_DATE) - INTERVAL lower bound.
+_LAST_N_MONTHS_RE = re.compile(r"\b(?:last|past|previous|pichl[ea]|pichhl[ea])\s+(?:\d+|two|three|four|five|six|seven|"
+                               r"eight|nine|ten|eleven|twelve|do|teen|chaar|paanch|chhe)\s+(?:months?|mahin[ea]?)\b", re.I)
+_FULL_MONTHS_RE = re.compile(r"\b(?:full|complete|completed|whole|calendar)\s+months?\b", re.I)
+# Month tables whose day twin holds the same columns (productivity cubes have no day twin: whole months there).
+_DAY_TWIN = {"gold_mi_installation_month_agg": "gold_mi_installation_day_agg",
+             "gold_meter_inventory_event_month_agg": "gold_meter_inventory_event_day_agg"}
+_WHOLE_MONTH_LOW_RE = re.compile(r"(?:>=|>|\bbetween)\s*\(*\s*date_trunc\s*\(\s*'month'\s*,\s*\(?\s*current_date\b"
+                                 r"[^;]{0,40}?interval\s*'\d+\s*months?'")
+
+
+def _last_n_months_problems(question: str, low: str) -> list[str]:
+    if not _LAST_N_MONTHS_RE.search(question) or _FULL_MONTHS_RE.search(question):
+        return []
+    if re.search(r"\bover\s*\(", low):
+        return []  # a running balance (stock at each month end) reads whole month rows on purpose
+    month = [t for t in _DAY_TWIN if re.search(rf"\b{t}\b", low)]
+    if not month and not _WHOLE_MONTH_LOW_RE.search(low):
+        return []
+    day = _DAY_TWIN[month[0]] if month else "the day table"
+    return [f"'last N months' is a ROLLING window ending yesterday, not whole calendar months: read {day} with "
+            "period_start BETWEEN (CURRENT_DATE - 1 - INTERVAL 'N months')::date AND CURRENT_DATE - 1; month-wise = "
+            "GROUP BY date_trunc('month', period_start)::date (its first and last months are partial -- code labels them)"]
+
+
 def _week_window_problems(question: str, low: str) -> list[str]:
     if not _LAST_WEEK_RE.search(question):
         return []
@@ -1952,6 +1989,18 @@ def _week_window_problems(question: str, low: str) -> list[str]:
 # rows again. 11 Nov: 'SAT completion kyun kam hua pichle mahine?' scanned gold_mi_sat_invoice_snapshot twice as
 # 'latest_month' and 'prev_month' and answered 'no change' -- a comparison that never existed.
 _NO_HISTORY_TABLES = ("gold_mi_sat_invoice_snapshot", "gold_dashboard_stats_snapshot")
+
+
+def _receivables_month_problems(low: str) -> list[str]:
+    """revenue_receivables filtered to this month's filings: 19 Nov, 'Why is Triveni's collection efficiency lower
+    than Kashi's this month?' kept only November rows and answered 'the comparison could not be made'. Business rule:
+    'this month' / 'now' = each project's latest row, never created_at in the month."""
+    if "revenue_receivables" in low and re.search(
+            r"\bcreated_at\s*(?:>=|>|between)\s*\(?\s*date_trunc\s*\(\s*'month'\s*,\s*(?:current_date|now\(\))", low):
+        return ["revenue_receivables: 'this month' / 'now' = each project's LATEST row (ROW_NUMBER() OVER (PARTITION BY "
+                "project ORDER BY created_at DESC, id DESC) = 1) -- never filter created_at to the month (a project that "
+                "has not filed this month drops out)"]
+    return []
 
 
 def _snapshot_history_problems(low: str) -> list[str]:

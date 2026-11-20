@@ -92,6 +92,8 @@ export interface AIChartSpec {
    * that day when the axis is dates (backend presentation/multi_chart.py). */
   details?: [string, number][][];
   details_label?: string;
+  /** Partial months of the answer's date window, by ISO x: { "2026-07-01": "19-31 Jul" } -> 'Jul 2026 (19-31 Jul)'. */
+  x_notes?: Record<string, string>;
   description?: string;
   /** Title / description in the answer's language; `title` stays English. */
   display_title?: string;

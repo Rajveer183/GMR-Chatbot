@@ -122,6 +122,31 @@ def false_empty(text: str, df) -> bool:
     return not nums.empty and bool((nums.fillna(0) != 0).to_numpy().any())
 
 
+def quotes_nothing(text: str, df) -> bool:
+    """The answer quotes nothing at all -- no figure (0 and 1 aside) and no name / code from RESULT's first rows --
+    while RESULT has rows: only a caveat or a method note. 19 Nov: 'Feeders with the highest loss in July in Kashi'
+    -> 'Feeder input carries the feeder meter's multiplying factor ... rankings are usable.' (10 rows held the
+    feeders and their losses). Any written figure passes (whether it is right is number_check's job), and a
+    'no data' claim is false_empty's job -- so a normal answer never costs an extra call here."""
+    if not text or "AI summary is unavailable" in text or df is None or not hasattr(df, "select_dtypes") or df.empty:
+        return False
+    if _EMPTY_CLAIM_RE.search(text) or df.select_dtypes("number").empty:
+        return False
+    for raw in re.findall(r"(?<![\w.])-?\d[\d,]*(?:\.\d+)?", text):
+        try:
+            if float(raw.replace(",", "")) not in (0.0, 1.0):
+                return False
+        except ValueError:
+            continue
+    head = df.head(20)
+    low = text.lower()
+    for c in [c for c in head.columns if not pd.api.types.is_numeric_dtype(head[c])]:
+        for v in head[c].astype(str).str.strip():
+            if len(v) >= 3 and v.lower() not in ("total", "grand total", "none", "nan") and v.lower() in low:
+                return False
+    return True
+
+
 def sql_filters(sql: str | None) -> list[str]:
     """The literal filters a query applied ('project = kashi', 'category = DT'): rows already inside them need not
     name them."""

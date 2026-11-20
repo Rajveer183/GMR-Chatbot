@@ -348,12 +348,28 @@ def _clean_sql(raw: Any) -> str:
                    f"WHERE month_date >= DATE '{m.group('since') or '2026-06-01'}' GROUP BY month_date "
                    "HAVING COUNT(DISTINCT data_date) >= 10) c)"), text)
     text = _band_total_without_rollup(text)
+    text = _loss_tie_break(text)
     text = _total_first_limit(text.rstrip(";").strip())
     return text.rstrip(";").strip()
 
 
 _TOTAL_FIRST_LIMIT_RE = re.compile(r"\bORDER\s+BY\s+GROUPING\s*\([^)]*\)\s+DESC\b[^;]*?\bLIMIT\s+(\d+)\s*$",
                                    re.IGNORECASE | re.S)
+
+
+# Feeder / DT loss rankings: many feeders tie at 100 % (input, no consumer reading), so loss_pct alone leaves the
+# order to the engine. 19 Nov: 'Feeders with the highest loss in July in Kashi' listed one 100 % feeder first and 'the
+# worst one' (ORDER BY loss_pct DESC, net_input DESC LIMIT 1) another. The card's tie-break is net_input DESC.
+_LOSS_ORDER_RE = re.compile(r"\bORDER\s+BY\s+((?:\w+\.)?loss_pct\s+(?:DESC|ASC)(?:\s+NULLS\s+(?:LAST|FIRST))?)(?!\s*,)(?!\s+NULLS\b)",
+                            re.IGNORECASE)
+
+
+def _loss_tie_break(text: str) -> str:
+    if not re.search(r"\bhes_gold\.(?:feeder_loss|dt_loss|feeder_loss_ai)\b", text, re.IGNORECASE) \
+            or not re.search(r"\bnet_input\b", text, re.IGNORECASE) \
+            or re.search(r"\bGROUP\s+BY\b|\bDISTINCT\b", text, re.IGNORECASE):
+        return text  # feeder-level lists only: an area's ORDER BY cannot name an ungrouped net_input
+    return _LOSS_ORDER_RE.sub(lambda m: m.group(0) + ", net_input DESC", text)
 
 
 def _total_first_limit(text: str) -> str:

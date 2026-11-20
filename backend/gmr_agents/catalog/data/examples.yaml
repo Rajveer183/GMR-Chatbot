@@ -1205,34 +1205,26 @@ examples:
 
   - q: ["Which stores or sites have less than one week of stock?", "warehouse-wise days of stock left", "which warehouse will run out of stock first", "stock cover by warehouse", "kis godown mein ek hafte se kam stock hai", "warehouses with less than 15 days of stock"]
     suggest: "Which warehouses have less than one week of stock?"
-    note: "Store / site / godown = warehouse. One Athena query (Postgres has warehouse stock but no warehouse pace). Stock = latest inventory row per serial with no installed_ts and no installation row (matches the unused-stock card). Pace = meters installed a day from that warehouse (installed_ts), average of the last 6 months' daily rates (current month by days elapsed). 'Less than N days' = days_left < N (days_left kept to 1 decimal so the filter and the shown value agree); under_one_week marks the 7-day ask -- when every row says 'No', the answer is 'no warehouse has less than a week' and names the lowest few with their days left. Change the 7 for another N."
+    note: "Store / site / godown = warehouse. Postgres gold_meter_inventory_event_day_agg holds both per warehouse: stock = SUM(inventory_count) - SUM(stock_consumed_count) over all history (the supply cards' event tables); pace = average daily stock consumption over the last 6 months (current month by days elapsed), as in the days-of-stock example. Never the silver installed_ts (19 Nov it gave 2 meters a day for Prayagraj_HW against ~500 and a run-out in 2062). 'Less than N days' = days_left < N (days_left kept to 1 decimal so the filter and the shown value agree); under_one_week marks the 7-day ask -- when every row says 'No', the answer is 'no warehouse has less than a week' and names the lowest few with their days left. Change the 7 for another N."
     sql: |
-      WITH inv AS (
-        SELECT UPPER(TRIM(meter_serial_number)) AS serial, COALESCE(NULLIF(TRIM(warehouse), ''), 'UNASSIGNED') AS warehouse,
-               CAST(installed_ts AS date) AS installed_on,
-               ROW_NUMBER() OVER (PARTITION BY UPPER(TRIM(meter_serial_number)) ORDER BY updated_at DESC) AS rn
-        FROM gmr_wfm_silver.unified_smart_meter_inventory
-        WHERE meter_serial_number IS NOT NULL AND di_date IS NOT NULL),
-      inst AS (SELECT DISTINCT UPPER(TRIM(new_meter_serial_number)) AS serial
-               FROM gmr_wfm_silver.unified_installations
-               WHERE mi_date IS NOT NULL AND new_meter_serial_number IS NOT NULL),
-      s AS (SELECT i.warehouse, COUNT(*) AS stock
-            FROM inv i LEFT JOIN inst x ON x.serial = i.serial
-            WHERE i.rn = 1 AND i.installed_on IS NULL AND x.serial IS NULL
-            GROUP BY i.warehouse),
-      m AS (SELECT warehouse, date_trunc('month', installed_on) AS mon, COUNT(*) AS used
-            FROM inv
-            WHERE rn = 1 AND installed_on >= date_add('month', -5, date_trunc('month', current_date)) AND installed_on <= current_date
-            GROUP BY 1, 2),
+      WITH m AS (
+        SELECT COALESCE(NULLIF(TRIM(warehouse), ''), 'UNASSIGNED') AS warehouse, date_trunc('month', period_start)::date AS mon,
+               SUM(stock_consumed_count) AS used
+        FROM public.gold_meter_inventory_event_day_agg
+        WHERE period_start >= (date_trunc('month', CURRENT_DATE) - INTERVAL '5 months')::date AND period_start <= CURRENT_DATE
+        GROUP BY 1, 2),
       p AS (SELECT warehouse,
-                   SUM(used * 1.0 / CASE WHEN mon = date_trunc('month', current_date) THEN day(current_date)
-                                         ELSE day(last_day_of_month(mon)) END) / 6 AS pace
+                   SUM(used / CASE WHEN mon = date_trunc('month', CURRENT_DATE)::date THEN EXTRACT(DAY FROM CURRENT_DATE)
+                                   ELSE EXTRACT(DAY FROM (mon + INTERVAL '1 month - 1 day')) END) / 6 AS pace
             FROM m GROUP BY 1),
-      u AS (SELECT warehouse AS wh, stock, 0.0 AS pace FROM s UNION ALL SELECT warehouse, 0, pace FROM p)
+      s AS (SELECT COALESCE(NULLIF(TRIM(warehouse), ''), 'UNASSIGNED') AS warehouse,
+                   SUM(inventory_count) - SUM(stock_consumed_count) AS stock
+            FROM public.gold_meter_inventory_event_day_agg GROUP BY 1),
+      u AS (SELECT warehouse AS wh, stock, 0 AS pace FROM s UNION ALL SELECT warehouse, 0, pace FROM p)
       SELECT CASE WHEN GROUPING(wh) = 1 THEN 'TOTAL' ELSE wh END AS warehouse,
              SUM(stock) AS in_stock, ROUND(SUM(pace), 1) AS pace_per_day,
              ROUND(SUM(stock) / NULLIF(SUM(pace), 0), 1) AS days_left,
-             date_add('day', CAST(FLOOR(SUM(stock) / NULLIF(SUM(pace), 0)) AS integer), current_date) AS runs_out_on,
+             CURRENT_DATE + CAST(FLOOR(SUM(stock) / NULLIF(SUM(pace), 0)) AS int) AS runs_out_on,
              CASE WHEN SUM(stock) / NULLIF(SUM(pace), 0) < 7 THEN 'Yes' ELSE 'No' END AS under_one_week
       FROM u
       GROUP BY ROLLUP (wh)
@@ -1272,16 +1264,16 @@ examples:
                          SUM(meter_count) AS all_installed
                   FROM public.gold_mi_installation_day_agg) mi
 
-  - q: ["Describe the installation trend over the last 12 months.", "monthly installations last year", "installation trend"]
+  - q: ["Describe the installation trend over the last 12 months.", "monthly installations over the past 12 months", "installation trend"]
     suggest: "Describe the installation trend over the last 12 months."
-    note: "The current month is partial: leave it out of peak/low reading and say so."
+    note: "'last N months' = rolling window ending yesterday, month-wise from the DAY table (user, 20 Nov): the first and last months are partial -- leave them out of peak/low reading and give their days in brackets."
     sql: |
-      SELECT period_start AS month, SUM(meter_count) AS meters_installed
-      FROM public.gold_mi_installation_month_agg
+      SELECT date_trunc('month', period_start)::date AS month, SUM(meter_count) AS meters_installed
+      FROM public.gold_mi_installation_day_agg
       WHERE has_meter_serial AND progress_category IS NOT NULL AND NOT is_replacement
-        AND period_start >= (date_trunc('month', CURRENT_DATE) - INTERVAL '12 months')::date
-      GROUP BY period_start
-      ORDER BY period_start
+        AND period_start BETWEEN (CURRENT_DATE - 1 - INTERVAL '12 months')::date AND CURRENT_DATE - 1
+      GROUP BY 1
+      ORDER BY 1
 
   - q: ["Status of ticket 3394577", "ticket 3394577 status", "who handled ticket 3394577", "details of complaint number 3394577", "is ticket 3394577 closed"]
     note: "One ticket: both ticket feeds together, matched as text exactly as typed (no prefix). Open feed gives the live status; non-QC gives work completed / closed. Say not found only when both are empty."
@@ -5753,23 +5745,24 @@ examples:
              'per 100 meters installed in the same 30 days'
 
   - q: ["Month-wise installations vs SAT completions for the last 6 months for each project", "SAT completions per month", "how many meters were SAT done last month", "SAT completion trend project-wise"]
-    note: "SAT is accepted in BATCHES: a meter is SAT-completed on its batch's sat_date (public.milestone_config, joined on LOWER(project) AND sat_number = 'SAT-' || sat_stage; batch size = public.gold_mi_sat_invoice_snapshot meter_count). Never date SAT by gold_mi_sat_invoice_day_agg / gold_mi_installation_*_agg periods -- those are INSTALLATION dates. Months with no batch are 0 (say SAT is batch-wise, so months without a batch are normal); the extra query gives SAT-done meters whose batch has no date yet -- say them. Installed = the installation card (no replacements); SAT batches include replacements. Last N months = this month so far + N-1 full months."
+    note: "SAT is accepted in BATCHES: a meter is SAT-completed on its batch's sat_date (public.milestone_config, joined on LOWER(project) AND sat_number = 'SAT-' || sat_stage; batch size = public.gold_mi_sat_invoice_snapshot meter_count). Never date SAT by gold_mi_sat_invoice_day_agg / gold_mi_installation_*_agg periods -- those are INSTALLATION dates. Months with no batch are 0 (say SAT is batch-wise, so months without a batch are normal); the extra query gives SAT-done meters whose batch has no date yet -- say them. Installed = the installation card (no replacements); SAT batches include replacements. Last N months = rolling window ending yesterday (CURRENT_DATE - 1 - INTERVAL 'N months' .. CURRENT_DATE - 1, user 20 Nov): one row per month it touches, the first and last partial."
     sql: |
       WITH months AS (
-        SELECT generate_series(date_trunc('month', CURRENT_DATE) - INTERVAL '5 months',
-                               date_trunc('month', CURRENT_DATE), INTERVAL '1 month')::date AS month
+        SELECT generate_series(date_trunc('month', CURRENT_DATE - 1 - INTERVAL '6 months'),
+                               date_trunc('month', CURRENT_DATE - 1), INTERVAL '1 month')::date AS month
       ), inst AS (
-        SELECT period_start AS month, LOWER(project) AS project, SUM(meter_count) AS installed
-        FROM public.gold_mi_installation_month_agg
+        SELECT date_trunc('month', period_start)::date AS month, LOWER(project) AS project, SUM(meter_count) AS installed
+        FROM public.gold_mi_installation_day_agg
         WHERE has_meter_serial AND progress_category IS NOT NULL AND NOT is_replacement
-          AND period_start >= (date_trunc('month', CURRENT_DATE) - INTERVAL '5 months')::date
+          AND period_start BETWEEN (CURRENT_DATE - 1 - INTERVAL '6 months')::date AND CURRENT_DATE - 1
         GROUP BY 1, 2
       ), sat AS (
         SELECT date_trunc('month', m.sat_date)::date AS month, LOWER(s.project) AS project,
                SUM(s.meter_count) AS sat_completed, STRING_AGG(DISTINCT m.sat_number, ', ') AS sat_batches
         FROM public.gold_mi_sat_invoice_snapshot s
         JOIN public.milestone_config m ON LOWER(m.project) = LOWER(s.project) AND m.sat_number = 'SAT-' || s.sat_stage
-        WHERE s.sat_stage IS NOT NULL AND m.sat_date >= (date_trunc('month', CURRENT_DATE) - INTERVAL '5 months')::date
+        WHERE s.sat_stage IS NOT NULL
+          AND m.sat_date BETWEEN (CURRENT_DATE - 1 - INTERVAL '6 months')::date AND CURRENT_DATE - 1
         GROUP BY 1, 2
       ), projects AS (SELECT project FROM inst UNION SELECT project FROM sat)
       SELECT mo.month, UPPER(p.project) AS project,
@@ -5942,7 +5935,7 @@ examples:
       ORDER BY zone, gap_vs_zone_pts DESC NULLS LAST
 
   - q: ["Remaining stock by project month wise for the last 3 months", "month-end remaining stock project wise", "stock balance at the end of each month by project", "remaining stock trend monthly"]
-    note: "Remaining stock in a month = the running balance at that month's end: SUM(inventory - consumed) OVER every month up to it (the dashboard's MI pace vs stock trend), never that month's own receipts minus consumption. The window runs over ALL history; the month filter is applied after it. Last N months = complete months. Total = the projects' balances added."
+    note: "Remaining stock in a month = the running balance at that month's end: SUM(inventory - consumed) OVER every month up to it (the dashboard's MI pace vs stock trend), never that month's own receipts minus consumption. The window runs over ALL history; the month filter is applied after it. Last N months = rolling window ending yesterday (user, 20 Nov): the balance at the end of every month the window CURRENT_DATE - 1 - INTERVAL 'N months' .. CURRENT_DATE - 1 touches, the current month as of yesterday. Total = the projects' balances added."
     sql: |
       WITH monthly AS (
         SELECT period_start AS month, project, SUM(inventory_count) - SUM(stock_consumed_count) AS net_change
@@ -5958,8 +5951,8 @@ examples:
              CASE WHEN GROUPING(project) = 1 THEN 'Total' ELSE UPPER(project) END AS project,
              SUM(remaining_stock) AS remaining_stock
       FROM running
-      WHERE month >= (date_trunc('month', CURRENT_DATE) - INTERVAL '3 months')::date
-        AND month < date_trunc('month', CURRENT_DATE)::date
+      WHERE month BETWEEN date_trunc('month', CURRENT_DATE - 1 - INTERVAL '3 months')::date
+                      AND date_trunc('month', CURRENT_DATE - 1)::date
       GROUP BY month, ROLLUP (project)
       ORDER BY month, GROUPING(project) DESC, project
 

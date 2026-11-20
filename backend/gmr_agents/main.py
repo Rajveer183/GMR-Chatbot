@@ -212,6 +212,12 @@ def _turn_context(state: dict, response: dict) -> dict:
         key_col = tables[0]["columns"][0]
         keys = [str(r.get(key_col)) for r in tables[0]["rows"] if str(r.get(key_col, "")).strip()]
         ctx.update(key_column=key_col, keys=[k for k in keys if k.lower() != "total"][:20])
+        # Feeder / DT / meter codes of the first rows, in the order shown, from any column: 'the worst one' next turn
+        # is the first of them when the summary named none (triage.carry_named_code; 19 Nov the list's first column
+        # was the month, the summary only a caveat, and the follow-up re-ranked and picked another tied feeder).
+        from gmr_agents.agents.router.triage import _CODE_RE
+        codes = [str(v) for r in tables[0]["rows"][:5] for v in r.values() if _CODE_RE.fullmatch(str(v).strip())]
+        ctx["codes"] = list(dict.fromkeys(codes))[:5]
     return {k: v for k, v in ctx.items() if v}
 
 
