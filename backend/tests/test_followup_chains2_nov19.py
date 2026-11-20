@@ -116,9 +116,9 @@ def test_dead_filter_period():
 # --- backlog clear date by code ---------------------------------------------------------------------------------------
 def test_clear_date():
     df = pd.DataFrame({"pending_meters": [37917], "days_required": [13]})
-    note = analyst._clear_date("If we install 3000 a day, when will it be cleared?", [df], pd.Timestamp("2026-11-19"))
+    note = analyst.clear_date("If we install 3000 a day, when will it be cleared?", [df], pd.Timestamp("2026-11-19"))
     assert "02 Dec 2026" in note
-    assert analyst._clear_date("How long does SAT take?", [pd.DataFrame({"avg_days": [40]})],
+    assert analyst.clear_date("How long does SAT take?", [pd.DataFrame({"avg_days": [40]})],
                                pd.Timestamp("2026-11-19")) == ""
 
 
@@ -133,5 +133,5 @@ def test_month_window_capped_at_today(monkeypatch):
     plan = {"data_engine": "postgres",
             "sql": "SELECT SUM(meter_count) FROM public.gold_mi_installation_month_agg "
                    "WHERE period_start >= date_trunc('month', CURRENT_DATE)::date AND period_start <= CURRENT_DATE"}
-    assert "19 Nov 2026" in analyst._date_window(plan, None)
+    assert "19 Nov 2026" in analyst.date_window(plan, None)
     assert "LEAST(" in sent["sql"] and "CURRENT_DATE)" in sent["sql"]

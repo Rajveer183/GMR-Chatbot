@@ -127,14 +127,14 @@ from gmr_agents.agents.followups import (  # noqa: F401
     _pick_followups,
 )
 from gmr_agents.presentation.analyst import (  # noqa: F401
-    _partial_periods,
+    partial_periods,
     _WEEK_LABEL_RE,
-    _short_weeks,
+    short_weeks,
     _DATE_COLS,
-    _date_window,
-    _result_facts,
+    date_window,
+    result_facts,
     _RATE_COL_RE,
-    _result_preview,
+    result_preview,
 )
 from gmr_agents.agents.knowledge.explain import (  # noqa: F401
     _EXPLAIN_SYSTEM,

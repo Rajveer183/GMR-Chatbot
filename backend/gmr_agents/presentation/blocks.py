@@ -391,7 +391,7 @@ def _blocks(plan: dict, result: dict) -> dict:
     # -- while the month's total was 9,265. Rates / stock / cumulative columns keep the first-row behaviour.
     from gmr_agents.presentation import analyst  # lazy: analyst imports this module
     series = (len(df) > 1 and not head_label
-              and [c for c in df.columns if not pd.api.types.is_numeric_dtype(df[c])] == [analyst._partial_periods(df)[0]])
+              and [c for c in df.columns if not pd.api.types.is_numeric_dtype(df[c])] == [analyst.partial_periods(df)[0]])
     for alias in [m["alias"] for m in plan["metrics"]]:
         if alias in df.columns:
             additive = series and pd.api.types.is_numeric_dtype(df[alias]) and not analyst._RATE_COL_RE.search(str(alias))

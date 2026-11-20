@@ -113,7 +113,7 @@ def test_date_window_column_names(monkeypatch):
     monkeypatch.setattr(analyst.executor, "_run_postgres", fake)
     sql = ("SELECT SUM(closed_tickets) FROM public.gold_om_closed_tickets_day_agg WHERE closed_date >= CURRENT_DATE - 31 "
            "AND closed_date <= CURRENT_DATE - 1")
-    note = analyst._date_window({"sql": sql, "data_engine": "postgres"}, None)
+    note = analyst.date_window({"sql": sql, "data_engine": "postgres"}, None)
     assert "19 Oct 2026 .. 18 Nov 2026" in note and "ALL TIME" not in note
 
 

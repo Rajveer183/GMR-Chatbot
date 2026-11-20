@@ -43,7 +43,7 @@ class TokenizerTests(unittest.TestCase):
 class ResultPreviewTests(unittest.TestCase):
     def test_whole_rows_within_budget(self):
         df = pd.DataFrame({"division": [f"EDD DIVISION NUMBER {i}" for i in range(25)], "installed": range(25)})
-        text, n = P._result_preview(df, max_tokens=60)
+        text, n = P.result_preview(df, max_tokens=60)
         lines = text.strip().split("\n")
         self.assertEqual(n, 25)
         self.assertEqual(lines[0], "division,installed")
@@ -52,7 +52,7 @@ class ResultPreviewTests(unittest.TestCase):
             self.assertRegex(line, r"^EDD DIVISION NUMBER \d+,\d+$")   # never a half row
 
     def test_empty(self):
-        self.assertEqual(P._result_preview(pd.DataFrame()), ("(no rows)", 0))
+        self.assertEqual(P.result_preview(pd.DataFrame()), ("(no rows)", 0))
 
 
 class HistoryBudgetTests(unittest.TestCase):

@@ -37,7 +37,7 @@ def test_rolling_window_partial_months(monkeypatch):
     df = _months(7, 8, 9, 10, 11)
     spans = analyst.month_spans(plan, df)
     assert spans == {"2026-07": "19-31 Jul", "2026-11": "1-19 Nov"}
-    col, partial, line = analyst._partial_periods(df, spans)
+    col, partial, line = analyst.partial_periods(df, spans)
     assert col == "month" and partial >= {"2026-07-01", "2026-11-01"} and "2026-08-01" not in partial
     assert "Jul 2026 covers only 19-31 Jul" in line and "Nov 2026 covers only 1-19 Nov" in line
     assert blocks.table_cell("2026-07-01", month=True, spans=spans) == "Jul 2026 (19-31 Jul)"
@@ -63,7 +63,7 @@ def test_whole_months_have_no_brackets(monkeypatch):
 
 def test_partial_periods_unchanged_without_spans():
     df = _months(8, 9, 10)
-    assert "every month in RESULT is complete" in analyst._partial_periods(df)[2]
+    assert "every month in RESULT is complete" in analyst.partial_periods(df)[2]
 
 
 # --- whole-month SQL for 'last N months' goes back to the writer ------------------------------------------------------

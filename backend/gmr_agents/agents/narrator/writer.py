@@ -17,7 +17,7 @@ from gmr_agents.checks import extreme_check, freshness, grounding, number_check,
 import logging
 from gmr_agents.agents.common import _ALL_TIME_LEAD_RE, _ANSWER_ROWS, _PAST_DATE_RE, _PERIOD_RE, _emit, _step, _today
 from gmr_agents.agents.followups import _followup_options, _options_text, _pick_followups
-from gmr_agents.presentation.analyst import _clear_date, _date_window, _month_to_date, _partial_periods, month_spans, _stated_figures, _result_facts, _result_preview, _short_weeks
+from gmr_agents.presentation.analyst import clear_date, date_window, month_to_date, partial_periods, month_spans, stated_figures, result_facts, result_preview, short_weeks
 from gmr_agents.presentation.blocks import _tidy_ts, month_words
 from gmr_agents.presentation import drivers as _drivers, investigate as _investigate, stats as _stats
 
@@ -93,7 +93,7 @@ def _has_period_column(df) -> bool:
 
 def _write_answer(state: dict, triage: dict, plan: dict, result: dict, extras: list[dict] | None = None) -> dict:
     t0 = time.perf_counter()
-    preview, n = _result_preview(result.get("result"))
+    preview, n = result_preview(result.get("result"))
     state["result_preview_tokens"] = llm_gateway.estimate_tokens(preview)  # tool-result size fed back to the LLM
     more = f", first {_ANSWER_ROWS} shown" if n > _ANSWER_ROWS else ""
     memory = state.get("memory_turns") or []
@@ -133,7 +133,7 @@ def _write_answer(state: dict, triage: dict, plan: dict, result: dict, extras: l
                      "/ trend split asked for is not stored. Say so in the first sentence, then give the current "
                      "figures as on the latest refresh.")
     spans = month_spans(plan, result.get("result"))   # partial first / last month of a rolling window
-    facts = _result_facts(result.get("result"), spans=spans)
+    facts = result_facts(result.get("result"), spans=spans)
     parts.append(f"RESULT ({n} row(s){more}; total available: {result.get('group_count')}):\n"
                  + injection.wrap(preview, "database"))
     options = _followup_options(triage)
@@ -182,32 +182,32 @@ def _write_answer(state: dict, triage: dict, plan: dict, result: dict, extras: l
     if why:
         parts.append(why)
         _step(state, "drivers", time.perf_counter(), lines=why.count("\n"))
-    periods = _partial_periods(result.get("result"), spans)[2]
+    periods = partial_periods(result.get("result"), spans)[2]
     if periods:
         parts.append(periods)
-    mtd = _month_to_date(state["question"] + " || " + str(triage["question"]), result.get("result"))
+    mtd = month_to_date(state["question"] + " || " + str(triage["question"]), result.get("result"))
     if mtd:
         parts.append(mtd)
         _step(state, "month_to_date", time.perf_counter())
         why = f"{why}\n{mtd}" if why else mtd  # its per-day figures are code-computed: allowed by number_check
-    stated = _stated_figures(state["question"], [result.get("result")] + [ex.get("result") for ex in extras or []])
+    stated = stated_figures(state["question"], [result.get("result")] + [ex.get("result") for ex in extras or []])
     if stated:
         parts.append(stated)
         _step(state, "premise_check", time.perf_counter())
-    window = _date_window(plan, result.get("result"))
+    window = date_window(plan, result.get("result"))
     if window:
         parts.append(window)
-    cleared = _clear_date(f"{state['question']} || {triage['question']}",
+    cleared = clear_date(f"{state['question']} || {triage['question']}",
                           [result.get("result")] + [ex.get("result") for ex in extras or []])
     if cleared:
         parts.append(cleared)
         why = f"{why}\n{cleared}" if why else cleared  # its date figures are code-computed: allowed by number_check
-    short = _short_weeks(result.get("result"))[1]
+    short = short_weeks(result.get("result"))[1]
     if short:
         parts.append("SHORT WEEKS (checked by code): " + ", ".join(f"{k} has only {v} day(s)" for k, v in short.items())
                      + " -- compare its counts per day, never call its total the lowest week or a drop.")
     for i, ex in enumerate(extras or [], 2):
-        ex_preview, ex_n = _result_preview(ex.get("result"), config.MAX_TOOL_RESULT_TOKENS // 2)
+        ex_preview, ex_n = result_preview(ex.get("result"), config.MAX_TOOL_RESULT_TOKENS // 2)
         parts.append(f"RESULT {i} -- {ex['purpose']} ({ex_n} row(s)):\n" + injection.wrap(ex_preview, "database"))
     if options:
         parts.append(_options_text(options))
@@ -354,7 +354,7 @@ def _write_answer(state: dict, triage: dict, plan: dict, result: dict, extras: l
     # Highest / lowest check: a figure can be IN the result yet not be the max / min it is
     # called ('lowest feeder count (48)' when Feb had 29). Wrong insight = dropped; a wrong
     # summary gets one correction with the right figures, then the bad sentence is cut.
-    period_col, partial, _ = _partial_periods(result.get("result"), spans)
+    period_col, partial, _ = partial_periods(result.get("result"), spans)
     wrong = extreme_check.wrong_claims(summary, result.get("result"), period_col, partial)
     insights = [i for i in insights if not extreme_check.wrong_claims(i, result.get("result"), period_col, partial)]
     if wrong:

@@ -4,7 +4,7 @@ import pandas as pd
 
 from gmr_agents.agents.sql_writer.planner import _repair_hint
 from gmr_agents.checks.entity_check import _null_band_sum_problems, check
-from gmr_agents.presentation.analyst import _result_facts
+from gmr_agents.presentation.analyst import result_facts
 
 
 def test_null_filter_sum_in_arithmetic_is_sent_back():
@@ -37,7 +37,7 @@ def test_repair_hints_for_reserved_alias_and_ambiguous_column():
 def test_total_journey_row_is_not_a_stage():
     df = pd.DataFrame({"stage": ["DI to Agency", "Installation to SAT", "SAT to Revenue", "Total Journey"],
                        "avg_days": [25.51, 86.2, 73.66, 186.76]})
-    facts = _result_facts(df)
+    facts = result_facts(df)
     assert "highest Installation to SAT (86.2)" in facts
     assert "Total Journey (186.76)" not in facts.split("highest")[-1]
 
